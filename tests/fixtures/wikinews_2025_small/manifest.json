@@ -1,0 +1,104 @@
+{
+  "fixture": "wikinews_2025_small",
+  "article_count": 15,
+  "paragraph_count": 39,
+  "sentence_count": 93,
+  "article_ids": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "topic_groups": [
+    "crime_and_law",
+    "culture",
+    "disasters",
+    "politics",
+    "sports"
+  ],
+  "region_groups": [
+    "Africa",
+    "Asia/Oceania",
+    "Europe",
+    "Middle East/North America",
+    "North America",
+    "North America/Europe",
+    "Oceania"
+  ],
+  "per_article": {
+    "1": {
+      "paragraphs": 3,
+      "sentences": 6
+    },
+    "2": {
+      "paragraphs": 2,
+      "sentences": 5
+    },
+    "3": {
+      "paragraphs": 2,
+      "sentences": 4
+    },
+    "4": {
+      "paragraphs": 3,
+      "sentences": 6
+    },
+    "5": {
+      "paragraphs": 3,
+      "sentences": 5
+    },
+    "6": {
+      "paragraphs": 2,
+      "sentences": 5
+    },
+    "7": {
+      "paragraphs": 2,
+      "sentences": 8
+    },
+    "8": {
+      "paragraphs": 3,
+      "sentences": 6
+    },
+    "9": {
+      "paragraphs": 3,
+      "sentences": 8
+    },
+    "10": {
+      "paragraphs": 3,
+      "sentences": 6
+    },
+    "11": {
+      "paragraphs": 3,
+      "sentences": 9
+    },
+    "12": {
+      "paragraphs": 3,
+      "sentences": 6
+    },
+    "13": {
+      "paragraphs": 3,
+      "sentences": 8
+    },
+    "14": {
+      "paragraphs": 2,
+      "sentences": 8
+    },
+    "15": {
+      "paragraphs": 2,
+      "sentences": 3
+    }
+  },
+  "license": "CC BY 4.0",
+  "attribution": "Wikinews",
+  "curation_note": "Frozen verbatim short excerpts from English Wikinews articles published in March 2025; topic_group and region_group are local TeAL test annotations."
+}

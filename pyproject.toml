@@ -1,0 +1,119 @@
+[build-system]
+requires = ["setuptools>=77.0.3", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "text-analysis-lab"
+version = "0.1.0"
+description = "Persistent, lineage-aware workflows for reproducible text analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Zachary Lim" },
+]
+keywords = ["text analysis", "computational social science", "NLP", "qualitative research"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+dependencies = [
+    "cloudpickle>=3.1.2",
+    "duckdb>=1.5.3",
+    "pandas>=1.4",
+    "nltk>=3.9.2",
+    "pyarrow",
+    "scikit-learn>=1.6.1",
+    "scipy",
+    "tqdm>=4.68.2",
+    "umap-learn>=0.5.8,<0.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/zacthinks/text-analysis-lab"
+Repository = "https://github.com/zacthinks/text-analysis-lab"
+Issues = "https://github.com/zacthinks/text-analysis-lab/issues"
+
+[project.optional-dependencies]
+pdf = [
+    "pdfplumber>=0.11.9",
+]
+all = [
+    "pdfplumber>=0.11.9",
+    "afinn>=0.1",
+    "click>=8.4.1",
+    "dask[distributed]>=2026.7.0",
+    "gensim>=4.4.0",
+    "spacy>=3.8.14,<3.9",
+    "torch>=2.0",
+    "transformers>=4.41,<5",
+    "sentence-transformers>=5.0",
+    "openai>=3.0,<4",
+    "pydantic>=2.8",
+    "wn>=1.1,<2",
+    "safetensors>=0.4",
+    "huggingface-hub>=0.24,<2",
+    "sentencepiece>=0.2,<0.3",
+    "fastcoref==2.1.6",
+    "datasets==2.14.4",
+    "pyarrow<21",
+]
+lexicons = [
+    "afinn>=0.1",
+]
+transformers = [
+    "torch>=2.0",
+    "transformers>=4.41,<5",
+    "sentence-transformers>=5.0",
+]
+parallel = [
+    "dask[distributed]>=2026.7.0",
+]
+spacy = [
+    "spacy>=3.8.14,<3.9",
+]
+word2vec = [
+    "gensim>=4.4.0",
+]
+llm = [
+    "openai>=3.0,<4",
+]
+
+linguistics = [
+    "torch>=2.0",
+    "transformers>=4.41,<5",
+    "spacy>=3.8.14,<3.9",
+    "pydantic>=2.8",
+    "wn>=1.1,<2",
+    "safetensors>=0.4",
+    "huggingface-hub>=0.24,<2",
+    "sentencepiece>=0.2,<0.3",
+    "fastcoref==2.1.6",
+    "datasets==2.14.4",
+    "pyarrow<21",
+]
+
+[tool.uv.sources]
+geometric-coder = { git = "https://github.com/zacthinks/GeCo.git", branch = "master" }
+
+[dependency-groups]
+dev = [
+    "geometric-coder[all]; python_version >= '3.11'",
+    "ipykernel>=6.31.0",
+    "ipywidgets>=8.1.8",
+    "jupyterlab>=4.4",
+    "matplotlib>=3.10",
+    "pytest>=8.4.2",
+    "ruff>=0.15.16",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
