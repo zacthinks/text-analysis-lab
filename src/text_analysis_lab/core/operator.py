@@ -476,7 +476,7 @@ class BaseOperator(ABC):
 
     def to_json_state(self) -> dict[str, Any]:
         """Return JSON-serializable state needed to reconstruct this operator."""
-        return dict()
+        return {}
 
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> Self:

@@ -51,7 +51,7 @@ class GlossRenderConfig(FrozenRecord):
 
 
 class SenseCandidate(FrozenRecord):
-    """One explicit candidate supplied by the lexical ontology."""
+    """One explicit candidate supplied by an ontology plus optional overlay."""
 
     sense_id: str
     synset_id: str
@@ -63,7 +63,7 @@ class SenseCandidate(FrozenRecord):
     sense_label: str | None = None
     aliases: tuple[str, ...] = ()
     ili: str | None = None
-    source: Literal["ontology"] = "ontology"
+    source: Literal["ontology", "overlay"] = "ontology"
     metadata: Mapping[str, Any] = Field(default_factory=dict)
 
 
@@ -71,7 +71,7 @@ class WSDTarget(FrozenRecord):
     """One explicit target occurrence to disambiguate.
 
     ``lemma`` is retained as the lookup-form field for compatibility with the
-    WSD scoring pipeline. Production targets set it from the observed
+    standalone experiment API. Production targets set it from the observed
     surface form, never from the parser lemma. ``parser_lemma`` is provenance
     only and may be overridden downstream by the selected ontology sense.
     """

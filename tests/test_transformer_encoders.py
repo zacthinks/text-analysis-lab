@@ -4,6 +4,7 @@ import sys
 import types
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -22,8 +23,12 @@ _COMMIT = "0123456789abcdef0123456789abcdef01234567"
 
 class FakeTokenizer:
     model_max_length = 8
-    model_input_names = ["input_ids", "attention_mask", "token_type_ids"]
-    init_kwargs = {"_commit_hash": _COMMIT}
+    model_input_names: ClassVar[list[str]] = [
+        "input_ids",
+        "attention_mask",
+        "token_type_ids",
+    ]
+    init_kwargs: ClassVar[dict[str, str]] = {"_commit_hash": _COMMIT}
     is_fast = True
 
     def __call__(

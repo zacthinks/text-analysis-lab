@@ -181,7 +181,7 @@ def test_wikinews_query_lineage_context_kwic_sql_and_reopen(tmp_path: Path) -> N
     project_path = tmp_path / "wikinews_project"
     project = teal.Project.create(project_path, name="wikinews_golden")
     try:
-        articles_artifact, sentences_artifact, articles, sentences = (
+        _articles_artifact, sentences_artifact, articles, sentences = (
             _seed_wikinews_project(project)
         )
 

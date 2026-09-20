@@ -129,7 +129,7 @@ def normalize_state_dict(state: Any) -> dict[str, Any]:
     ):
         state = state["state_dict"]
     if not isinstance(state, dict):
-        raise RuntimeError("weights.th did not contain a state dictionary")
+        raise TypeError("weights.th did not contain a state dictionary")
     normalized: dict[str, Any] = {}
     for key, tensor in state.items():
         new_key = str(key)

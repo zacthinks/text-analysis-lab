@@ -1,12 +1,15 @@
-"""Open English WordNet candidate generation for TeAL WSD."""
+"""WordNet candidate inventories and lexical overlay support for TeAL WSD."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Protocol
 
 from text_analysis_lab.linguistics.cache import user_cache_paths
+from text_analysis_lab.linguistics.hashing import file_sha256, fingerprint
 from text_analysis_lab.linguistics.wsd.mwe import (
     MWE_COMPONENT_NORMALIZATION,
     MWE_INDEX_SCHEMA_VERSION,
@@ -50,7 +53,7 @@ class OntologyProvider(Protocol):
     def candidates(self, form: str, pos: str) -> Sequence[SenseCandidate]: ...
 
 
-class OpenEnglishWordNetProvider:
+class WnOntologyProvider:
     """Open English WordNet provider with cached token and multiword candidates.
 
     Ordinary candidate generation follows Morphy analyses of the observed surface form.
@@ -533,6 +536,54 @@ class OpenEnglishWordNetProvider:
                 return candidate
         return None
 
+    def resolve_legacy_reference(
+        self, reference: str, *, lemma: str, pos: str
+    ) -> SenseCandidate | None:
+        try:
+            reference_lemma, reference_pos, ordinal_text = reference.rsplit(".", 2)
+            ordinal = int(ordinal_text)
+        except (ValueError, TypeError):
+            return None
+        normalized_pos = normalize_wordnet_pos(reference_pos)
+        if normalized_pos is None or normalized_pos != normalize_wordnet_pos(pos):
+            return None
+        try:
+            import wn
+
+            pwn30 = wn.Wordnet("omw-en:1.4")
+            source_synsets = pwn30.synsets(reference_lemma, pos=normalized_pos)
+        except Exception:  # noqa: BLE001 - optional legacy WordNet bridge
+            return None
+        if ordinal < 1 or ordinal > len(source_synsets):
+            return None
+        ili = _ili_string(source_synsets[ordinal - 1])
+        if ili is None:
+            return None
+        matches = self.wordnet.synsets(ili=ili)
+        if not matches:
+            return None
+        normalized_lemma = " ".join(lemma.replace("_", " ").split()).lower()
+        candidate = self._candidate_from_synset(
+            matches[0],
+            lemma=normalized_lemma,
+            pos=normalized_pos,
+            sense_id=str(_call_or_value(matches[0], "id")),
+            sense_label=reference,
+            native_rank=ordinal,
+            word_id=None,
+        )
+        return candidate.model_copy(
+            update={
+                "aliases": tuple(dict.fromkeys((reference, *candidate.aliases))),
+                "metadata": {
+                    **dict(candidate.metadata),
+                    "candidate_kind": "singleword",
+                    "legacy_reference": reference,
+                    "legacy_resolution": "pwn30_ili_to_oewn",
+                },
+            }
+        )
+
     def _candidate_from_synset(
         self,
         synset: Any,
@@ -566,6 +617,281 @@ class OpenEnglishWordNetProvider:
                 "sense_order_source": "exact_lexical_entry",
             },
         )
+
+
+class NltkWordNet30Provider:
+    """Reference provider for the WordNet 3.0 inventory used by the original BEM paper."""
+
+    def __init__(self) -> None:
+        try:
+            from nltk.corpus import wordnet
+
+            wordnet.ensure_loaded()
+        except Exception as exc:  # pragma: no cover - local corpus state
+            raise RuntimeError(
+                "NLTK WordNet data is unavailable. Run `python -m nltk.downloader wordnet`."
+            ) from exc
+        self.wordnet = wordnet
+
+    def descriptor(self) -> Mapping[str, Any]:
+        return {"type": "nltk", "ontology": "Princeton WordNet", "version": "3.0"}
+
+    def candidates(self, lemma: str, pos: str) -> Sequence[SenseCandidate]:
+        normalized_pos = normalize_wordnet_pos(pos)
+        if normalized_pos is None:
+            return ()
+        synsets = self.wordnet.synsets(lemma, pos=normalized_pos)
+        return tuple(
+            self._candidate_from_synset(
+                synset,
+                lemma=lemma,
+                pos=normalized_pos,
+                sense_label=_sense_alias(lemma.lower(), normalized_pos, rank),
+            )
+            for rank, synset in enumerate(synsets, start=1)
+        )
+
+    def resolve_reference(self, reference: str) -> SenseCandidate | None:
+        try:
+            lemma, pos, ordinal_text = reference.rsplit(".", 2)
+            ordinal = int(ordinal_text)
+        except (ValueError, TypeError):
+            return None
+        candidates = self.candidates(lemma.replace("_", " "), pos)
+        if ordinal < 1 or ordinal > len(candidates):
+            return None
+        return candidates[ordinal - 1]
+
+    def resolve_legacy_reference(
+        self, reference: str, *, lemma: str, pos: str
+    ) -> SenseCandidate | None:
+        try:
+            synset = self.wordnet.synset(reference)
+        except Exception:  # noqa: BLE001 - malformed or unavailable legacy WordNet reference
+            return None
+        normalized_pos = normalize_wordnet_pos(pos)
+        if normalized_pos is None or synset.pos() != normalized_pos:
+            return None
+        synsets = self.wordnet.synsets(lemma, pos=normalized_pos)
+        try:
+            rank = synsets.index(synset) + 1
+        except ValueError:
+            rank = 1
+        candidate = self._candidate_from_synset(
+            synset,
+            lemma=lemma,
+            pos=normalized_pos,
+            sense_label=_sense_alias(lemma.lower(), normalized_pos, rank),
+        )
+        return candidate.model_copy(
+            update={
+                "metadata": {
+                    **dict(candidate.metadata),
+                    "legacy_reference": reference,
+                    "legacy_resolution": "exact_pwn30_synset_name",
+                }
+            }
+        )
+
+    def _candidate_from_synset(
+        self, synset: Any, *, lemma: str, pos: str, sense_label: str
+    ) -> SenseCandidate:
+        matching_lemmas = [
+            item for item in synset.lemmas() if item.name().lower() == lemma.lower()
+        ]
+        sense_id = matching_lemmas[0].key() if matching_lemmas else synset.name()
+        return SenseCandidate(
+            sense_id=sense_id,
+            synset_id=synset.name(),
+            ontology_id="Princeton WordNet",
+            ontology_version="3.0",
+            lemma=lemma,
+            pos=pos,
+            gloss=GlossPayload(
+                definition=synset.definition(),
+                examples=tuple(synset.examples()),
+            ),
+            sense_label=sense_label,
+            aliases=(sense_label,),
+            metadata={"offset": synset.offset()},
+        )
+
+
+class WordNetOverlay:
+    """Compatibility loader for the original HiPr extension JSON.
+
+    The resource remains optional. Pronouns, auxiliaries, and other function-word entries are
+    disabled by default and can be explicitly enabled as lexical fallbacks.
+    """
+
+    def __init__(
+        self,
+        source: str | Path | Mapping[str, Any],
+        *,
+        enable_legacy_function_words: bool = False,
+    ) -> None:
+        if isinstance(source, Mapping):
+            data = dict(source)
+            self.source = "mapping"
+            self.source_fingerprint = fingerprint(data)
+        else:
+            path = Path(source)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.source = str(path)
+            self.source_fingerprint = file_sha256(path)
+        self.lemmas = {
+            str(lemma).lower(): tuple(str(item) for item in senses)
+            for lemma, senses in data.get("lemmas", {}).items()
+        }
+        self.synsets = {
+            str(sense_id): dict(payload)
+            for sense_id, payload in data.get("synsets", {}).items()
+        }
+        self.blacklisted_lemmas = {
+            str(item).lower() for item in data.get("blacklisted_lemmas", [])
+        }
+        self.enable_legacy_function_words = enable_legacy_function_words
+
+    @classmethod
+    def legacy_default(
+        cls, *, enable_legacy_function_words: bool = False
+    ) -> WordNetOverlay:
+        resource = files("text_analysis_lab.linguistics.resources").joinpath(
+            "legacy_wordnet_extension.json"
+        )
+        return cls(
+            Path(str(resource)),
+            enable_legacy_function_words=enable_legacy_function_words,
+        )
+
+    def descriptor(self) -> Mapping[str, Any]:
+        return {
+            "type": "wordnet-overlay",
+            "source": self.source,
+            "fingerprint": self.source_fingerprint,
+            "enable_legacy_function_words": self.enable_legacy_function_words,
+        }
+
+    def native_references(self, lemma: str, pos: str) -> tuple[str, ...]:
+        lemma = lemma.lower()
+        normalized_pos = normalize_wordnet_pos(pos)
+        if normalized_pos is None or lemma in self.blacklisted_lemmas:
+            return ()
+        if not self.enable_legacy_function_words and lemma in _LEGACY_FUNCTION_WORDS:
+            return ()
+        references: list[str] = []
+        for sense_id in self.lemmas.get(lemma, ()):
+            if sense_id in self.synsets:
+                continue
+            parts = sense_id.rsplit(".", 2)
+            if len(parts) == 3 and normalize_wordnet_pos(parts[1]) == normalized_pos:
+                references.append(sense_id)
+        return tuple(references)
+
+    def custom_candidates(self, lemma: str, pos: str) -> Sequence[SenseCandidate]:
+        lemma = lemma.lower()
+        normalized_pos = normalize_wordnet_pos(pos)
+        if normalized_pos is None or lemma in self.blacklisted_lemmas:
+            return ()
+        if not self.enable_legacy_function_words and lemma in _LEGACY_FUNCTION_WORDS:
+            return ()
+        result: list[SenseCandidate] = []
+        for sense_id in self.lemmas.get(lemma, ()):
+            payload = self.synsets.get(sense_id)
+            if payload is None:
+                # References to native WordNet senses are supplied by the base provider.
+                continue
+            candidate_pos = normalize_wordnet_pos(str(payload.get("pos", "")))
+            if candidate_pos != normalized_pos:
+                continue
+            result.append(
+                SenseCandidate(
+                    sense_id=sense_id,
+                    synset_id=sense_id,
+                    ontology_id="TeAL WordNet overlay",
+                    ontology_version=self.source_fingerprint,
+                    lemma=lemma,
+                    pos=candidate_pos,
+                    gloss=GlossPayload(
+                        definition=str(payload["definition"]),
+                        examples=tuple(
+                            str(item) for item in payload.get("examples", ())
+                        ),
+                    ),
+                    sense_label=sense_id,
+                    aliases=(sense_id,),
+                    source="overlay",
+                    metadata={
+                        "hypernyms": tuple(
+                            str(item) for item in payload.get("hypernyms", ())
+                        )
+                    },
+                )
+            )
+        return tuple(result)
+
+
+class OverlayOntologyProvider:
+    """Union a base WordNet inventory with editable custom candidates."""
+
+    def __init__(
+        self, base: OntologyProvider, overlay: WordNetOverlay | None = None
+    ) -> None:
+        self.base = base
+        self.overlay = overlay
+
+    def descriptor(self) -> Mapping[str, Any]:
+        return {
+            "type": "overlay-union",
+            "base": dict(self.base.descriptor()),
+            "overlay": None
+            if self.overlay is None
+            else dict(self.overlay.descriptor()),
+        }
+
+    def resolve_reference(self, reference: str) -> SenseCandidate | None:
+        resolver = getattr(self.base, "resolve_reference", None)
+        if resolver is None:
+            return None
+        return resolver(reference)
+
+    def candidates(self, lemma: str, pos: str) -> Sequence[SenseCandidate]:
+        surface_overlay_lemma = lemma.lower()
+        lookup_resolver = getattr(self.base, "lookup_lemmas", None)
+        morphology_lemmas = (
+            () if lookup_resolver is None else tuple(lookup_resolver(lemma, pos))
+        )
+        # The literal surface keeps overlay-only vocabulary available even when it
+        # is absent from OEWN and therefore cannot be emitted by Morphy.
+        overlay_lemmas = tuple(
+            dict.fromkeys((surface_overlay_lemma, *morphology_lemmas))
+        )
+
+        if (
+            self.overlay is not None
+            and surface_overlay_lemma in self.overlay.blacklisted_lemmas
+        ):
+            return ()
+        candidates = list(self.base.candidates(lemma, pos))
+        if self.overlay is not None:
+            resolver = getattr(self.base, "resolve_legacy_reference", None)
+            for overlay_lemma in overlay_lemmas:
+                candidates.extend(self.overlay.custom_candidates(overlay_lemma, pos))
+                if resolver is not None:
+                    for reference in self.overlay.native_references(overlay_lemma, pos):
+                        resolved = resolver(reference, lemma=overlay_lemma, pos=pos)
+                        if resolved is not None:
+                            candidates.append(resolved)
+        deduplicated: dict[str, SenseCandidate] = {}
+        for candidate in candidates:
+            existing = deduplicated.get(candidate.synset_id)
+            if existing is None:
+                deduplicated[candidate.synset_id] = candidate
+            else:
+                deduplicated[candidate.synset_id] = _merge_synset_candidates(
+                    existing, candidate
+                )
+        return tuple(deduplicated.values())
 
 
 def _mwe_entry_token_assignment(
@@ -772,3 +1098,46 @@ def _ili_string(synset: Any) -> str | None:
 def _sense_alias(lemma: str, pos: str, rank: int) -> str:
     normalized = "_".join(lemma.split())
     return f"{normalized}.{pos}.{rank:02d}"
+
+
+_LEGACY_FUNCTION_WORDS = {
+    "be",
+    "have",
+    "will",
+    "would",
+    "can",
+    "could",
+    "may",
+    "might",
+    "must",
+    "should",
+    "we",
+    "ourselves",
+    "it",
+    "itself",
+    "they",
+    "themselves",
+    "i",
+    "myself",
+    "you",
+    "yourself",
+    "he",
+    "himself",
+    "she",
+    "herself",
+    "something",
+    "what",
+    "this",
+    "these",
+    "that",
+    "those",
+    "which",
+    "one",
+    "anybody",
+    "anyone",
+    "everybody",
+    "everyone",
+    "who",
+    "some",
+    "each",
+}

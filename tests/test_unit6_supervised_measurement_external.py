@@ -111,7 +111,7 @@ def test_unit6_teal_only_vertical_close_reopen(tmp_path: Path, monkeypatch) -> N
         assert Pi_A.descriptor["lineage"]["basis_artifact_ids"] == [A.artifact_id]
 
         # External keyed measurements align by identity, not physical row order.
-        t_rows = list(reversed(sorted(t_keys)))
+        t_rows = sorted(t_keys, reverse=True)
         L_T = project.from_keyed_frame(
             T,
             pd.DataFrame({"row_id": t_rows[:3], "label": [1, 0, 1]}),

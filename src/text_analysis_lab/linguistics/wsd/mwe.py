@@ -237,7 +237,7 @@ def read_multiword_lemma_index(path: str | Path) -> MultiwordLemmaIndex:
     with gzip.open(Path(path), "rt", encoding="utf-8") as handle:
         payload = json.load(handle)
     if not isinstance(payload, Mapping):
-        raise ValueError("MWE reverse-index payload must be an object")
+        raise TypeError("MWE reverse-index payload must be an object")
     return MultiwordLemmaIndex.from_payload(payload)
 
 

@@ -144,7 +144,9 @@ def test_import_validation_helpers() -> None:
     assert _validate_patterns("*.txt") == ("*.txt",)
     assert _validate_patterns(["*.txt", "*.pdf"]) == ("*.txt", "*.pdf")
     assert _validate_batch_size(5) == 5
-    for invalid in (0, -1, True, 1.5):
+    with pytest.raises(TypeError):
+        _validate_batch_size(True)
+    for invalid in (0, -1, 1.5):
         with pytest.raises(ValueError):
             _validate_batch_size(invalid)
 

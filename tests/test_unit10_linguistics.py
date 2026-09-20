@@ -32,7 +32,7 @@ def _packet(
 
 def test_coreference_resolver_keeps_exact_spans_and_aligns_dependency_head(monkeypatch):
     import text_analysis_lab.translators.coreference_resolver as module
-    from text_analysis_lab._linguistics.coreference.runtime import (
+    from text_analysis_lab.linguistics.coreference.runtime import (
         CorefBatchPrediction,
         CorefMention,
         CorefPrediction,
@@ -95,8 +95,8 @@ def test_coreference_resolver_keeps_exact_spans_and_aligns_dependency_head(monke
 
 def test_semantic_role_labeler_emits_predicates_roles_and_heads(monkeypatch):
     import text_analysis_lab.translators.semantic_role_labeler as module
-    from text_analysis_lab._linguistics.srl.runtime import SrlTokenPrediction
-    from text_analysis_lab._linguistics.srl.structures import BioSpan
+    from text_analysis_lab.linguistics.srl.runtime import SrlTokenPrediction
+    from text_analysis_lab.linguistics.srl.structures import BioSpan
 
     class FakeRuntime:
         def encode_tokens(self, tokens):
@@ -185,7 +185,7 @@ def test_word_sense_disambiguator_targets_all_wordnet_eligible_tokens(
     monkeypatch, tmp_path
 ):
     import text_analysis_lab.translators.word_sense_disambiguator as module
-    from text_analysis_lab._linguistics.wsd.types import GlossPayload, SenseCandidate
+    from text_analysis_lab.linguistics.wsd.types import GlossPayload, SenseCandidate
 
     cache = _CachePaths(
         root=tmp_path,
@@ -273,7 +273,7 @@ def test_word_sense_disambiguator_excludes_space_tokens_from_wsl_reader_context(
     monkeypatch, tmp_path
 ):
     import text_analysis_lab.translators.word_sense_disambiguator as module
-    from text_analysis_lab._linguistics.wsd.types import GlossPayload, SenseCandidate
+    from text_analysis_lab.linguistics.wsd.types import GlossPayload, SenseCandidate
 
     cache = _CachePaths(
         root=tmp_path,
@@ -372,7 +372,7 @@ def test_word_sense_disambiguator_requires_explicit_noncommercial_acknowledgemen
 
 
 def test_wsl_reader_empty_subword_context_is_target_input_error():
-    from text_analysis_lab._linguistics.wsd.wsl_reader import build_wsl_reader_input
+    from text_analysis_lab.linguistics.wsd.wsl_reader import build_wsl_reader_input
 
     class FakeTokenizer:
         unk_token_id = -1

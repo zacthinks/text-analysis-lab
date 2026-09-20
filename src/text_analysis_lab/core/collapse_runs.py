@@ -31,6 +31,7 @@ from text_analysis_lab.core.aggregate import (
     _validate_output_names,
 )
 from text_analysis_lab.core.errors import ArtifactError, QueryError
+from text_analysis_lab.core.failure_cleanup import mark_operation_failed_best_effort
 from text_analysis_lab.core.ids import next_id
 from text_analysis_lab.core.lineage import (
     expected_span_key,
@@ -153,8 +154,6 @@ def collapse_runs(
     if not source_pk:
         raise ArtifactError("collapse_runs source has no primary key.")
     output_pk = tuple(expected_span_key(source_pk))
-    parent_cols = source_pk[:-1]
-    leaf_col = source_pk[-1]
 
     data_rules = _normalize_field_spec(data, label="data")
     metadata_rules = _normalize_field_spec(metadata, label="metadata")
@@ -315,7 +314,7 @@ def _validate_run_output_names(
     data_names: Sequence[str],
     metadata_names: Sequence[str],
 ) -> None:
-    reserved = set(str(value) for value in output_pk) | {"n_rows"}
+    reserved = {str(value) for value in output_pk} | {"n_rows"}
     for name in by_output_names:
         if name in reserved or name.startswith("_"):
             raise ArtifactError(
@@ -433,6 +432,12 @@ def _collapse_sql(
     ]
 
     run_extra = ", " + ", ".join(run_by_select) if run_by_select else ""
+    member_by_select = ",\n           ".join(
+        f"r.{quote_identifier(f'__teal_run_by_{i}')} AS "
+        f"{quote_identifier(f'__teal_run_by_{i}')}"
+        for i in range(len(by_source_names))
+    )
+    member_by_sql = f",\n           {member_by_select}" if member_by_select else ""
     sql = f"""
 WITH base AS (
     {view_sql}
@@ -474,8 +479,7 @@ members AS (
            r.{quote_identifier(start_col)} AS {quote_identifier(start_col)},
            r.{quote_identifier(end_col)} AS {quote_identifier(end_col)},
            r.__teal_run_id,
-           r.__teal_run_first_position,
-           {", ".join(f"r.{quote_identifier(f"__teal_run_by_{i}")} AS {quote_identifier(f"__teal_run_by_{i}")}" for i in range(len(by_source_names)))}
+           r.__teal_run_first_position{member_by_sql}
     FROM runs r
     JOIN base b ON {join_sql}
 )
@@ -615,18 +619,13 @@ def _fail_operation(
     operation: Mapping[str, Any],
     exc: BaseException,
 ) -> None:
-    try:
-        operation["writer"].mark_failed(exc)
-    except Exception:
-        pass
-    try:
-        project.catalog.mark_artifact_failed(str(operation["artifact_id"]))
-    except Exception:
-        pass
-    try:
-        project.catalog.mark_operation_failed(str(operation["operation_id"]), exc)
-    except Exception:
-        pass
+    mark_operation_failed_best_effort(
+        project,
+        writer=operation["writer"],
+        artifact_id=str(operation["artifact_id"]),
+        operation_id=str(operation["operation_id"]),
+        error=exc,
+    )
     descriptor = operation["descriptor"]
     descriptor["status"] = "failed"
     descriptor["error"] = f"{exc.__class__.__name__}: {exc}"

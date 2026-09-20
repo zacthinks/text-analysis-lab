@@ -97,7 +97,7 @@ def is_key_subset(
     candidate = tuple(candidate_key)
     if not candidate:
         return False
-    current = set(tuple(current_key))
+    current = set(current_key)
     return all(col in current for col in candidate)
 
 
@@ -287,7 +287,7 @@ def expected_span_key(source_primary_key: Sequence[str]) -> list[str]:
     if not source:
         raise LineageError("span_key lineage requires a non-empty basis primary key.")
     last = source[-1]
-    if last.endswith("_start") or last.endswith("_end"):
+    if last.endswith(("_start", "_end")):
         raise LineageError(
             "span_key lineage cannot be applied to an existing span key."
         )

@@ -9,6 +9,7 @@ data belongs to artifact subclasses, not here.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args
@@ -600,7 +601,7 @@ class QueryEngine:
                     )
                 except Exception as exc:
                     raise QueryError(f"Artifact query failed: {exc}") from exc
-                sample_size = int(round(eligible_count * float(sample_frac)))
+                sample_size = round(eligible_count * float(sample_frac))
             else:
                 sample_size = int(sample_n or 0)
 
@@ -634,10 +635,8 @@ class QueryEngine:
             return reservoir
         finally:
             for name in reversed(registered):
-                try:
+                with suppress(Exception):
                     self.con.unregister(name)
-                except Exception:
-                    pass
 
     def _lineage_paths_between(
         self,
@@ -2033,10 +2032,8 @@ class QueryEngine:
             raise QueryError(f"Artifact query failed: {exc}") from exc
         finally:
             for name in reversed(registered):
-                try:
+                with suppress(Exception):
                     self.con.unregister(name)
-                except Exception:
-                    pass
         if "_request_order" in frame.columns:
             frame = frame.drop(columns=["_request_order"])
         return frame
@@ -2137,10 +2134,8 @@ class QueryEngine:
                     yield from yield_paged()
         finally:
             for name in reversed(registered):
-                try:
+                with suppress(Exception):
                     self.con.unregister(name)
-                except Exception:
-                    pass
 
     def project_sql(
         self,
@@ -2190,7 +2185,5 @@ class QueryEngine:
             raise QueryError(f"Project SQL failed: {exc}") from exc
         finally:
             for name in reversed(registered):
-                try:
+                with suppress(Exception):
                     self.con.execute(f"DROP VIEW IF EXISTS {quote_identifier(name)}")
-                except Exception:
-                    pass

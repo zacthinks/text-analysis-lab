@@ -310,7 +310,7 @@ def test_count_vectorizer_porter_stemming_is_persisted_and_applied() -> None:
     # Fit through the underlying sklearn vectorizer so this dependency-light unit
     # test isolates analyzer behavior from artifact execution.
     vectorizer = translator._make_vectorizer()
-    matrix = vectorizer.fit_transform(["running runs runner", "the cats cat"])
+    vectorizer.fit_transform(["running runs runner", "the cats cat"])
     translator._vectorizer = vectorizer
     translator.vocabulary_ = dict(vectorizer.vocabulary_)
     names = set(translator._feature_names())

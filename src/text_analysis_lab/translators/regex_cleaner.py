@@ -97,7 +97,7 @@ class RegexCleaner(BaseTranslator):
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
-        source = _single_source(sources)
+        _single_source(sources)
         return OutputSpec(
             artifact_type="table",
             lineage_mode="preserved_key",

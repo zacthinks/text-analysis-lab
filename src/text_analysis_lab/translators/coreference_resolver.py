@@ -7,10 +7,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
-from text_analysis_lab._linguistics.cache import user_cache_paths
-from text_analysis_lab._linguistics.coreference.runtime import FastCorefRuntime
-from text_analysis_lab._linguistics.device import resolve_devices
-from text_analysis_lab._linguistics.srl.structures import content_head_indices
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
     BaseTranslator,
@@ -20,6 +16,10 @@ from text_analysis_lab.core.operator import (
     SourceRequest,
     TranslationRequest,
 )
+from text_analysis_lab.linguistics.cache import user_cache_paths
+from text_analysis_lab.linguistics.coreference.runtime import FastCorefRuntime
+from text_analysis_lab.linguistics.device import resolve_devices
+from text_analysis_lab.linguistics.srl.structures import content_head_indices
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact

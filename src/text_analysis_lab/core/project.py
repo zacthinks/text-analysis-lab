@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -154,17 +155,15 @@ class Project:
         self._geco_manager = None
         self._closed = False
 
-    def __enter__(self) -> Project:
+    def __enter__(self) -> Project:  # noqa: PYI034 - keep Python 3.10 base deps minimal
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         self.close()
 
     def __del__(self) -> None:  # pragma: no cover - best-effort fallback only
-        try:
+        with suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Project):

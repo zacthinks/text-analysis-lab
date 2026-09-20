@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
-from text_analysis_lab._linguistics.cache import user_cache_paths
+from text_analysis_lab.linguistics.cache import user_cache_paths
 
 DEFAULT_WSL_READER_MODEL = "Babelscape/wsl-reader-deberta-v3-base"
 DEFAULT_WSL_READER_REVISION = "809d05bd12f261d26b42e28dc2b31db430c1585c"
@@ -270,7 +270,7 @@ class WordSenseDisambiguator(BaseTranslator):
             key_record = {name: int(row[name]) for name in token_keys}
             target_keys[target_id] = key_record
             target_context[target_id] = (surface, parser_lemma, str(raw_pos or ""))
-            from text_analysis_lab._linguistics.wsd.types import WSDTarget
+            from text_analysis_lab.linguistics.wsd.types import WSDTarget
 
             targets.append(
                 WSDTarget(
@@ -322,7 +322,7 @@ class WordSenseDisambiguator(BaseTranslator):
             precision=self.precision,
             local_files_only=self.local_files_only,
         )
-        from text_analysis_lab._linguistics.wsd.experiment import score_wsd_targets
+        from text_analysis_lab.linguistics.wsd.scoring import score_wsd_targets
 
         rows, unresolved, _cache_stats = score_wsd_targets(
             targets,
@@ -448,7 +448,7 @@ class WordSenseDisambiguator(BaseTranslator):
 
 
 def _make_ontology(*, lexicon: str, include_multiword_candidates: bool):
-    from text_analysis_lab._linguistics.wsd.ontology import WnOntologyProvider
+    from text_analysis_lab.linguistics.wsd.ontology import WnOntologyProvider
 
     return WnOntologyProvider(
         lexicon,
@@ -458,7 +458,7 @@ def _make_ontology(*, lexicon: str, include_multiword_candidates: bool):
 
 
 def _make_backend(*, model_name, model_revision, device, precision, local_files_only):
-    from text_analysis_lab._linguistics.wsd.wsl_backend import BabelscapeWSLBackend
+    from text_analysis_lab.linguistics.wsd.wsl_backend import BabelscapeWSLBackend
 
     return BabelscapeWSLBackend(
         model_name,

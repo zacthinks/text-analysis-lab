@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -145,10 +146,8 @@ def binary_code(
         memo=memo,
     )
     state_path.unlink(missing_ok=True)
-    try:
+    with suppress(OSError):
         state_path.parent.rmdir()
-    except OSError:
-        pass
     return artifact
 
 

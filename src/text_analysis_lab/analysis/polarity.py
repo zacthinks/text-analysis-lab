@@ -104,7 +104,7 @@ def polarity(
         batch_size=int(batch_size),
         key_columns=True,
         data_columns=True,
-        metadata_columns=list(("matched", "unmatched", "total")),
+        metadata_columns=["matched", "unmatched", "total"],
         metadata_mode="local",
         form="native",
         include_position=True,

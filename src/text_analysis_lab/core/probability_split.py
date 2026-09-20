@@ -612,7 +612,7 @@ def _token_sort_key(token: tuple[str, Any]) -> tuple[str, str]:
 
 def _positive_int(value: Any, *, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
-        raise ValueError(f"{name} must be a positive integer.")
+        raise TypeError(f"{name} must be a positive integer.")
     out = int(value)
     if out <= 0:
         raise ValueError(f"{name} must be a positive integer.")
@@ -623,7 +623,7 @@ def _random_state(value: Any) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
-        raise ValueError("random_state must be an integer or None.")
+        raise TypeError("random_state must be an integer or None.")
     return int(value)
 
 

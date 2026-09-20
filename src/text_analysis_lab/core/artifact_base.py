@@ -149,7 +149,7 @@ def _sample_positions(
     if frac is not None:
         if not 0 <= float(frac) <= 1:
             raise ValueError("sample_frac must be between 0 and 1.")
-        sample_size = int(round(pool_size * float(frac)))
+        sample_size = round(pool_size * float(frac))
     else:
         sample_size = int(n or 0)
 
@@ -723,7 +723,7 @@ class BaseArtifact(ABC):
             values = {col: key[col] for col in pk}
         elif len(pk) == 1:
             values = {pk[0]: key}
-        elif isinstance(key, tuple) or isinstance(key, list):
+        elif isinstance(key, (tuple, list)):
             if len(key) != len(pk):
                 raise KeyError(
                     f"Expected {len(pk)} key values for {pk}; got {len(key)}."

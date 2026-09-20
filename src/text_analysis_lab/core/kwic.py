@@ -416,8 +416,8 @@ def keyword_in_context(
     requested_search_columns = _normalize_search_columns(search_columns)
 
     query_info = artifact.query_columns(metadata_mode=metadata_mode)
-    key_output_columns = set(str(col) for col in query_info.get("key", []))
-    metadata_output_columns = set(str(col) for col in query_info.get("metadata", []))
+    key_output_columns = {str(col) for col in query_info.get("key", [])}
+    metadata_output_columns = {str(col) for col in query_info.get("metadata", [])}
 
     hits = KWICResult()
     saw_any_row = False

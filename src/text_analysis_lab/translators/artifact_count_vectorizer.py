@@ -410,7 +410,7 @@ def _normalize_ngram_range(value: Sequence[int]) -> tuple[int, int]:
 
 def _validate_df_threshold(value: float, *, name: str) -> int | float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{name} must be an integer count or float proportion.")
+        raise TypeError(f"{name} must be an integer count or float proportion.")
     if isinstance(value, int):
         if value <= 0:
             raise ValueError(f"{name} integer values must be positive.")
@@ -571,19 +571,11 @@ def _fit_vocabulary(
 
 
 def _resolve_min_df(value: float, n_groups: int) -> int:
-    return (
-        int(value)
-        if isinstance(value, int)
-        else int(math.ceil(float(value) * n_groups))
-    )
+    return int(value) if isinstance(value, int) else math.ceil(float(value) * n_groups)
 
 
 def _resolve_max_df(value: float, n_groups: int) -> int:
-    return (
-        int(value)
-        if isinstance(value, int)
-        else int(math.floor(float(value) * n_groups))
-    )
+    return int(value) if isinstance(value, int) else math.floor(float(value) * n_groups)
 
 
 def _events_to_matrix(

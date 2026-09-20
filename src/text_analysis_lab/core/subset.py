@@ -665,7 +665,7 @@ def _validate_column_select(
     elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
         requested = tuple(value)
     else:
-        raise ValueError(
+        raise TypeError(
             f"{name} must be a boolean, a non-empty string, or a sequence "
             "of non-empty strings."
         )
@@ -778,7 +778,7 @@ def _validate_form(value: str) -> QueryForm:
 
 def _validate_bool(value: Any, *, name: str) -> bool:
     if not isinstance(value, bool):
-        raise ValueError(f"{name} must be a boolean.")
+        raise TypeError(f"{name} must be a boolean.")
     return value
 
 
@@ -793,6 +793,6 @@ def _validate_label(value: str, *, name: str) -> str:
 
 
 def _json_column_select(value: ColumnSelect) -> bool | str | list[str]:
-    if isinstance(value, bool) or isinstance(value, str):
+    if isinstance(value, (bool, str)):
         return value
     return [str(column) for column in value]

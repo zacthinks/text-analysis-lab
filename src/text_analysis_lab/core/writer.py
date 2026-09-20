@@ -21,6 +21,7 @@ import os
 import sqlite3
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast, get_args
 
@@ -603,7 +604,7 @@ class ArtifactWriter:
 
         if not indices:
             raise ArtifactError("feature_indices must retain at least one feature.")
-        if any(right <= left for left, right in zip(indices, indices[1:])):
+        if any(right <= left for left, right in pairwise(indices)):
             raise ArtifactError(
                 "feature_indices must be unique and strictly increasing so the "
                 "derived feature axis preserves source order."

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
@@ -30,6 +31,7 @@ from text_analysis_lab.core.errors import (
     MetadataAggregationError,
     QueryError,
 )
+from text_analysis_lab.core.failure_cleanup import mark_operation_failed_best_effort
 from text_analysis_lab.core.ids import next_id
 from text_analysis_lab.core.lineage import validate_primary_key_relationship
 from text_analysis_lab.core.metadata_aggregation import normalize_aggregation_spec
@@ -418,7 +420,6 @@ def _aggregate_relational(
         memo=memo,
     )
     writer = operation["writer"]
-    descriptor = operation["descriptor"]
 
     data_names = list(resolved_data)
     metadata_names = list(resolved_metadata)
@@ -671,12 +672,10 @@ def _aggregate_matrix(
         _fail_operation(project, operation=operation, exc=exc)
         raise
     finally:
-        try:
+        with suppress(Exception):
             project.query.con.execute(
                 f"DROP TABLE IF EXISTS {quote_identifier(group_table)}"
             )
-        except Exception:
-            pass
 
 
 def _matrix_child_rows_for_groups(
@@ -964,10 +963,11 @@ def _apply_postprocessing(
     postprocess: Mapping[str, tuple[str, str]],
 ) -> None:
     for output_name, (method, separator) in postprocess.items():
+        reducer = ConcatReducer(separator) if method == "concat" else method
         frame[output_name] = frame[output_name].map(
-            lambda raw: _reduce_ordered_values(
+            lambda raw, reducer=reducer: _reduce_ordered_values(
                 _as_list(raw),
-                ConcatReducer(separator) if method == "concat" else method,
+                reducer,
             )
         )
 
@@ -981,11 +981,9 @@ def _as_list(value: Any) -> list[Any]:
         return list(value)
     if isinstance(value, np.ndarray):
         return value.tolist()
-    try:
+    with suppress(TypeError, ValueError):
         if pd.isna(value):
             return []
-    except (TypeError, ValueError):
-        pass
     return [value]
 
 
@@ -1054,26 +1052,22 @@ def _ordered_unique(values: Sequence[Any]) -> list[Any]:
 
 
 def _values_equal(left: Any, right: Any) -> bool:
-    try:
+    with suppress(Exception):
         result = left == right
         if isinstance(result, (bool, np.bool_)):
             return bool(result)
         if hasattr(result, "all"):
             return bool(result.all())
-    except Exception:
-        pass
     return repr(left) == repr(right)
 
 
 def _is_null(value: Any) -> bool:
     if value is None or value is pd.NA:
         return True
-    try:
+    with suppress(TypeError, ValueError):
         result = pd.isna(value)
         if isinstance(result, (bool, np.bool_)):
             return bool(result)
-    except (TypeError, ValueError):
-        pass
     return False
 
 
@@ -1332,18 +1326,13 @@ def _fail_operation(
     operation: Mapping[str, Any],
     exc: BaseException,
 ) -> None:
-    try:
-        operation["writer"].mark_failed(exc)
-    except Exception:
-        pass
-    try:
-        project.catalog.mark_artifact_failed(str(operation["artifact_id"]))
-    except Exception:
-        pass
-    try:
-        project.catalog.mark_operation_failed(str(operation["operation_id"]), exc)
-    except Exception:
-        pass
+    mark_operation_failed_best_effort(
+        project,
+        writer=operation["writer"],
+        artifact_id=str(operation["artifact_id"]),
+        operation_id=str(operation["operation_id"]),
+        error=exc,
+    )
     descriptor = operation["descriptor"]
     descriptor["status"] = "failed"
     descriptor["error"] = f"{exc.__class__.__name__}: {exc}"

@@ -102,14 +102,14 @@ class TextLength(BaseTranslator):
             raise OperatorError("TextLength requires a table or jsonl artifact source.")
 
         available = source.query_columns(metadata_mode="full")
-        available_data = set(str(name) for name in available["data"])
+        available_data = {str(name) for name in available["data"]}
         missing = [field for field in self.lengths if field not in available_data]
         if missing:
             raise OperatorError(
                 f"TextLength source data field(s) are unavailable: {missing}. "
                 f"Available data fields: {sorted(available_data)}."
             )
-        existing = set(str(name) for name in available["output"])
+        existing = {str(name) for name in available["output"]}
         collisions = sorted(existing.intersection(self.output_columns))
         if collisions:
             raise OperatorError(

@@ -148,7 +148,7 @@ class ContextualTransformer(BaseTranslator):
     ) -> Mapping[str, OutputSpec]:
         _ = request
         source = single_source(sources, translator_name="ContextualTransformer")
-        if self.token_key in set(str(name) for name in source.primary_key):
+        if self.token_key in {str(name) for name in source.primary_key}:
             raise OperatorError(
                 f"ContextualTransformer token_key {self.token_key!r} already exists in the source primary key."
             )
@@ -620,7 +620,7 @@ class ContextualTransformer(BaseTranslator):
                 model = AutoModel.from_pretrained(
                     self.model, local_files_only=True, **common
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - provider-specific cache-miss failures vary
                 try:
                     tokenizer = AutoTokenizer.from_pretrained(
                         self.model, use_fast=True, **common

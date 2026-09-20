@@ -107,7 +107,7 @@ def test_restrict_rejects_non_prefix_domain_key(tmp_path):
 
 
 def test_aggregate_reduces_key_by_named_level_and_sums_sentence_scores(tmp_path):
-    project, docs, sentences = _build_sentence_project(tmp_path)
+    project, _docs, sentences = _build_sentence_project(tmp_path)
     try:
         sentence_rows = _table(sentences, data=False)
         probabilities = {
@@ -178,7 +178,7 @@ def test_aggregate_to_key_is_last_retained_key_and_must_reduce(tmp_path):
 def test_aggregate_new_output_centric_data_and_metadata_api(tmp_path):
     from text_analysis_lab import agg, concat, literal
 
-    project, docs, sentences = _build_sentence_project(tmp_path)
+    project, _docs, sentences = _build_sentence_project(tmp_path)
     try:
         sentence_rows = _table(sentences, data=False)
         values = sentence_rows[["row_id", "sentence_id"]].copy()

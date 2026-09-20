@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Sequence
+from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast, get_args
 
@@ -156,7 +157,7 @@ def _validated_feature_indices(
         raise ArtifactError(
             f"Matrix artifact {artifact_id} feature_indices may not be empty."
         )
-    if any(right <= left for left, right in zip(indices, indices[1:])):
+    if any(right <= left for left, right in pairwise(indices)):
         raise ArtifactError(
             f"Matrix artifact {artifact_id} feature_indices must be unique and "
             "strictly increasing."

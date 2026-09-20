@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -32,7 +33,7 @@ from text_analysis_lab.translators import (
 class _FakeGeometricCoder:
     """Minimal current GeCo public seam used to test TeAL's bridge contract."""
 
-    _registry: dict[str, _FakeGeometricCoder] = {}
+    _registry: ClassVar[dict[str, _FakeGeometricCoder]] = {}
 
     def __init__(self, project_dir, data, keys, text, metadata, provider):
         self.project_dir = Path(project_dir)
@@ -448,7 +449,6 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
         assert "geometries" not in listing
         assert "projections" not in listing
 
-        ids = {"T": T.artifact_id, "L_T": L_T.artifact_id, "L_F": L_F.artifact_id}
     finally:
         project.close()
 

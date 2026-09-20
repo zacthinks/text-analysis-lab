@@ -13,7 +13,7 @@ import json
 import re
 import shutil
 from collections.abc import Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -750,7 +750,7 @@ class LinkedGeCoWorkspace:
         self._closed = True
         self._manager._forget_handle(self.name, self)
 
-    def __enter__(self) -> LinkedGeCoWorkspace:
+    def __enter__(self) -> LinkedGeCoWorkspace:  # noqa: PYI034 - keep Python 3.10 base deps minimal
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
@@ -910,10 +910,8 @@ class GeCoManager:
             if coder is not None:
                 close = getattr(coder, "close", None)
                 if callable(close):
-                    try:
+                    with suppress(Exception):
                         close()
-                    except Exception:
-                        pass
             manifest_path.unlink(missing_ok=True)
             if workspace_path.exists():
                 shutil.rmtree(workspace_path, ignore_errors=True)
@@ -1054,10 +1052,8 @@ class GeCoManager:
             if coder is not None:
                 close = getattr(coder, "close", None)
                 if callable(close):
-                    try:
+                    with suppress(Exception):
                         close()
-                    except Exception:
-                        pass
             manifest_path.unlink(missing_ok=True)
             if workspace_path.exists():
                 shutil.rmtree(workspace_path, ignore_errors=True)
@@ -1116,10 +1112,8 @@ class GeCoManager:
 
     def close(self) -> None:
         for handle in list(self._handles.values()):
-            try:
+            with suppress(Exception):
                 handle.close()
-            except Exception:
-                pass
         self._handles.clear()
 
     def _forget_handle(self, name: str, handle: LinkedGeCoWorkspace) -> None:
@@ -1409,7 +1403,7 @@ def _legacy_classifier_status(coder: Any, spec: Mapping[str, Any]) -> str | None
             code_id=int(spec["code_id"]),
             classifier_spec_ids=[int(spec["classifier_spec_id"])],
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - optional legacy GeCo compatibility probe
         return None
     if not isinstance(result, Mapping):
         return None

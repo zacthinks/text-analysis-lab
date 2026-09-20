@@ -6,6 +6,7 @@ import json
 import shutil
 import warnings
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -544,7 +545,7 @@ class SentenceTransformerEncoder(BaseTranslator):
             }
             try:
                 model = SentenceTransformer(self.model, local_files_only=True, **common)
-            except Exception:
+            except Exception:  # noqa: BLE001 - provider-specific cache-miss failures vary
                 try:
                     model = SentenceTransformer(self.model, **common)
                 except Exception as exc:  # pragma: no cover
@@ -625,12 +626,11 @@ def _sentence_backbone(model: Any) -> Any:
 
 
 def _sentence_first_module(model: Any) -> Any:
-    try:
+    with suppress(Exception):
         return model[0]
-    except Exception:
-        modules = getattr(model, "_modules", None)
-        if isinstance(modules, Mapping) and modules:
-            return next(iter(modules.values()))
+    modules = getattr(model, "_modules", None)
+    if isinstance(modules, Mapping) and modules:
+        return next(iter(modules.values()))
     return model
 
 

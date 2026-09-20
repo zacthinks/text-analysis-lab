@@ -1,1 +1,1 @@
-"""Internal linguistic-model support for TeAL translators."""
+"""Linguistic model and lexical support for TeAL."""

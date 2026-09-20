@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError
+from text_analysis_lab.core.failure_cleanup import mark_operation_failed_best_effort
 from text_analysis_lab.core.ids import next_id
 from text_analysis_lab.core.operator import (
     BaseOperator,
@@ -589,7 +590,7 @@ def _read_excel_files(
     provenance_fields = ["source_sheet", "source_sheet_index", "source_row"]
     if root is not None:
         provenance_fields.insert(0, "source_file")
-    collisions = sorted(set((*text, *metadata)).intersection(provenance_fields))
+    collisions = sorted({*text, *metadata}.intersection(provenance_fields))
     if collisions:
         raise ArtifactError(
             "Excel provenance field name(s) collide with requested source fields: "
@@ -745,7 +746,12 @@ def _read_excel_files(
                     batch_rows: list[dict[str, Any]] = []
                     batch_source_rows: list[int] = []
 
-                    def flush() -> Mapping[str, Any] | None:
+                    def flush(
+                        *,
+                        path: Path = path,
+                        sheet_name: str = sheet_name,
+                        sheet_index: int = sheet_index,
+                    ) -> Mapping[str, Any] | None:
                         nonlocal next_row_id, batch_rows, batch_source_rows
                         if not batch_rows:
                             return None
@@ -1205,18 +1211,13 @@ def _execute_import(
         project.storage.touch_manifest()
         return project.get_artifact(artifact_id)
     except Exception as exc:
-        try:
-            writer.mark_failed(exc)
-        except Exception:
-            pass
-        try:
-            project.catalog.mark_artifact_failed(artifact_id)
-        except Exception:
-            pass
-        try:
-            project.catalog.mark_operation_failed(operation_id, exc)
-        except Exception:
-            pass
+        mark_operation_failed_best_effort(
+            project,
+            writer=writer,
+            artifact_id=artifact_id,
+            operation_id=operation_id,
+            error=exc,
+        )
         descriptor["status"] = "failed"
         descriptor["error"] = f"{exc.__class__.__name__}: {exc}"
         _write_json(operation_dir / "operation.json", descriptor)
@@ -1357,7 +1358,7 @@ def _inventory_paths(
 
 def _validate_batch_size(value: int) -> int:
     if isinstance(value, bool):
-        raise ValueError("batch_size must be a positive integer.")
+        raise TypeError("batch_size must be a positive integer.")
     try:
         resolved = int(value)
     except (TypeError, ValueError) as exc:

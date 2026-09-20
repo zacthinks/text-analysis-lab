@@ -73,7 +73,7 @@ def test_real_unit10_models_on_one_sentence(tmp_path: Path) -> None:
     wn = pytest.importorskip("wn")
     try:
         wn.Wordnet("oewn:2025+")
-    except Exception:
+    except Exception:  # noqa: BLE001 - wn uses provider-specific missing-resource errors
         wn.download("oewn:2025+")
 
     text = "Alice runs quickly. She likes the race."
@@ -222,7 +222,7 @@ def test_real_wsd_ignores_spacy_space_token_in_reader_context(tmp_path: Path) ->
     wn = pytest.importorskip("wn")
     try:
         wn.Wordnet("oewn:2025+")
-    except Exception:
+    except Exception:  # noqa: BLE001 - wn uses provider-specific missing-resource errors
         wn.download("oewn:2025+")
 
     project = teal.Project.create(

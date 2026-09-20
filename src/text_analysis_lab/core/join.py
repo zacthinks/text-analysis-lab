@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from text_analysis_lab.core.errors import ArtifactError
+from text_analysis_lab.core.failure_cleanup import mark_operation_failed_best_effort
 from text_analysis_lab.core.ids import next_id
 from text_analysis_lab.core.lineage import validate_primary_key_relationship
 from text_analysis_lab.core.operator import (
@@ -186,18 +187,13 @@ def join(
         project.query.clear_cache()
         return project.get_artifact(artifact_id)
     except Exception as exc:
-        try:
-            writer.mark_failed(exc)
-        except Exception:
-            pass
-        try:
-            project.catalog.mark_artifact_failed(artifact_id)
-        except Exception:
-            pass
-        try:
-            project.catalog.mark_operation_failed(operation_id, exc)
-        except Exception:
-            pass
+        mark_operation_failed_best_effort(
+            project,
+            writer=writer,
+            artifact_id=artifact_id,
+            operation_id=operation_id,
+            error=exc,
+        )
         descriptor["status"] = "failed"
         descriptor["error"] = f"{exc.__class__.__name__}: {exc}"
         _write_json(operation_dir / "operation.json", descriptor)
@@ -285,18 +281,22 @@ def _validate_batch_size(value: int) -> int:
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle = tempfile.NamedTemporaryFile(
-        "w",
-        delete=False,
-        dir=str(path.parent),
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        encoding="utf-8",
-    )
+    data = json.dumps(dict(payload), indent=2, sort_keys=True)
+    temp_path: Path | None = None
     try:
-        with handle:
-            json.dump(dict(payload), handle, indent=2, sort_keys=True)
-        os.replace(handle.name, path)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temp_path = Path(handle.name)
+        os.replace(temp_path, path)
     finally:
-        if os.path.exists(handle.name):
-            os.unlink(handle.name)
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()

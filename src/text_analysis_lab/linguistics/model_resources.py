@@ -11,6 +11,7 @@ import json
 import os
 import tempfile
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -173,10 +174,8 @@ def download_file_atomic(
         os.replace(temporary_path, destination)
         return {**response_details, "size_bytes": downloaded_bytes}
     except Exception:
-        try:
+        with suppress(OSError):
             os.close(descriptor)
-        except OSError:
-            pass
         raise
     finally:
         temporary_path.unlink(missing_ok=True)

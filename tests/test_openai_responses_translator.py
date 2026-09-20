@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pandas as pd
 import pytest
@@ -13,7 +14,7 @@ from text_analysis_lab.translators import OpenAIResponsesTranslator
 
 class _Source:
     artifact_type = SimpleNamespace(value="table")
-    primary_key = ["row_id"]
+    primary_key: ClassVar[list[str]] = ["row_id"]
 
     def get_data_columns(self):
         return ["text"]
@@ -23,7 +24,7 @@ class _Source:
 
 
 class _FakeResponses:
-    calls = []
+    calls: ClassVar[list[dict[str, object]]] = []
     output_text = "ok"
 
     def create(self, **kwargs):

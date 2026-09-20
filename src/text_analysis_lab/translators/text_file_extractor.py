@@ -222,7 +222,7 @@ class TextFileExtractor(BaseTranslator):
                 _PAGE_COUNT_FIELD: None,
                 _PAGES_EXTRACTED_FIELD: None,
             }
-        except Exception as exc:  # row-aligned failure is part of the contract
+        except Exception as exc:  # noqa: BLE001 - row-aligned failure is part of the contract
             return _failed_row(
                 text_field=self.text_field,
                 error=f"{exc.__class__.__name__}: {exc}",

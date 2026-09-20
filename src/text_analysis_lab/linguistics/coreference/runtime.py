@@ -300,7 +300,7 @@ def normalize_fastcoref_result(
 
     try:
         offset_clusters = result.get_clusters(as_strings=False)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - third-party prediction normalization boundary
         return _malformed_coref_prediction(
             document_index=document_index,
             original_text=original_text,
@@ -537,7 +537,7 @@ class FastCorefRuntime:
             if documents and input_ids and isinstance(input_ids[0], int):
                 input_ids = [input_ids]
             counts = [len(values) for values in input_ids]
-        except Exception:
+        except Exception:  # noqa: BLE001 - bulk tokenization falls back to per-document calls
             counts = [
                 len(
                     tokenizer(

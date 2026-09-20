@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from types import SimpleNamespace
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -26,7 +27,7 @@ class _FakeMatrixArtifact:
     n_rows = 4
     primary_key = ("doc_id",)
     operation_id = "run_000001"
-    descriptor = {
+    descriptor: ClassVar[dict[str, object]] = {
         "lineage": {"lineage_mode": "new_key", "basis_artifact_ids": []},
         "components": {"keys": {}, "data": {}},
     }

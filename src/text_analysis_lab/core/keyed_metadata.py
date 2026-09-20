@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError
+from text_analysis_lab.core.failure_cleanup import mark_operation_failed_best_effort
 from text_analysis_lab.core.ids import next_id
 from text_analysis_lab.core.operator import (
     BaseOperator,
@@ -243,18 +244,13 @@ def attach_metadata(
         project.storage.touch_manifest()
         return project.get_artifact(artifact_id)
     except Exception as exc:
-        try:
-            writer.mark_failed(exc)
-        except Exception:
-            pass
-        try:
-            project.catalog.mark_artifact_failed(artifact_id)
-        except Exception:
-            pass
-        try:
-            project.catalog.mark_operation_failed(operation_id, exc)
-        except Exception:
-            pass
+        mark_operation_failed_best_effort(
+            project,
+            writer=writer,
+            artifact_id=artifact_id,
+            operation_id=operation_id,
+            error=exc,
+        )
         descriptor["status"] = "failed"
         descriptor["error"] = f"{exc.__class__.__name__}: {exc}"
         (op_dir / "operation.json").write_text(

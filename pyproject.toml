@@ -103,4 +103,4 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.setuptools.package-data]
-"text_analysis_lab._linguistics" = ["resources/*.json", "NOTICE.md"]
+"text_analysis_lab.linguistics" = ["resources/*.json"]

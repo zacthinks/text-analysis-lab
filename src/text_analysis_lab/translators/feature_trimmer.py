@@ -376,9 +376,7 @@ class FeatureTrimmer(BaseTranslator):
 
 def _validate_df_threshold(value: float, *, name: str) -> int | float:
     if isinstance(value, bool):
-        raise ValueError(
-            f"{name} must be an integer count or float fraction, not bool."
-        )
+        raise TypeError(f"{name} must be an integer count or float fraction, not bool.")
     if isinstance(value, int):
         if value < 1:
             raise ValueError(f"{name} integer thresholds must be >= 1.")
@@ -390,15 +388,11 @@ def _validate_df_threshold(value: float, *, name: str) -> int | float:
 
 
 def _resolve_min_df(value: float, n_rows: int) -> int:
-    return (
-        int(value) if isinstance(value, int) else int(math.ceil(float(value) * n_rows))
-    )
+    return int(value) if isinstance(value, int) else math.ceil(float(value) * n_rows)
 
 
 def _resolve_max_df(value: float, n_rows: int) -> int:
-    return (
-        int(value) if isinstance(value, int) else int(math.floor(float(value) * n_rows))
-    )
+    return int(value) if isinstance(value, int) else math.floor(float(value) * n_rows)
 
 
 def _fit_feature_mask(

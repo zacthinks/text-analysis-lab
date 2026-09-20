@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, LineageError
+from text_analysis_lab.core.failure_cleanup import mark_operation_failed_best_effort
 from text_analysis_lab.core.ids import next_id
 from text_analysis_lab.core.importers import (
     _duckdb_literal,
@@ -332,18 +333,13 @@ def register_external(
         project.query.clear_cache()
         return project.get_artifact(artifact_id)
     except Exception as exc:
-        try:
-            writer.mark_failed(exc)
-        except Exception:
-            pass
-        try:
-            project.catalog.mark_artifact_failed(artifact_id)
-        except Exception:
-            pass
-        try:
-            project.catalog.mark_operation_failed(operation_id, exc)
-        except Exception:
-            pass
+        mark_operation_failed_best_effort(
+            project,
+            writer=writer,
+            artifact_id=artifact_id,
+            operation_id=operation_id,
+            error=exc,
+        )
         descriptor["status"] = "failed"
         descriptor["registered_batches"] = batches_written
         descriptor["registered_rows"] = rows_written
@@ -618,7 +614,7 @@ def _validate_tabular_namespaces(
             "External table primary_key, data_fields, and metadata_fields must not overlap."
         )
     reserved = sorted(
-        set([*primary_key, *data_fields, *metadata_fields]).intersection(_RESERVED)
+        {*primary_key, *data_fields, *metadata_fields}.intersection(_RESERVED)
     )
     if reserved:
         raise ArtifactError(

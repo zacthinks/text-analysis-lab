@@ -590,14 +590,16 @@ def _design_variance_from_pi_provenance(
         outputs = project.operation_outputs(str(operation_id))
         sources = project.operation_sources(str(operation_id))
         operator = project.get_operator(str(operation["operator_id"]))
-    except Exception as exc:  # Point estimation must not fail solely because variance provenance is absent.
+    except Exception as exc:  # noqa: BLE001 - variance provenance is optional
         return _variance_unavailable(
             f"sampling provenance could not be recovered ({exc})."
         )
 
     try:
         from text_analysis_lab.core.probability_split import ProbabilitySplitTranslator
-    except Exception as exc:  # pragma: no cover - import should always work in an installed TeAL package.
+    except (
+        ImportError
+    ) as exc:  # pragma: no cover - installed TeAL should provide this module
         return _variance_unavailable(
             f"probability_split implementation could not be loaded ({exc})."
         )
@@ -623,7 +625,7 @@ def _design_variance_from_pi_provenance(
     try:
         documents = project.get_artifact(documents_id)
         document_keys_frame = _key_only_frame(documents)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - unavailable variance inputs must not break point estimates
         return _variance_unavailable(
             f"probability_split documents source could not be read ({exc})."
         )
@@ -664,7 +666,7 @@ def _design_variance_from_pi_provenance(
         strata_field = columns[0]
         strata_frame = _frame(strata_artifact, strata_field)
         _validate_unique(strata_frame, primary_key, role="probability_split strata")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - unavailable variance inputs must not break point estimates
         return _variance_unavailable(
             f"probability_split strata source could not be read ({exc})."
         )

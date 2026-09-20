@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pandas as pd
 import pytest
@@ -46,7 +47,7 @@ class FakeArtifact:
 
 
 class FakeCoder:
-    registry: dict[str, FakeCoder] = {}
+    registry: ClassVar[dict[str, FakeCoder]] = {}
 
     def __init__(self, path: Path, data: pd.DataFrame) -> None:
         self.path = path

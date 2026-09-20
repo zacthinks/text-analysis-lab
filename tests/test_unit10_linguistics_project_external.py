@@ -82,14 +82,14 @@ def test_unit10_translators_write_teal_native_lineage(
     import text_analysis_lab.translators.coreference_resolver as coref_module
     import text_analysis_lab.translators.semantic_role_labeler as srl_module
     import text_analysis_lab.translators.word_sense_disambiguator as wsd_module
-    from text_analysis_lab._linguistics.coreference.runtime import (
+    from text_analysis_lab.linguistics.coreference.runtime import (
         CorefBatchPrediction,
         CorefMention,
         CorefPrediction,
     )
-    from text_analysis_lab._linguistics.srl.runtime import SrlTokenPrediction
-    from text_analysis_lab._linguistics.srl.structures import BioSpan
-    from text_analysis_lab._linguistics.wsd.types import GlossPayload, SenseCandidate
+    from text_analysis_lab.linguistics.srl.runtime import SrlTokenPrediction
+    from text_analysis_lab.linguistics.srl.structures import BioSpan
+    from text_analysis_lab.linguistics.wsd.types import GlossPayload, SenseCandidate
 
     class FakeCorefRuntime:
         def document_token_counts(self, texts):

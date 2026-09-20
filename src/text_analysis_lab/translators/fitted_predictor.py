@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -404,8 +405,7 @@ def _json_scalar(value: Any) -> Any:
 def _class_equal(left: Any, right: Any) -> bool:
     if isinstance(left, np.generic):
         left = left.item()
-    try:
+    with suppress(Exception):
         result = left == right
         return bool(result)
-    except Exception:
-        return False
+    return False

@@ -484,5 +484,5 @@ def _validate_random_state(value: int | None) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError("random_state must be an integer or None.")
+        raise TypeError("random_state must be an integer or None.")
     return int(value)

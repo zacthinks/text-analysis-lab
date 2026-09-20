@@ -298,11 +298,8 @@ class SpacyTranslator(BaseTranslator):
                 token_data=token_data,
             )
 
-        try:
-            next(doc_iterator)
-        except StopIteration:
-            pass
-        else:
+        sentinel = object()
+        if next(doc_iterator, sentinel) is not sentinel:
             raise ArtifactError(
                 "spaCy Language.pipe returned more Docs than source texts."
             )

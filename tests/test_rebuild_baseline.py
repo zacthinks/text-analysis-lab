@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -480,7 +481,7 @@ def test_incomplete_artifact_views_are_refreshed_and_not_cached(tmp_path: Path) 
     class DummyArtifact:
         artifact_id = "art_000001"
         status = "incomplete"
-        primary_key = ["unit_id"]
+        primary_key: ClassVar[list[str]] = ["unit_id"]
         data_artifact = None
 
         def __init__(self) -> None:
@@ -664,7 +665,7 @@ def test_completed_status_transition_refreshes_stale_descriptor_before_caching(
     class DummyArtifact:
         artifact_id = "art_000001"
         status = "complete"
-        primary_key = ["unit_id"]
+        primary_key: ClassVar[list[str]] = ["unit_id"]
         data_artifact = None
 
         def __init__(self) -> None:

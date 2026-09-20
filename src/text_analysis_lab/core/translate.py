@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, get_args
 
 from text_analysis_lab.core.errors import OperatorError, OperatorNotFoundError
+from text_analysis_lab.core.failure_cleanup import attempt_failure_cleanup
 from text_analysis_lab.core.idempotence import (
     AliasPlan,
     AliasSpec,
@@ -788,9 +789,12 @@ def _validate_column_select(label: str, namespace: str, value: Any) -> None:
     if isinstance(value, str):
         if value:
             return
-    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-        if all(isinstance(column, str) and column for column in value):
-            return
+    elif (
+        isinstance(value, Sequence)
+        and not isinstance(value, (bytes, bytearray))
+        and all(isinstance(column, str) and column for column in value)
+    ):
+        return
     raise OperatorError(
         f"Input source {label!r} {namespace} columns must be a boolean, "
         "a non-empty string, or a sequence of non-empty strings."
@@ -1162,16 +1166,31 @@ def _prepare_runtime(
             )
     except Exception as exc:
         for label, writer in writers.items():
-            try:
-                writer.mark_failed(exc)
-            finally:
-                try:
-                    project.catalog.mark_artifact_failed(output_ids[label])
-                except Exception:
-                    pass
-        project.catalog.mark_operation_failed(operation_id, exc)
+            attempt_failure_cleanup(
+                lambda writer=writer, exc=exc: writer.mark_failed(exc),
+                primary_error=exc,
+                label=f"writer {label!r} failure marking",
+            )
+            attempt_failure_cleanup(
+                lambda label=label: project.catalog.mark_artifact_failed(
+                    output_ids[label]
+                ),
+                primary_error=exc,
+                label=f"artifact {output_ids[label]!r} failure marking",
+            )
+        attempt_failure_cleanup(
+            lambda exc=exc: project.catalog.mark_operation_failed(operation_id, exc),
+            primary_error=exc,
+            label=f"operation {operation_id!r} failure marking",
+        )
         if prepared_operator.snapshot_pending:
-            project.catalog.mark_operator_snapshot_failed(prepared_operator.operator_id)
+            attempt_failure_cleanup(
+                lambda: project.catalog.mark_operator_snapshot_failed(
+                    prepared_operator.operator_id
+                ),
+                primary_error=exc,
+                label=f"operator {prepared_operator.operator_id!r} snapshot failure marking",
+            )
         raise
 
     return _Runtime(
@@ -1824,7 +1843,7 @@ def _replace_directory_with_staging(
     except Exception:
         try:
             _remove_checkpoint_tree(staging)
-        except Exception:
+        except OSError:
             shutil.rmtree(staging, ignore_errors=True)
         raise
 
@@ -1838,7 +1857,7 @@ def _replace_directory_with_staging(
         # uncommitted staging generation can be discarded safely.
         try:
             _remove_checkpoint_tree(staging)
-        except Exception:
+        except OSError:
             shutil.rmtree(staging, ignore_errors=True)
         raise
 
@@ -1848,7 +1867,7 @@ def _replace_directory_with_staging(
         if previous.exists() and not target.exists():
             try:
                 _rename_checkpoint_path(previous, target)
-            except Exception as restore_exc:
+            except OSError as restore_exc:
                 if hasattr(exc, "add_note"):
                     exc.add_note(
                         "TeAL could not restore the prior checkpoint after the new "
@@ -1858,7 +1877,7 @@ def _replace_directory_with_staging(
         if staging.exists():
             try:
                 _remove_checkpoint_tree(staging)
-            except Exception as cleanup_exc:
+            except OSError as cleanup_exc:
                 if hasattr(exc, "add_note"):
                     exc.add_note(
                         f"TeAL could not remove failed checkpoint staging {staging}: "

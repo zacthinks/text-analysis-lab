@@ -255,7 +255,7 @@ class PdfTextExtractor(BaseTranslator):
                 _PAGE_COUNT_FIELD: page_count,
                 _PAGES_EXTRACTED_FIELD: pages_extracted,
             }
-        except Exception as exc:  # row-aligned failure is part of the contract
+        except Exception as exc:  # noqa: BLE001 - row-aligned failure is part of the contract
             return _failed_row(
                 text_field=self.text_field,
                 error=f"{exc.__class__.__name__}: {exc}",
@@ -379,7 +379,7 @@ def _normalize_margins(margins: Mapping[str, float] | None) -> dict[str, float]:
         )
     for name, raw_value in margins.items():
         if isinstance(raw_value, bool):
-            raise ValueError(f"margins[{name!r}] must be a number in [0, 1).")
+            raise TypeError(f"margins[{name!r}] must be a number in [0, 1).")
         try:
             value = float(raw_value)
         except (TypeError, ValueError) as exc:

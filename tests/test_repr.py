@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import ClassVar
+
 import text_analysis_lab as teal
 from text_analysis_lab.core.artifact_base import BaseArtifact
 from text_analysis_lab.core.types import ArtifactType
@@ -17,7 +19,7 @@ class _DisplayArtifact(BaseArtifact):
     status = property(lambda self: "complete")
     primary_key = property(lambda self: ["row_id"])
     n_rows = property(lambda self: 9560)
-    descriptor = {
+    descriptor: ClassVar[dict[str, object]] = {
         "lineage": {
             "lineage_mode": "preserved_key",
             "basis_artifact_ids": ["art_000122"],
