@@ -40,7 +40,7 @@ class ArtifactSummary:
         return pd.DataFrame([self.to_dict()])
 
 
-def summarize(artifact: "BaseArtifact") -> ArtifactSummary:
+def summarize(artifact: BaseArtifact) -> ArtifactSummary:
     """Return a lightweight in-memory structural summary of ``artifact``."""
     lineage = artifact.descriptor.get("lineage", {})
     components = artifact.descriptor.get("components", {})

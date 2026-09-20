@@ -26,7 +26,7 @@ class UserCachePaths:
     wordnet: Path
     wordnet_mwe_indices: Path
 
-    def ensure(self) -> "UserCachePaths":
+    def ensure(self) -> UserCachePaths:
         for path in (
             self.root,
             self.models,
@@ -64,7 +64,11 @@ def default_user_cache_root() -> Path:
 
     if os.name == "nt":
         local_app_data = os.environ.get("LOCALAPPDATA")
-        base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+        base = (
+            Path(local_app_data)
+            if local_app_data
+            else Path.home() / "AppData" / "Local"
+        )
         return base / "TextAnalysisLab" / "Cache"
 
     if sys.platform == "darwin":
@@ -75,13 +79,13 @@ def default_user_cache_root() -> Path:
     return base / "text-analysis-lab"
 
 
-def user_cache_paths(root: str | Path | None = None, *, create: bool = True) -> UserCachePaths:
+def user_cache_paths(
+    root: str | Path | None = None, *, create: bool = True
+) -> UserCachePaths:
     """Return reusable cache paths, optionally rooted at an explicit directory."""
 
     cache_root = (
-        default_user_cache_root()
-        if root is None
-        else Path(root).expanduser().resolve()
+        default_user_cache_root() if root is None else Path(root).expanduser().resolve()
     )
     paths = UserCachePaths(
         root=cache_root,

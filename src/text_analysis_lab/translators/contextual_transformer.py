@@ -14,8 +14,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -98,11 +98,15 @@ class ContextualTransformer(BaseTranslator):
     ) -> None:
         super().__init__(operator_id=operator_id)
         if not isinstance(model, str) or not model.strip():
-            raise ValueError("model must be a non-empty Hugging Face model id or local path.")
+            raise ValueError(
+                "model must be a non-empty Hugging Face model id or local path."
+            )
         if not isinstance(text_field, str) or not text_field:
             raise ValueError("text_field must be a non-empty string.")
         if not isinstance(token_key, str) or not token_key or token_key.startswith("_"):
-            raise ValueError("token_key must be a non-empty non-structural column name.")
+            raise ValueError(
+                "token_key must be a non-empty non-structural column name."
+            )
         policy = str(truncation).lower()
         if policy not in {"error", "truncate"}:
             raise ValueError("truncation must be either 'error' or 'truncate'.")
@@ -113,7 +117,9 @@ class ContextualTransformer(BaseTranslator):
         self.text_field = text_field
         self.token_key = token_key
         self.revision = None if revision is None else str(revision)
-        self.resolved_revision = None if resolved_revision is None else str(resolved_revision)
+        self.resolved_revision = (
+            None if resolved_revision is None else str(resolved_revision)
+        )
         self.truncation = cast(TruncationPolicy, policy)
         self.max_length = None if max_length is None else int(max_length)
         self.save_model = bool(save_model)
@@ -137,7 +143,7 @@ class ContextualTransformer(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> Mapping[str, OutputSpec]:
         _ = request
@@ -163,7 +169,7 @@ class ContextualTransformer(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -183,14 +189,16 @@ class ContextualTransformer(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
         _ = mode
         source = single_source(sources, translator_name="ContextualTransformer")
         if source.artifact_type.value != "table":
-            raise OperatorError("ContextualTransformer requires a table artifact source.")
+            raise OperatorError(
+                "ContextualTransformer requires a table artifact source."
+            )
         return SourceRequest(
             artifact_type="table",
             mode="batches",
@@ -213,9 +221,15 @@ class ContextualTransformer(BaseTranslator):
         packet = single_input(inputs, translator_name="ContextualTransformer")
         frame = require_frame(packet.data, translator_name="ContextualTransformer")
         key_columns = [str(name) for name in packet.primary_key]
-        missing = [name for name in [*key_columns, self.text_field] if name not in frame.columns]
+        missing = [
+            name
+            for name in [*key_columns, self.text_field]
+            if name not in frame.columns
+        ]
         if missing:
-            raise ArtifactError(f"ContextualTransformer source batch is missing columns {missing}.")
+            raise ArtifactError(
+                f"ContextualTransformer source batch is missing columns {missing}."
+            )
 
         device = str(request.params.get("device", "cpu"))
         model_batch_size = int(request.params.get("model_batch_size", 16))
@@ -295,9 +309,13 @@ class ContextualTransformer(BaseTranslator):
                     )
                 embedding_blocks.append(row["embeddings"])
 
-        token_keys = pd.DataFrame(token_key_rows, columns=[*key_columns, self.token_key])
+        token_keys = pd.DataFrame(
+            token_key_rows, columns=[*key_columns, self.token_key]
+        )
         token_data = pd.DataFrame(token_rows, columns=list(TOKEN_COLUMNS))
-        token_metadata = pd.DataFrame(token_metadata_rows, columns=list(TOKEN_METADATA_COLUMNS))
+        token_metadata = pd.DataFrame(
+            token_metadata_rows, columns=list(TOKEN_METADATA_COLUMNS)
+        )
         if not token_data.empty:
             token_data["input_id"] = token_data["input_id"].astype("int64")
             token_data["char_start"] = token_data["char_start"].astype("Int64")
@@ -305,7 +323,9 @@ class ContextualTransformer(BaseTranslator):
             token_data["is_special"] = token_data["is_special"].astype(bool)
             token_data["token_type_id"] = token_data["token_type_id"].astype("Int64")
         if embedding_blocks:
-            values = np.concatenate(embedding_blocks, axis=0).astype(np.float32, copy=False)
+            values = np.concatenate(embedding_blocks, axis=0).astype(
+                np.float32, copy=False
+            )
         else:  # pragma: no cover - standard tokenizers emit at least special tokens
             values = np.empty((0, hidden_size(model)), dtype=np.float32)
         if len(values) != len(token_keys):
@@ -357,7 +377,9 @@ class ContextualTransformer(BaseTranslator):
         )
         input_ids = encoded.get("input_ids")
         if input_ids is None:
-            raise TransformerResourceError("Tokenizer output did not include input_ids.")
+            raise TransformerResourceError(
+                "Tokenizer output did not include input_ids."
+            )
         attention_mask = encoded.get("attention_mask")
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
@@ -405,7 +427,9 @@ class ContextualTransformer(BaseTranslator):
                     ids, already_has_special_tokens=True
                 )
             else:
-                row_special = special_tokens_mask[index, :length].detach().cpu().tolist()
+                row_special = (
+                    special_tokens_mask[index, :length].detach().cpu().tolist()
+                )
             row_type_ids = (
                 None
                 if token_type_ids is None
@@ -461,7 +485,7 @@ class ContextualTransformer(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "ContextualTransformer":
+    def from_json_state(cls, state: Mapping[str, Any]) -> ContextualTransformer:
         return cls(
             model=str(state.get("model", "")),
             text_field=str(state.get("text_field", "text")),
@@ -487,17 +511,24 @@ class ContextualTransformer(BaseTranslator):
         except TypeError:  # pragma: no cover
             model.save_pretrained(model_dir)
         tokenizer.save_pretrained(model_dir)
-        return {"model_dir": model_dir.name, "resolved_revision": self.resolved_revision}
+        return {
+            "model_dir": model_dir.name,
+            "resolved_revision": self.resolved_revision,
+        }
 
     def load_assets(self, assets_dir: Path, manifest: Mapping[str, Any]) -> None:
         if not manifest:
             return
         model_dir = manifest.get("model_dir")
         if not isinstance(model_dir, str) or not model_dir:
-            raise OperatorError("ContextualTransformer asset manifest is missing model_dir.")
+            raise OperatorError(
+                "ContextualTransformer asset manifest is missing model_dir."
+            )
         path = assets_dir / model_dir
         if not path.exists():
-            raise OperatorError(f"Saved ContextualTransformer model directory is missing: {path}.")
+            raise OperatorError(
+                f"Saved ContextualTransformer model directory is missing: {path}."
+            )
         self._local_model_dir = path
         if manifest.get("resolved_revision") is not None:
             self.resolved_revision = str(manifest["resolved_revision"])
@@ -529,14 +560,22 @@ class ContextualTransformer(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "ContextualTransformer":
+    ) -> ContextualTransformer:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         if not isinstance(state, Mapping):
-            raise OperatorError("ContextualTransformer intermediate state must be a mapping.")
+            raise OperatorError(
+                "ContextualTransformer intermediate state must be a mapping."
+            )
         obj = cls.from_json_state(state)
         local_model_dir = state.get("local_model_dir")
-        if isinstance(local_model_dir, str) and local_model_dir and Path(local_model_dir).exists():
+        if (
+            isinstance(local_model_dir, str)
+            and local_model_dir
+            and Path(local_model_dir).exists()
+        ):
             obj._local_model_dir = Path(local_model_dir)
         obj.operator_id = str(operator_id)
         return obj
@@ -563,7 +602,9 @@ class ContextualTransformer(BaseTranslator):
                 "trust_remote_code": self.trust_remote_code,
             }
             try:
-                tokenizer = AutoTokenizer.from_pretrained(source, use_fast=True, **common)
+                tokenizer = AutoTokenizer.from_pretrained(
+                    source, use_fast=True, **common
+                )
                 model = AutoModel.from_pretrained(source, **common)
             except Exception as exc:  # pragma: no cover
                 raise TransformerResourceError(

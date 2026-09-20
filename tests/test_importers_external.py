@@ -26,7 +26,9 @@ def _query_full(artifact):
     )
 
 
-def test_read_csv_assigns_teal_keys_selects_fields_and_supports_translation(tmp_path: Path) -> None:
+def test_read_csv_assigns_teal_keys_selects_fields_and_supports_translation(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "corpus.csv"
     pd.DataFrame(
         {
@@ -60,26 +62,38 @@ def test_read_csv_assigns_teal_keys_selects_fields_and_supports_translation(tmp_
         assert set(artifact.components) == {"keys", "data", "metadata"}
         assert len(list((artifact.artifact_dir / "keys").glob("part-*.parquet"))) == 3
         assert len(list((artifact.artifact_dir / "data").glob("part-*.parquet"))) == 3
-        assert len(list((artifact.artifact_dir / "metadata").glob("part-*.parquet"))) == 3
+        assert (
+            len(list((artifact.artifact_dir / "metadata").glob("part-*.parquet"))) == 3
+        )
 
         frame = _query_full(artifact)
         assert frame["_position"].tolist() == [0, 1, 2, 3, 4]
         assert frame["row_id"].astype(int).tolist() == [0, 1, 2, 3, 4]
         assert frame["doc_id"].astype(int).tolist() == [10, 11, 12, 13, 14]
-        assert frame["text"].tolist() == ["A-one", "B-two", "C-three", "D-four", "E-five"]
+        assert frame["text"].tolist() == [
+            "A-one",
+            "B-two",
+            "C-three",
+            "D-four",
+            "E-five",
+        ]
         assert frame["group"].tolist() == ["a", "a", "b", "b", "b"]
         assert "score" not in frame.columns
         assert artifact.query_columns(metadata_mode="local")["data"] == ["text"]
-        assert artifact.query_columns(metadata_mode="local")["metadata"] == ["doc_id", "group"]
+        assert artifact.query_columns(metadata_mode="local")["metadata"] == [
+            "doc_id",
+            "group",
+        ]
 
         operation = project.operation_for_artifact(artifact)
         assert operation is not None
         assert operation["operation_type"] == "import"
         assert operation["status"] == "complete"
         operation_payload = json.loads(
-            (project.storage.operation_dir(operation["operation_id"]) / "operation.json").read_text(
-                encoding="utf-8"
-            )
+            (
+                project.storage.operation_dir(operation["operation_id"])
+                / "operation.json"
+            ).read_text(encoding="utf-8")
         )
         request = operation_payload["request"]
         assert operation_payload["import_kind"] == "read_csv"
@@ -131,7 +145,9 @@ def test_read_csv_assigns_teal_keys_selects_fields_and_supports_translation(tmp_
         reopened.close()
 
 
-def test_read_jsonl_supports_multiple_text_fields_and_discards_unselected_fields(tmp_path: Path) -> None:
+def test_read_jsonl_supports_multiple_text_fields_and_discards_unselected_fields(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "records.jsonl"
     records = [
         {"title": "one", "text": "first", "site": "x", "year": 2020, "unused": 100},
@@ -160,13 +176,21 @@ def test_read_jsonl_supports_multiple_text_fields_and_discards_unselected_fields
         assert frame["site"].tolist() == ["x", "y", "x", "z"]
         assert frame["year"].astype(int).tolist() == [2020, 2021, 2022, 2023]
         assert "unused" not in frame.columns
-        assert artifact.query_columns(metadata_mode="local")["data"] == ["title", "text"]
-        assert artifact.query_columns(metadata_mode="local")["metadata"] == ["site", "year"]
+        assert artifact.query_columns(metadata_mode="local")["data"] == [
+            "title",
+            "text",
+        ]
+        assert artifact.query_columns(metadata_mode="local")["metadata"] == [
+            "site",
+            "year",
+        ]
     finally:
         project.close()
 
 
-def test_read_parquet_always_rekeys_and_can_retain_source_ids_as_metadata(tmp_path: Path) -> None:
+def test_read_parquet_always_rekeys_and_can_retain_source_ids_as_metadata(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "paragraphs.parquet"
     pd.DataFrame(
         {
@@ -189,7 +213,9 @@ def test_read_parquet_always_rekeys_and_can_retain_source_ids_as_metadata(tmp_pa
         frame = _query_full(artifact)
         assert artifact.primary_key == ["row_id"]
         assert frame["row_id"].astype(int).tolist() == [0, 1, 2, 3]
-        assert list(zip(frame["doc_id"].astype(int), frame["paragraph_id"].astype(int))) == [
+        assert list(
+            zip(frame["doc_id"].astype(int), frame["paragraph_id"].astype(int))
+        ) == [
             (1, 0),
             (1, 1),
             (2, 0),
@@ -202,7 +228,9 @@ def test_read_parquet_always_rekeys_and_can_retain_source_ids_as_metadata(tmp_pa
         project.close()
 
 
-def test_duplicate_source_identifiers_do_not_affect_generated_teal_keys(tmp_path: Path) -> None:
+def test_duplicate_source_identifiers_do_not_affect_generated_teal_keys(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "duplicates.csv"
     pd.DataFrame(
         {
@@ -222,12 +250,16 @@ def test_duplicate_source_identifiers_do_not_affect_generated_teal_keys(tmp_path
         frame = _query_full(artifact)
         assert frame["row_id"].astype(int).tolist() == [0, 1, 2]
         assert frame["source_id"].astype(int).tolist() == [1, 2, 1]
-        assert project.list_operations(operation_type="import")[0]["status"] == "complete"
+        assert (
+            project.list_operations(operation_type="import")[0]["status"] == "complete"
+        )
     finally:
         project.close()
 
 
-def test_tabular_import_preflight_validation_does_not_create_provenance(tmp_path: Path) -> None:
+def test_tabular_import_preflight_validation_does_not_create_provenance(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "corpus.csv"
     pd.DataFrame({"id": [1], "text": ["x"]}).to_csv(source, index=False)
     project = teal.Project.create(tmp_path / "project", name="preflight")
@@ -244,7 +276,9 @@ def test_tabular_import_preflight_validation_does_not_create_provenance(tmp_path
         project.close()
 
 
-def test_folder_inventory_is_path_only_deterministic_and_reusable(tmp_path: Path) -> None:
+def test_folder_inventory_is_path_only_deterministic_and_reusable(
+    tmp_path: Path,
+) -> None:
     corpus = tmp_path / "corpus"
     (corpus / "nested").mkdir(parents=True)
     (corpus / "b.txt").write_text("B body", encoding="utf-8")
@@ -325,7 +359,9 @@ def test_folder_inventory_no_matches_is_preflight_error(tmp_path: Path) -> None:
         project.close()
 
 
-def test_read_csv_folder_combines_files_in_sorted_order_and_preserves_provenance(tmp_path: Path) -> None:
+def test_read_csv_folder_combines_files_in_sorted_order_and_preserves_provenance(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "aera_2026"
     nested = root / "nested"
     nested.mkdir(parents=True)
@@ -379,18 +415,24 @@ def test_read_csv_folder_combines_files_in_sorted_order_and_preserves_provenance
         operation = project.operation_for_artifact(artifact)
         assert operation is not None
         payload = json.loads(
-            (project.storage.operation_dir(operation["operation_id"]) / "operation.json").read_text(
-                encoding="utf-8"
-            )
+            (
+                project.storage.operation_dir(operation["operation_id"])
+                / "operation.json"
+            ).read_text(encoding="utf-8")
         )
         assert payload["import_kind"] == "read_csv_folder"
-        assert payload["request"]["matched_files"] == ["B_Type.csv", "nested/A_Type.csv"]
+        assert payload["request"]["matched_files"] == [
+            "B_Type.csv",
+            "nested/A_Type.csv",
+        ]
         assert payload["external_source"]["matched_file_count"] == 2
     finally:
         project.close()
 
 
-def _write_excel_workbook(path: Path, sheets: list[tuple[str, list[list[object]], bool]]) -> None:
+def _write_excel_workbook(
+    path: Path, sheets: list[tuple[str, list[list[object]], bool]]
+) -> None:
     openpyxl = pytest.importorskip("openpyxl")
     workbook = openpyxl.Workbook()
     workbook.remove(workbook.active)
@@ -458,9 +500,10 @@ def test_read_excel_multiple_sheets_by_name_and_index_preserves_sheet_provenance
 
         operation = project.operation_for_artifact(artifact)
         payload = json.loads(
-            (project.storage.operation_dir(operation["operation_id"]) / "operation.json").read_text(
-                encoding="utf-8"
-            )
+            (
+                project.storage.operation_dir(operation["operation_id"])
+                / "operation.json"
+            ).read_text(encoding="utf-8")
         )
         assert payload["import_kind"] == "read_excel"
         assert payload["request"]["sheets"] == ["Conversation B", 0]
@@ -479,7 +522,9 @@ def test_read_excel_multiple_sheets_by_name_and_index_preserves_sheet_provenance
         reopened.close()
 
 
-def test_read_excel_all_sheets_includes_hidden_and_missing_fields_policy(tmp_path: Path) -> None:
+def test_read_excel_all_sheets_includes_hidden_and_missing_fields_policy(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "student.xlsx"
     _write_excel_workbook(
         source,
@@ -535,7 +580,9 @@ def test_read_excel_all_sheets_includes_hidden_and_missing_fields_policy(tmp_pat
         project.close()
 
 
-def test_read_excel_folder_orders_files_then_sheets_and_can_fill_default(tmp_path: Path) -> None:
+def test_read_excel_folder_orders_files_then_sheets_and_can_fill_default(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "workbooks"
     nested = root / "nested"
     nested.mkdir(parents=True)
@@ -580,9 +627,10 @@ def test_read_excel_folder_orders_files_then_sheets_and_can_fill_default(tmp_pat
 
         operation = project.operation_for_artifact(artifact)
         payload = json.loads(
-            (project.storage.operation_dir(operation["operation_id"]) / "operation.json").read_text(
-                encoding="utf-8"
-            )
+            (
+                project.storage.operation_dir(operation["operation_id"])
+                / "operation.json"
+            ).read_text(encoding="utf-8")
         )
         assert payload["import_kind"] == "read_excel_folder"
         assert payload["request"]["matched_files"] == ["B.xlsx", "nested/A.xlsx"]

@@ -10,7 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from text_analysis_lab._linguistics.hashing import canonical_json, fingerprint
-from text_analysis_lab._linguistics.wsd.types import CacheStats, GlossPayload, GlossRenderConfig, SenseCandidate
+from text_analysis_lab._linguistics.wsd.types import (
+    CacheStats,
+    GlossPayload,
+    GlossRenderConfig,
+    SenseCandidate,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +25,9 @@ class CachedGlossText:
     hit: bool
 
 
-def rendered_gloss_hash(payload: GlossPayload, render: GlossRenderConfig) -> tuple[str, str]:
+def rendered_gloss_hash(
+    payload: GlossPayload, render: GlossRenderConfig
+) -> tuple[str, str]:
     text = render.render(payload)
     return text, fingerprint({"language": payload.language, "text": text})
 

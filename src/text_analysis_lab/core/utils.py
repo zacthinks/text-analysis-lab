@@ -1,7 +1,7 @@
-from typing import Any
 from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from typing import Any
 
 from text_analysis_lab.core.errors import DuckDBRegexValidationError
 

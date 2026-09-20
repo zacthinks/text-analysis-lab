@@ -96,7 +96,7 @@ class HistogramResult:
 
 
 def histogram(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     field: str,
     by: str | None = None,
@@ -150,9 +150,13 @@ def histogram(
     else:
         edges = np.asarray(list(bins), dtype="float64")
         if edges.ndim != 1 or len(edges) < 2 or not np.all(np.isfinite(edges)):
-            raise ValueError("Explicit histogram bins must be finite one-dimensional edges.")
+            raise ValueError(
+                "Explicit histogram bins must be finite one-dimensional edges."
+            )
         if not np.all(np.diff(edges) > 0):
-            raise ValueError("Explicit histogram bin edges must be strictly increasing.")
+            raise ValueError(
+                "Explicit histogram bin edges must be strictly increasing."
+            )
 
     counts, observed, missing, underflow, overflow = _count_bins(
         artifact,
@@ -190,7 +194,7 @@ def histogram(
 
 
 def _iter_values(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     value_field: ResolvedField,
     group_field: ResolvedField | None,
@@ -215,7 +219,7 @@ def _iter_values(
 
 
 def _numeric_range(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     value_field: ResolvedField,
     group_field: ResolvedField | None,
@@ -236,7 +240,9 @@ def _numeric_range(
         limit=limit,
         batch_size=batch_size,
     ):
-        numeric = _numeric_values(batch[value_field.output_name], field=value_field.requested_name)
+        numeric = _numeric_values(
+            batch[value_field.output_name], field=value_field.requested_name
+        )
         valid = np.isfinite(numeric)
         if group_field is not None and dropna:
             valid &= ~batch[group_field.output_name].isna().to_numpy()
@@ -251,7 +257,7 @@ def _numeric_range(
 
 
 def _count_bins(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     value_field: ResolvedField,
     group_field: ResolvedField | None,
@@ -275,7 +281,9 @@ def _count_bins(
         limit=limit,
         batch_size=batch_size,
     ):
-        numeric = _numeric_values(batch[value_field.output_name], field=value_field.requested_name)
+        numeric = _numeric_values(
+            batch[value_field.output_name], field=value_field.requested_name
+        )
         finite = np.isfinite(numeric)
         missing += int((~finite).sum())
         groups = (
@@ -310,7 +318,9 @@ def _numeric_values(series: pd.Series, *, field: str) -> np.ndarray:
     invalid = series.notna() & numeric.isna()
     if invalid.any():
         value = series.loc[invalid].iloc[0]
-        raise ValueError(f"Histogram field {field!r} contains non-numeric value {value!r}.")
+        raise ValueError(
+            f"Histogram field {field!r} contains non-numeric value {value!r}."
+        )
     return numeric.to_numpy(dtype="float64", na_value=np.nan)
 
 

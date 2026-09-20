@@ -10,10 +10,11 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import BinaryIO, Mapping
+from typing import BinaryIO
 from urllib.request import Request, urlopen
 
 
@@ -137,11 +138,16 @@ def download_file_atomic(
             source_url,
             headers={"User-Agent": "text-analysis-lab-model-downloader/0.3"},
         )
-        with urlopen(request, timeout=timeout) as response, os.fdopen(descriptor, "wb") as output:
+        with (
+            urlopen(request, timeout=timeout) as response,
+            os.fdopen(descriptor, "wb") as output,
+        ):
             response_details = _response_metadata(response)
             expected_length = response_details.get("content_length_header")
             total = expected_length if isinstance(expected_length, int) else None
-            progress = _progress_bar(total=total, description=description, enabled=show_progress)
+            progress = _progress_bar(
+                total=total, description=description, enabled=show_progress
+            )
             try:
                 while True:
                     chunk = response.read(chunk_size)

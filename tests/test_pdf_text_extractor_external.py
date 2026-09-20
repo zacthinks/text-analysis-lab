@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import shutil
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -11,8 +11,11 @@ pytest.importorskip("duckdb")
 pdfplumber = pytest.importorskip("pdfplumber")
 
 import text_analysis_lab as teal
-from text_analysis_lab.translators import PdfTextExtractor, RegexCleaner, RegexReplaceRule
-
+from text_analysis_lab.translators import (
+    PdfTextExtractor,
+    RegexCleaner,
+    RegexReplaceRule,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "pdf_extractor"
 
@@ -29,7 +32,9 @@ def _query_full(artifact):
     )
 
 
-def test_pdf_extractor_folder_inventory_statuses_downstream_and_reopen(tmp_path: Path) -> None:
+def test_pdf_extractor_folder_inventory_statuses_downstream_and_reopen(
+    tmp_path: Path,
+) -> None:
     corpus = tmp_path / "corpus"
     corpus.mkdir()
     for name in ["sample_two_page.pdf", "blank.pdf", "corrupt.pdf"]:
@@ -65,7 +70,10 @@ def test_pdf_extractor_folder_inventory_statuses_downstream_and_reopen(tmp_path:
         assert frame["text"].tolist()[0] == ""
         assert frame["text"].tolist()[1] == ""
         assert pd.isna(frame["extraction_error"].tolist()[0])
-        assert "PDF" in str(frame["extraction_error"].tolist()[1]) or frame["extraction_error"].tolist()[1]
+        assert (
+            "PDF" in str(frame["extraction_error"].tolist()[1])
+            or frame["extraction_error"].tolist()[1]
+        )
 
         sample_text = frame.loc[frame["file_id"].astype(int) == 2, "text"].iloc[0]
         assert "HEADER PAGE 1" in sample_text
@@ -88,9 +96,12 @@ def test_pdf_extractor_folder_inventory_statuses_downstream_and_reopen(tmp_path:
         )["output"]
         cleaned_frame = _query_full(cleaned)
         assert cleaned_frame["file_id"].astype(int).tolist() == [0, 1, 2]
-        assert "CONTENT page one alpha" in cleaned_frame.loc[
-            cleaned_frame["file_id"].astype(int) == 2, "clean_text"
-        ].iloc[0]
+        assert (
+            "CONTENT page one alpha"
+            in cleaned_frame.loc[
+                cleaned_frame["file_id"].astype(int) == 2, "clean_text"
+            ].iloc[0]
+        )
 
         operation = project.operation_for_artifact(extracted)
         assert operation is not None
@@ -106,9 +117,10 @@ def test_pdf_extractor_folder_inventory_statuses_downstream_and_reopen(tmp_path:
         extracted = reopened.get_artifact("art_000002")
         frame = _query_full(extracted)
         assert frame["extraction_status"].tolist() == ["no_text", "failed", "ok"]
-        assert "Body page two beta" in frame.loc[
-            frame["file_id"].astype(int) == 2, "text"
-        ].iloc[0]
+        assert (
+            "Body page two beta"
+            in frame.loc[frame["file_id"].astype(int) == 2, "text"].iloc[0]
+        )
 
         # Reopened frozen extractor remains executable against the same source contract.
         operation = reopened.operation_for_artifact(extracted)

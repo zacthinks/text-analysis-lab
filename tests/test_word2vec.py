@@ -13,7 +13,6 @@ from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.translators import LocalWord2Vec, Word2Vec
 from text_analysis_lab.translators.word2vec import _prepare_sequences
 
-
 PRIMARY_KEY = ("doc_id", "sentence_id", "token_id")
 requires_gensim = pytest.mark.skipif(
     importlib.util.find_spec("gensim") is None,
@@ -43,7 +42,9 @@ def _training_frame() -> pd.DataFrame:
 
 
 def _source(primary_key=PRIMARY_KEY):
-    return SimpleNamespace(artifact_type=ArtifactType.TABLE, primary_key=list(primary_key))
+    return SimpleNamespace(
+        artifact_type=ArtifactType.TABLE, primary_key=list(primary_key)
+    )
 
 
 def _packet(frame: pd.DataFrame, *, primary_key=PRIMARY_KEY) -> InputBatch:
@@ -102,7 +103,9 @@ def test_word2vec_is_one_shot_named_row_matrix_contract() -> None:
         )
 
 
-def test_training_payload_uses_row_names_not_word_metadata(monkeypatch, tmp_path) -> None:
+def test_training_payload_uses_row_names_not_word_metadata(
+    monkeypatch, tmp_path
+) -> None:
     model = _model()
     vectors = np.arange(48, dtype=np.float32).reshape(6, 8)
     monkeypatch.setattr(
@@ -123,12 +126,15 @@ def test_training_payload_uses_row_names_not_word_metadata(monkeypatch, tmp_path
     )
     payload = result.outputs["output"]
     assert payload["keys"].to_dict("list") == {"word_id": list(range(6))}
-    assert payload["metadata"].to_dict("list") == {
-        "count": [3, 3, 3, 3, 2, 2]
-    }
+    assert payload["metadata"].to_dict("list") == {"count": [3, 3, 3, 3, 2, 2]}
     assert payload["data"]["row_name"] == "word"
     assert payload["data"]["row_names"] == [
-        "cat", "dog", "king", "queen", "pet", "royal"
+        "cat",
+        "dog",
+        "king",
+        "queen",
+        "pet",
+        "royal",
     ]
     assert np.array_equal(payload["data"]["values"], vectors)
     assert model.training_loss_ == (10.0, 7.0, 5.0, 3.0)

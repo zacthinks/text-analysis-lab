@@ -12,8 +12,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -96,7 +96,7 @@ class PdfTextExtractor(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -118,7 +118,7 @@ class PdfTextExtractor(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -131,7 +131,7 @@ class PdfTextExtractor(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -146,7 +146,9 @@ class PdfTextExtractor(BaseTranslator):
             _PAGE_COUNT_FIELD,
             _PAGES_EXTRACTED_FIELD,
         }
-        key_collisions = sorted(output_fields.intersection(str(name) for name in source.primary_key))
+        key_collisions = sorted(
+            output_fields.intersection(str(name) for name in source.primary_key)
+        )
         if key_collisions:
             raise OperatorError(
                 "PdfTextExtractor output fields collide with source primary-key fields: "
@@ -174,7 +176,9 @@ class PdfTextExtractor(BaseTranslator):
         frame = _require_frame(packet.data)
         key_columns = [str(name) for name in packet.primary_key]
         missing = [
-            name for name in [*key_columns, self.path_field] if name not in frame.columns
+            name
+            for name in [*key_columns, self.path_field]
+            if name not in frame.columns
         ]
         if missing:
             raise ArtifactError(
@@ -200,9 +204,7 @@ class PdfTextExtractor(BaseTranslator):
             data[_PAGES_EXTRACTED_FIELD] = pd.array(
                 data[_PAGES_EXTRACTED_FIELD], dtype="Int64"
             )
-        return BatchResult(
-            outputs={DEFAULT_OUTPUT_LABEL: {"keys": keys, "data": data}}
-        )
+        return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: {"keys": keys, "data": data}})
 
     def _extract_row(self, path_value: Any) -> dict[str, Any]:
         if path_value is None or pd.isna(path_value):
@@ -221,7 +223,11 @@ class PdfTextExtractor(BaseTranslator):
             with pdfplumber.open(path) as pdf:
                 page_count = len(pdf.pages)
                 first = 1 if self.start_page is None else self.start_page
-                last = page_count if self.end_page is None else min(self.end_page, page_count)
+                last = (
+                    page_count
+                    if self.end_page is None
+                    else min(self.end_page, page_count)
+                )
                 if first <= page_count and first <= last:
                     for page_number in range(first, last + 1):
                         page = pdf.pages[page_number - 1]
@@ -282,7 +288,7 @@ class PdfTextExtractor(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "PdfTextExtractor":
+    ) -> PdfTextExtractor:
         _ = mode, request
         return self.from_json_state(self.to_json_state())
 
@@ -299,7 +305,7 @@ class PdfTextExtractor(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "PdfTextExtractor":
+    def from_json_state(cls, state: Mapping[str, Any]) -> PdfTextExtractor:
         backend = str(state.get("backend", "pdfplumber"))
         if backend != "pdfplumber":
             raise OperatorError(
@@ -342,9 +348,11 @@ class PdfTextExtractor(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "PdfTextExtractor":
+    ) -> PdfTextExtractor:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         obj = cls.from_json_state(cast(Mapping[str, Any], state))
         obj.operator_id = operator_id
         return obj
@@ -375,9 +383,7 @@ def _normalize_margins(margins: Mapping[str, float] | None) -> dict[str, float]:
         try:
             value = float(raw_value)
         except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"margins[{name!r}] must be a number in [0, 1)."
-            ) from exc
+            raise ValueError(f"margins[{name!r}] must be a number in [0, 1).") from exc
         if not 0.0 <= value < 1.0:
             raise ValueError(f"margins[{name!r}] must be in [0, 1).")
         normalized[str(name)] = value
@@ -434,7 +440,7 @@ def _pdfplumber_version() -> str:
         ) from exc
 
 
-def _single_source(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
+def _single_source(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
         raise OperatorError(
             f"PdfTextExtractor requires exactly one source under {DEFAULT_SOURCE_LABEL!r}."

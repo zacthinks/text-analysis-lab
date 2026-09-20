@@ -11,11 +11,11 @@ import argparse
 import importlib
 import inspect
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 
 CorefModelName = Literal["fcoref", "lingmess"]
 
@@ -153,7 +153,9 @@ def _snapshot_download(
 ) -> Path:
     try:
         from huggingface_hub import snapshot_download
-    except ImportError as exc:  # pragma: no cover - dependency is supplied by transformers
+    except (
+        ImportError
+    ) as exc:  # pragma: no cover - dependency is supplied by transformers
         raise RuntimeError(
             "Hugging Face model download support is unavailable. Run `uv sync --all-extras`."
         ) from exc
@@ -179,9 +181,9 @@ def _set_eager_attention(config: Any) -> Any:
     construction step rather than modifying the downloaded model snapshot.
     """
 
-    setattr(config, "_attn_implementation", "eager")
+    config._attn_implementation = "eager"
     if hasattr(config, "_attn_implementation_internal"):
-        setattr(config, "_attn_implementation_internal", "eager")
+        config._attn_implementation_internal = "eager"
     return config
 
 
@@ -229,9 +231,7 @@ def prepare_fastcoref_model(
         else Path(cache_dir)
     )
     effective_cache.mkdir(parents=True, exist_ok=True)
-    materialized_dir = (
-        effective_cache.parent / "materialized" / spec.directory_name
-    )
+    materialized_dir = effective_cache.parent / "materialized" / spec.directory_name
 
     if not force_download and _model_is_present(materialized_dir):
         if show_progress:
@@ -587,7 +587,9 @@ class FastCorefRuntime:
             )
 
         predictions: list[CorefPrediction] = []
-        for document_index, (text, result) in enumerate(zip(documents, raw_results, strict=True)):
+        for document_index, (text, result) in enumerate(
+            zip(documents, raw_results, strict=True)
+        ):
             try:
                 predictions.append(
                     normalize_fastcoref_result(

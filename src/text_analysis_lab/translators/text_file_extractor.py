@@ -12,8 +12,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -97,7 +97,7 @@ class TextFileExtractor(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -119,7 +119,7 @@ class TextFileExtractor(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -132,7 +132,7 @@ class TextFileExtractor(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -147,7 +147,9 @@ class TextFileExtractor(BaseTranslator):
             _PAGE_COUNT_FIELD,
             _PAGES_EXTRACTED_FIELD,
         }
-        key_collisions = sorted(output_fields.intersection(str(name) for name in source.primary_key))
+        key_collisions = sorted(
+            output_fields.intersection(str(name) for name in source.primary_key)
+        )
         if key_collisions:
             raise OperatorError(
                 "TextFileExtractor output fields collide with source primary-key fields: "
@@ -175,7 +177,9 @@ class TextFileExtractor(BaseTranslator):
         frame = _require_frame(packet.data)
         key_columns = [str(name) for name in packet.primary_key]
         missing = [
-            name for name in [*key_columns, self.path_field] if name not in frame.columns
+            name
+            for name in [*key_columns, self.path_field]
+            if name not in frame.columns
         ]
         if missing:
             raise ArtifactError(
@@ -249,7 +253,7 @@ class TextFileExtractor(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "TextFileExtractor":
+    ) -> TextFileExtractor:
         _ = mode, request
         return self.from_json_state(self.to_json_state())
 
@@ -262,7 +266,7 @@ class TextFileExtractor(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "TextFileExtractor":
+    def from_json_state(cls, state: Mapping[str, Any]) -> TextFileExtractor:
         return cls(
             path_field=str(state.get("path_field", "path")),
             text_field=str(state.get("text_field", "text")),
@@ -294,9 +298,11 @@ class TextFileExtractor(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "TextFileExtractor":
+    ) -> TextFileExtractor:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         obj = cls.from_json_state(cast(Mapping[str, Any], state))
         obj.operator_id = operator_id
         return obj
@@ -316,7 +322,7 @@ def _failed_row(*, text_field: str, error: str) -> dict[str, Any]:
     }
 
 
-def _single_source(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
+def _single_source(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
         raise OperatorError(
             f"TextFileExtractor requires exactly one source under {DEFAULT_SOURCE_LABEL!r}."

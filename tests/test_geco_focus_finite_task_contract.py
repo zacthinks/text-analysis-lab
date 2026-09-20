@@ -11,7 +11,6 @@ from geometric_coder import GeometricCoder
 
 from text_analysis_lab.integrations.geco import GeCoManager
 
-
 _FINITE_FOCUS_API = all(
     callable(getattr(GeometricCoder, name, None))
     for name in ("configure_focus", "focus_task", "focus_progress")
@@ -25,7 +24,9 @@ pytestmark = pytest.mark.skipif(
 
 
 class FakeArtifact:
-    def __init__(self, artifact_id: str, frame: pd.DataFrame, *, keys=("row_id",)) -> None:
+    def __init__(
+        self, artifact_id: str, frame: pd.DataFrame, *, keys=("row_id",)
+    ) -> None:
         self.artifact_id = artifact_id
         self.primary_key = list(keys)
         self._frame = frame.reset_index(drop=True).copy()
@@ -56,7 +57,9 @@ class FakeArtifact:
 
 class FakeProject:
     def __init__(self, root: Path, artifacts: dict[str, FakeArtifact]) -> None:
-        self.storage = SimpleNamespace(teal_dir=root / ".teal", touch_manifest=lambda: None)
+        self.storage = SimpleNamespace(
+            teal_dir=root / ".teal", touch_manifest=lambda: None
+        )
         self.storage.teal_dir.mkdir(parents=True, exist_ok=True)
         self._artifacts = artifacts
         self.created_frame = None
@@ -71,7 +74,9 @@ class FakeProject:
         return {"documents": documents, "frame": frame.copy(), **kwargs}
 
 
-def test_teal_focus_bridge_matches_installed_geco_finite_task_contract(tmp_path: Path, monkeypatch) -> None:
+def test_teal_focus_bridge_matches_installed_geco_finite_task_contract(
+    tmp_path: Path, monkeypatch
+) -> None:
     import text_analysis_lab.integrations.geco as bridge
 
     monkeypatch.setattr(bridge, "_load_geometric_coder", lambda: GeometricCoder)

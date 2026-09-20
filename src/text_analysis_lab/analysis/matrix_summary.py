@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from text_analysis_lab.analysis._matrix_utils import as_1d, is_sparse_matrix, require_matrix_artifact
+from text_analysis_lab.analysis._matrix_utils import (
+    as_1d,
+    is_sparse_matrix,
+    require_matrix_artifact,
+)
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -35,7 +39,7 @@ class MatrixSummary:
 
 
 def matrix_summary(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     batch_size: int = 10_000,
 ) -> MatrixSummary:
@@ -90,7 +94,9 @@ def matrix_summary(
         else:
             dense = np.asarray(matrix, dtype=float)
             row_nonzero = np.count_nonzero(dense, axis=1)
-            feature_nonzero += np.count_nonzero(dense, axis=0).astype(np.int64, copy=False)
+            feature_nonzero += np.count_nonzero(dense, axis=0).astype(
+                np.int64, copy=False
+            )
             nonzero_values += int(np.count_nonzero(dense))
             value_sum += float(np.sum(dense, dtype=float))
             l1_norm += float(np.sum(np.abs(dense), dtype=float))

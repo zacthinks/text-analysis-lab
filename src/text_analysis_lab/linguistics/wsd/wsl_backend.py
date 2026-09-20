@@ -131,6 +131,9 @@ def target_as_text_and_char_span(target: WSDTarget) -> tuple[str, tuple[int, int
     """Render stored sentence tokens and recover the target's character span."""
 
     text = " ".join(target.tokens)
-    start = sum(len(token) for token in target.tokens[: target.target_start]) + target.target_start
+    start = (
+        sum(len(token) for token in target.tokens[: target.target_start])
+        + target.target_start
+    )
     target_text = " ".join(target.tokens[target.target_start : target.target_end])
     return text, (start, start + len(target_text))

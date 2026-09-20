@@ -120,7 +120,9 @@ def test_real_pyarrow_duckdb_query_and_arrow_streaming(tmp_path: Path) -> None:
             )
         )
         assert [len(batch) for batch in paged] == [6, 6, 6, 5]
-        assert pd.concat(paged, ignore_index=True)["id"].astype(int).tolist() == list(range(23))
+        assert pd.concat(paged, ignore_index=True)["id"].astype(int).tolist() == list(
+            range(23)
+        )
     finally:
         project.close()
 
@@ -138,8 +140,7 @@ def test_real_dask_parallel_subset_preserves_canonical_order(tmp_path: Path) -> 
         source = _seed_real_table(project, rows)
         rule = _write_rule(
             tmp_path / "keep_even.py",
-            "def keep(packet):\n"
-            "    return packet['id'] % 2 == 0\n",
+            "def keep(packet):\n    return packet['id'] % 2 == 0\n",
         )
 
         output = project.subset(
@@ -185,7 +186,9 @@ def test_real_dask_parallel_subset_fail_then_resume(tmp_path: Path) -> None:
     try:
         source = _seed_real_table(project, rows)
 
-        with pytest.raises(RuntimeError, match="intentional external integration failure"):
+        with pytest.raises(
+            RuntimeError, match="intentional external integration failure"
+        ):
             project.subset(
                 source,
                 (rule_path, "keep"),

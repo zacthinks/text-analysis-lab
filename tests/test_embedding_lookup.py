@@ -29,7 +29,9 @@ def _tokens():
 
 
 @pytest.mark.parametrize("sparse_input", [False, True])
-def test_embedding_lookup_maps_named_rows_and_zero_fills_oov(sparse_input: bool) -> None:
+def test_embedding_lookup_maps_named_rows_and_zero_fills_oov(
+    sparse_input: bool,
+) -> None:
     values = np.asarray([[1, 2], [3, 4]], dtype=np.float32)
     matrix = sparse.csr_matrix(values) if sparse_input else values
     op = EmbeddingLookup(field="lemma")

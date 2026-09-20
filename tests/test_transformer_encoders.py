@@ -77,8 +77,16 @@ class FakeTokenizer:
         if return_tensors is None:
             return {"input_ids": id_rows}
         width = max((len(row) for row in id_rows), default=0)
-        padded_ids, masks, padded_offsets, padded_specials, type_ids = [], [], [], [], []
-        for ids, offsets, specials in zip(id_rows, offset_rows, special_rows, strict=True):
+        padded_ids, masks, padded_offsets, padded_specials, type_ids = (
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+        for ids, offsets, specials in zip(
+            id_rows, offset_rows, special_rows, strict=True
+        ):
             pad = width - len(ids)
             padded_ids.append(ids + [0] * pad)
             masks.append([1] * len(ids) + [0] * pad)
@@ -93,7 +101,9 @@ class FakeTokenizer:
         if return_offsets_mapping:
             result["offset_mapping"] = torch.tensor(padded_offsets, dtype=torch.long)
         if return_special_tokens_mask:
-            result["special_tokens_mask"] = torch.tensor(padded_specials, dtype=torch.long)
+            result["special_tokens_mask"] = torch.tensor(
+                padded_specials, dtype=torch.long
+            )
         return result
 
     def convert_ids_to_tokens(self, ids):
@@ -119,7 +129,9 @@ class FakeTokenizer:
 
 class FakeAutoModelInstance:
     def __init__(self):
-        self.config = SimpleNamespace(hidden_size=3, max_position_embeddings=6, _commit_hash=_COMMIT)
+        self.config = SimpleNamespace(
+            hidden_size=3, max_position_embeddings=6, _commit_hash=_COMMIT
+        )
         self.device = "cpu"
 
     def to(self, device):
@@ -197,7 +209,10 @@ def _install_fake_sentence_transformers(monkeypatch, *, fail_cache=False):
         def _encode(self, texts, *, kind, normalize_embeddings=False, **kwargs):
             self.encode_calls.append((kind, dict(kwargs)))
             rows = np.asarray(
-                [[float(len(text)), float(index + 1), 1.0] for index, text in enumerate(texts)],
+                [
+                    [float(len(text)), float(index + 1), 1.0]
+                    for index, text in enumerate(texts)
+                ],
                 dtype=np.float32,
             )
             if normalize_embeddings:
@@ -320,7 +335,9 @@ def test_sentence_transformer_uses_document_recipe_and_counts_prompt(monkeypatch
         "example/sbert", revision=_COMMIT, task="document", normalize=True
     )
     result = encoder.translate_batch(
-        {"source": _packet(["one two", "three"])}, mode="translate", request=_request(model_batch_size=1)
+        {"source": _packet(["one two", "three"])},
+        mode="translate",
+        request=_request(model_batch_size=1),
     )
     payload = result.outputs["output"]
     values = np.asarray(payload["data"]["values"])
@@ -349,7 +366,9 @@ def test_sentence_transformer_context_guard_includes_model_prompt(monkeypatch):
 
 def test_both_transformers_save_operator_local_models(monkeypatch, tmp_path: Path):
     t_calls = _install_fake_transformers(monkeypatch)
-    contextual = ContextualTransformer("example/model", revision=_COMMIT, save_model=True)
+    contextual = ContextualTransformer(
+        "example/model", revision=_COMMIT, save_model=True
+    )
     contextual.download()
     cdir = tmp_path / "contextual"
     contextual.save_to_dir(cdir, operator_id="op_contextual")
@@ -361,7 +380,9 @@ def test_both_transformers_save_operator_local_models(monkeypatch, tmp_path: Pat
     assert t_calls[0][2] is True
 
     s_calls = _install_fake_sentence_transformers(monkeypatch)
-    sentence = SentenceTransformerEncoder("example/sbert", revision=_COMMIT, save_model=True)
+    sentence = SentenceTransformerEncoder(
+        "example/sbert", revision=_COMMIT, save_model=True
+    )
     sentence.download()
     sdir = tmp_path / "sentence"
     sentence.save_to_dir(sdir, operator_id="op_sentence")
@@ -397,7 +418,9 @@ def _seed_documents(project: teal.Project):
     return project.get_artifact("art_transformer_docs")
 
 
-def test_contextual_transformer_real_teal_two_output_round_trip(monkeypatch, tmp_path: Path):
+def test_contextual_transformer_real_teal_two_output_round_trip(
+    monkeypatch, tmp_path: Path
+):
     pytest.importorskip("pyarrow")
     pytest.importorskip("duckdb")
     _install_fake_transformers(monkeypatch)
@@ -416,7 +439,9 @@ def test_contextual_transformer_real_teal_two_output_round_trip(monkeypatch, tmp
         embeddings = outputs["contextual_embeddings"]
         assert tokens.primary_key == ["doc_id", "token_id"]
         assert embeddings.primary_key == ["doc_id", "token_id"]
-        assert embeddings.descriptor["lineage"]["basis_artifact_ids"] == [tokens.artifact_id]
+        assert embeddings.descriptor["lineage"]["basis_artifact_ids"] == [
+            tokens.artifact_id
+        ]
         assert embeddings.get_matrix().shape == (7, 3)
         token_frame = tokens.query(
             key_columns=True,
@@ -437,7 +462,9 @@ def test_contextual_transformer_real_teal_two_output_round_trip(monkeypatch, tmp
         reopened_embeddings = reopened.get_artifact(embedding_id)
         assert reopened_tokens.primary_key == ["doc_id", "token_id"]
         assert reopened_embeddings.get_matrix().shape == (7, 3)
-        assert reopened_embeddings.descriptor["lineage"]["basis_artifact_ids"] == [token_id]
+        assert reopened_embeddings.descriptor["lineage"]["basis_artifact_ids"] == [
+            token_id
+        ]
     finally:
         reopened.close()
 

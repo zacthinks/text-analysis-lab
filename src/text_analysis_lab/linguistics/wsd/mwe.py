@@ -7,9 +7,10 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from text_analysis_lab.linguistics.hashing import fingerprint
 
@@ -35,7 +36,7 @@ class MultiwordLemmaEntry:
         }
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, object]) -> "MultiwordLemmaEntry":
+    def from_dict(cls, payload: Mapping[str, object]) -> MultiwordLemmaEntry:
         return cls(
             word_id=str(payload["word_id"]),
             lemma=str(payload["lemma"]),
@@ -99,14 +100,13 @@ class MultiwordLemmaIndex:
         }
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, object]) -> "MultiwordLemmaIndex":
+    def from_payload(cls, payload: Mapping[str, object]) -> MultiwordLemmaIndex:
         if int(payload.get("schema_version", -1)) != MWE_INDEX_SCHEMA_VERSION:
             raise ValueError("unsupported MWE reverse-index schema version")
         if payload.get("component_normalization") != MWE_COMPONENT_NORMALIZATION:
             raise ValueError("MWE reverse-index normalization policy does not match")
         entries = tuple(
-            MultiwordLemmaEntry.from_dict(item)
-            for item in payload.get("entries", ())
+            MultiwordLemmaEntry.from_dict(item) for item in payload.get("entries", ())
         )
         result = cls(
             lexicon=str(payload["lexicon"]),
@@ -134,9 +134,7 @@ def lexical_components(lemma: str) -> tuple[str, ...]:
     """Split a lexical entry into exact normalized components, not substrings."""
 
     normalized = normalize_lemma(lemma).casefold()
-    return tuple(
-        re.findall(r"[^\W_]+(?:['’][^\W_]+)*", normalized, flags=re.UNICODE)
-    )
+    return tuple(re.findall(r"[^\W_]+(?:['’][^\W_]+)*", normalized, flags=re.UNICODE))
 
 
 def normalize_component(component: str) -> str:
@@ -160,9 +158,7 @@ def build_multiword_lemma_index(wordnet: Any, *, lexicon: str) -> MultiwordLemma
         else:
             enumeration_method = "lemmas_then_words_fallback"
             word_iterator = (
-                word
-                for lemma in lemmas()
-                for word in wordnet.words(lemma)
+                word for lemma in lemmas() for word in wordnet.words(lemma)
             )
 
     seen_word_ids: set[str] = set()

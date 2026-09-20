@@ -14,8 +14,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -79,7 +79,9 @@ class SentenceTransformerEncoder(BaseTranslator):
     ) -> None:
         super().__init__(operator_id=operator_id)
         if not isinstance(model, str) or not model.strip():
-            raise ValueError("model must be a non-empty SentenceTransformers model id or path.")
+            raise ValueError(
+                "model must be a non-empty SentenceTransformers model id or path."
+            )
         if not isinstance(text_field, str) or not text_field:
             raise ValueError("text_field must be a non-empty string.")
         task_value = str(task).lower()
@@ -96,7 +98,9 @@ class SentenceTransformerEncoder(BaseTranslator):
         self.model = model.strip()
         self.text_field = text_field
         self.revision = None if revision is None else str(revision)
-        self.resolved_revision = None if resolved_revision is None else str(resolved_revision)
+        self.resolved_revision = (
+            None if resolved_revision is None else str(resolved_revision)
+        )
         self.task = cast(SentenceTask, task_value)
         self.prompt_name = None if prompt_name is None else str(prompt_name)
         self.prompt = None if prompt is None else str(prompt)
@@ -124,7 +128,7 @@ class SentenceTransformerEncoder(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -139,7 +143,7 @@ class SentenceTransformerEncoder(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -159,14 +163,16 @@ class SentenceTransformerEncoder(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
         _ = mode
         source = single_source(sources, translator_name="SentenceTransformerEncoder")
         if source.artifact_type.value != "table":
-            raise OperatorError("SentenceTransformerEncoder requires a table artifact source.")
+            raise OperatorError(
+                "SentenceTransformerEncoder requires a table artifact source."
+            )
         return SourceRequest(
             artifact_type="table",
             mode="batches",
@@ -185,11 +191,17 @@ class SentenceTransformerEncoder(BaseTranslator):
         request: TranslationRequest,
     ) -> BatchResult:
         if mode != "translate":
-            raise OperatorError(f"Unsupported SentenceTransformerEncoder mode {mode!r}.")
+            raise OperatorError(
+                f"Unsupported SentenceTransformerEncoder mode {mode!r}."
+            )
         packet = single_input(inputs, translator_name="SentenceTransformerEncoder")
         frame = require_frame(packet.data, translator_name="SentenceTransformerEncoder")
         key_columns = [str(name) for name in packet.primary_key]
-        missing = [name for name in [*key_columns, self.text_field] if name not in frame.columns]
+        missing = [
+            name
+            for name in [*key_columns, self.text_field]
+            if name not in frame.columns
+        ]
         if missing:
             raise ArtifactError(
                 f"SentenceTransformerEncoder source batch is missing columns {missing}."
@@ -210,7 +222,9 @@ class SentenceTransformerEncoder(BaseTranslator):
         texts = frame[self.text_field].fillna("").astype(str).tolist()
         counted_texts = [f"{prompt_prefix}{text}" for text in texts]
         token_counts = count_tokens(tokenizer, counted_texts)
-        too_long = [index for index, count in enumerate(token_counts) if count > context_limit]
+        too_long = [
+            index for index, count in enumerate(token_counts) if count > context_limit
+        ]
         if too_long and self.truncation == "error":
             examples: list[str] = []
             for index in too_long[:5]:
@@ -290,9 +304,13 @@ class SentenceTransformerEncoder(BaseTranslator):
         if prompt is not None:
             kwargs["prompt"] = prompt
         effective_task = self.task if task is None else task
-        if effective_task == "document" and callable(getattr(model, "encode_document", None)):
+        if effective_task == "document" and callable(
+            getattr(model, "encode_document", None)
+        ):
             values = model.encode_document(list(texts), **kwargs)
-        elif effective_task == "query" and callable(getattr(model, "encode_query", None)):
+        elif effective_task == "query" and callable(
+            getattr(model, "encode_query", None)
+        ):
             values = model.encode_query(list(texts), **kwargs)
         else:
             values = model.encode(list(texts), **kwargs)
@@ -324,7 +342,9 @@ class SentenceTransformerEncoder(BaseTranslator):
         )
         counted = [f"{prompt_prefix}{text}" for text in values_in]
         token_counts = count_tokens(tokenizer, counted)
-        too_long = [index for index, count in enumerate(token_counts) if count > context_limit]
+        too_long = [
+            index for index, count in enumerate(token_counts) if count > context_limit
+        ]
         if too_long and self.truncation == "error":
             raise ContextWindowExceededError(
                 "SentenceTransformerEncoder refuses silent truncation while replaying "
@@ -394,7 +414,7 @@ class SentenceTransformerEncoder(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "SentenceTransformerEncoder":
+    def from_json_state(cls, state: Mapping[str, Any]) -> SentenceTransformerEncoder:
         return cls(
             model=str(state.get("model", "")),
             text_field=str(state.get("text_field", "text")),
@@ -422,14 +442,19 @@ class SentenceTransformerEncoder(BaseTranslator):
             model.save_pretrained(model_dir, safe_serialization=True)
         except TypeError:  # pragma: no cover
             model.save_pretrained(model_dir)
-        return {"model_dir": model_dir.name, "resolved_revision": self.resolved_revision}
+        return {
+            "model_dir": model_dir.name,
+            "resolved_revision": self.resolved_revision,
+        }
 
     def load_assets(self, assets_dir: Path, manifest: Mapping[str, Any]) -> None:
         if not manifest:
             return
         model_dir = manifest.get("model_dir")
         if not isinstance(model_dir, str) or not model_dir:
-            raise OperatorError("SentenceTransformerEncoder asset manifest is missing model_dir.")
+            raise OperatorError(
+                "SentenceTransformerEncoder asset manifest is missing model_dir."
+            )
         path = assets_dir / model_dir
         if not path.exists():
             raise OperatorError(
@@ -466,14 +491,22 @@ class SentenceTransformerEncoder(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "SentenceTransformerEncoder":
+    ) -> SentenceTransformerEncoder:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         if not isinstance(state, Mapping):
-            raise OperatorError("SentenceTransformerEncoder intermediate state must be a mapping.")
+            raise OperatorError(
+                "SentenceTransformerEncoder intermediate state must be a mapping."
+            )
         obj = cls.from_json_state(state)
         local_model_dir = state.get("local_model_dir")
-        if isinstance(local_model_dir, str) and local_model_dir and Path(local_model_dir).exists():
+        if (
+            isinstance(local_model_dir, str)
+            and local_model_dir
+            and Path(local_model_dir).exists()
+        ):
             obj._local_model_dir = Path(local_model_dir)
         obj.operator_id = str(operator_id)
         return obj

@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from text_analysis_lab.dictionaries.provenance import DictionaryProvenance
+from text_analysis_lab.dictionaries.providers.nltk import DictionaryResourceError
 from text_analysis_lab.dictionaries.source import DictionarySource
 from text_analysis_lab.dictionaries.valence import ValenceDictionary
-from text_analysis_lab.dictionaries.providers.nltk import DictionaryResourceError
 
 
-def afinn(
-    *, language: str = "en", emoticons: bool = False
-) -> ValenceDictionary:
+def afinn(*, language: str = "en", emoticons: bool = False) -> ValenceDictionary:
     """Load the lexicon supplied by an installed ``afinn`` package.
 
     TeAL does not redistribute AFINN data. Install the provider package

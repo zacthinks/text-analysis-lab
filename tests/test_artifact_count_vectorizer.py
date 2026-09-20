@@ -12,7 +12,9 @@ from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.translators import ArtifactCountVectorizer
 
 
-def _packet(frame: pd.DataFrame, *, primary_key=("doc_id", "sentence_id", "token_id")) -> InputBatch:
+def _packet(
+    frame: pd.DataFrame, *, primary_key=("doc_id", "sentence_id", "token_id")
+) -> InputBatch:
     return InputBatch(
         source_label="source",
         artifact_id="art_tokens",
@@ -26,7 +28,9 @@ def _packet(frame: pd.DataFrame, *, primary_key=("doc_id", "sentence_id", "token
 
 
 def _source(primary_key=("doc_id", "sentence_id", "token_id")):
-    return SimpleNamespace(artifact_type=ArtifactType.TABLE, primary_key=list(primary_key))
+    return SimpleNamespace(
+        artifact_type=ArtifactType.TABLE, primary_key=list(primary_key)
+    )
 
 
 def test_artifact_count_vectorizer_declares_reduced_key_full_artifact_source() -> None:
@@ -45,7 +49,9 @@ def test_artifact_count_vectorizer_declares_reduced_key_full_artifact_source() -
     assert request.columns.data == "lemma"
 
 
-def test_artifact_count_vectorizer_counts_arbitrary_field_and_keeps_zero_feature_groups() -> None:
+def test_artifact_count_vectorizer_counts_arbitrary_field_and_keeps_zero_feature_groups() -> (
+    None
+):
     frame = pd.DataFrame(
         {
             "doc_id": [1, 1, 1, 2, 2, 3],
@@ -60,13 +66,12 @@ def test_artifact_count_vectorizer_counts_arbitrary_field_and_keeps_zero_feature
     )
     payload = result.outputs["output"]
     assert payload["keys"].to_dict("records") == [
-        {"doc_id": 1}, {"doc_id": 2}, {"doc_id": 3}
+        {"doc_id": 1},
+        {"doc_id": 2},
+        {"doc_id": 3},
     ]
     assert payload["data"]["columns"] == ["NOUN", "VERB"]
-    assert payload["data"]["values"].toarray().tolist() == [
-        [2, 1], [2, 0], [0, 0]
-    ]
-
+    assert payload["data"]["values"].toarray().tolist() == [[2, 1], [2, 0], [0, 0]]
 
 
 def test_group_by_can_retain_multiple_parent_key_levels() -> None:
@@ -91,6 +96,7 @@ def test_group_by_can_retain_multiple_parent_key_levels() -> None:
         {"doc_id": 2, "sentence_id": 0},
     ]
     assert payload["data"]["values"].shape == (3, 4)
+
 
 def test_ngrams_default_to_immediate_parent_boundary_not_aggregation_boundary() -> None:
     frame = pd.DataFrame(
@@ -141,11 +147,15 @@ def test_sequence_by_can_intentionally_allow_cross_sentence_ngrams() -> None:
         {"source": _packet(frame)}, mode="fit_translate", request=TranslationRequest()
     )
     assert result.outputs["output"]["data"]["columns"] == [
-        "alpha beta", "beta gamma", "gamma delta"
+        "alpha beta",
+        "beta gamma",
+        "gamma delta",
     ]
 
 
-def test_ngrams_follow_filtered_artifact_row_sequence_even_when_token_ids_have_gaps() -> None:
+def test_ngrams_follow_filtered_artifact_row_sequence_even_when_token_ids_have_gaps() -> (
+    None
+):
     frame = pd.DataFrame(
         {
             "doc_id": [1, 1],
@@ -164,7 +174,9 @@ def test_ngrams_follow_filtered_artifact_row_sequence_even_when_token_ids_have_g
     assert result.outputs["output"]["data"]["values"].toarray().tolist() == [[1]]
 
 
-def test_frozen_vocabulary_reuse_ignores_unseen_features_and_binary_caps_counts() -> None:
+def test_frozen_vocabulary_reuse_ignores_unseen_features_and_binary_caps_counts() -> (
+    None
+):
     frame = pd.DataFrame(
         {
             "doc_id": [1, 1, 1, 2],
@@ -183,7 +195,8 @@ def test_frozen_vocabulary_reuse_ignores_unseen_features_and_binary_caps_counts(
         {"source": _packet(frame)}, mode="translate", request=TranslationRequest()
     )
     assert result.outputs["output"]["data"]["values"].toarray().tolist() == [
-        [1, 0], [0, 1]
+        [1, 0],
+        [0, 1],
     ]
 
 
@@ -203,10 +216,16 @@ def test_df_trimming_and_max_features_are_group_based() -> None:
         {"source": _packet(frame)}, mode="fit_translate", request=TranslationRequest()
     )
     assert result.outputs["output"]["data"]["columns"] == ["common"]
-    assert result.outputs["output"]["data"]["values"].toarray().tolist() == [[2], [1], [1]]
+    assert result.outputs["output"]["data"]["values"].toarray().tolist() == [
+        [2],
+        [1],
+        [1],
+    ]
 
 
-def test_source_key_contract_rejects_non_prefix_group_and_bad_sequence_boundary() -> None:
+def test_source_key_contract_rejects_non_prefix_group_and_bad_sequence_boundary() -> (
+    None
+):
     with pytest.raises(OperatorError, match="group_by"):
         ArtifactCountVectorizer(field="lemma", group_by=("sentence_id",)).output_specs(
             sources={"source": _source()}, request=TranslationRequest()
@@ -233,7 +252,9 @@ def test_ngram_display_collision_fails_instead_of_merging_distinct_features() ->
     )
     with pytest.raises(ArtifactError, match="ambiguous"):
         translator.translate_batch(
-            {"source": _packet(frame)}, mode="fit_translate", request=TranslationRequest()
+            {"source": _packet(frame)},
+            mode="fit_translate",
+            request=TranslationRequest(),
         )
 
 

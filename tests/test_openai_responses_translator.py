@@ -61,7 +61,9 @@ def _batch():
     )
 
 
-def test_openai_translator_plain_text_templates_fields_and_checkpoints_per_row(monkeypatch):
+def test_openai_translator_plain_text_templates_fields_and_checkpoints_per_row(
+    monkeypatch,
+):
     _install_fake_openai(monkeypatch)
     translator = OpenAIResponsesTranslator(
         "gpt-test",
@@ -72,7 +74,9 @@ def test_openai_translator_plain_text_templates_fields_and_checkpoints_per_row(m
         store=False,
     )
     source = _Source()
-    translator.validate_operation_params({}, sources={"source": source}, mode="translate")
+    translator.validate_operation_params(
+        {}, sources={"source": source}, mode="translate"
+    )
     request = translator.input_request(
         sources={"source": source}, mode="translate", request=TranslationRequest()
     )
@@ -110,7 +114,9 @@ def test_openai_translator_structured_outputs_uses_json_schema(monkeypatch):
         json_schema=schema,
         schema_name="binary_code",
     )
-    translator.validate_operation_params({}, sources={"source": _Source()}, mode="translate")
+    translator.validate_operation_params(
+        {}, sources={"source": _Source()}, mode="translate"
+    )
     result = translator.translate_batch(
         {"source": _batch()}, mode="translate", request=TranslationRequest()
     ).outputs["output"]

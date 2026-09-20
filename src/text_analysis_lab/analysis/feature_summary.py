@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
-from text_analysis_lab.analysis._matrix_utils import as_1d, is_sparse_matrix, require_matrix_artifact
+from text_analysis_lab.analysis._matrix_utils import (
+    as_1d,
+    is_sparse_matrix,
+    require_matrix_artifact,
+)
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
 
 
 def feature_summary(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     batch_size: int = 10_000,
 ) -> pd.DataFrame:

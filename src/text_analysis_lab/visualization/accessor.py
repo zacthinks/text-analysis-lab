@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 class ArtifactVisualization:
     """Bind scalable visualization methods to one artifact."""
 
-    def __init__(self, artifact: "BaseArtifact") -> None:
+    def __init__(self, artifact: BaseArtifact) -> None:
         self._artifact = artifact
 
     def histogram(self, field: str, **kwargs: Any):

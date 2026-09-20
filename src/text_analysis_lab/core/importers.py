@@ -45,15 +45,17 @@ if TYPE_CHECKING:
 TabularFormat = Literal["csv", "jsonl", "parquet"]
 ExcelSheetSelector = int | str
 _MISSING_FIELDS_ERROR = object()
-_IMPORT_KINDS = frozenset({
-    "read_csv",
-    "read_csv_folder",
-    "read_excel",
-    "read_excel_folder",
-    "read_jsonl",
-    "read_parquet",
-    "folder_inventory",
-})
+_IMPORT_KINDS = frozenset(
+    {
+        "read_csv",
+        "read_csv_folder",
+        "read_excel",
+        "read_excel_folder",
+        "read_jsonl",
+        "read_parquet",
+        "folder_inventory",
+    }
+)
 _OPTION_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -77,7 +79,7 @@ class ImportOperator(BaseOperator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> Mapping[str, OutputSpec]:
         if sources:
@@ -91,12 +93,12 @@ class ImportOperator(BaseOperator):
         return {"kind": self.kind}
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "ImportOperator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> ImportOperator:
         return cls(kind=str(state["kind"]))
 
 
 def read_csv(
-    project: "Project",
+    project: Project,
     path: str | Path,
     *,
     text_fields: str | Sequence[str],
@@ -105,7 +107,7 @@ def read_csv(
     output_label: str = DEFAULT_OUTPUT_LABEL,
     duckdb_options: Mapping[str, Any] | None = None,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Import selected CSV fields into a durable TeAL table artifact via DuckDB.
 
     TeAL always assigns a new 0-based integer ``row_id`` primary key. Only
@@ -125,9 +127,8 @@ def read_csv(
     )
 
 
-
 def read_csv_folder(
-    project: "Project",
+    project: Project,
     root: str | Path,
     *,
     text_fields: str | Sequence[str],
@@ -138,7 +139,7 @@ def read_csv_folder(
     output_label: str = DEFAULT_OUTPUT_LABEL,
     duckdb_options: Mapping[str, Any] | None = None,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Import a deterministic folder of CSV files as one TeAL table artifact.
 
     Files are discovered beneath ``root`` using ``pattern`` and sorted by POSIX
@@ -175,7 +176,7 @@ def read_csv_folder(
 
 
 def read_excel(
-    project: "Project",
+    project: Project,
     path: str | Path,
     *,
     text_fields: str | Sequence[str],
@@ -186,7 +187,7 @@ def read_excel(
     batch_size: int = 10_000,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Import selected rows from one XLSX workbook into a TeAL table artifact.
 
     ``sheets`` may be a sheet name, zero-based sheet position, a sequence mixing
@@ -218,7 +219,7 @@ def read_excel(
 
 
 def read_excel_folder(
-    project: "Project",
+    project: Project,
     root: str | Path,
     *,
     text_fields: str | Sequence[str],
@@ -231,7 +232,7 @@ def read_excel_folder(
     batch_size: int = 10_000,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Import a deterministic folder of XLSX workbooks as one TeAL artifact.
 
     Workbooks are traversed in sorted relative-path order. Within each workbook,
@@ -266,8 +267,9 @@ def read_excel_folder(
         memo=memo,
     )
 
+
 def read_jsonl(
-    project: "Project",
+    project: Project,
     path: str | Path,
     *,
     text_fields: str | Sequence[str],
@@ -276,7 +278,7 @@ def read_jsonl(
     output_label: str = DEFAULT_OUTPUT_LABEL,
     duckdb_options: Mapping[str, Any] | None = None,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Import selected JSONL fields into a durable TeAL table artifact via DuckDB.
 
     TeAL always assigns a new 0-based integer ``row_id`` primary key. Only
@@ -302,7 +304,7 @@ def read_jsonl(
 
 
 def read_parquet(
-    project: "Project",
+    project: Project,
     path: str | Path,
     *,
     text_fields: str | Sequence[str],
@@ -311,7 +313,7 @@ def read_parquet(
     output_label: str = DEFAULT_OUTPUT_LABEL,
     duckdb_options: Mapping[str, Any] | None = None,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Import selected Parquet fields into a durable TeAL table artifact via DuckDB.
 
     TeAL always assigns a new 0-based integer ``row_id`` primary key. Only
@@ -332,7 +334,7 @@ def read_parquet(
 
 
 def folder_inventory(
-    project: "Project",
+    project: Project,
     root: str | Path,
     *,
     patterns: str | Sequence[str] = "*",
@@ -340,7 +342,7 @@ def folder_inventory(
     batch_size: int = 10_000,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Inventory matching files as a path-only TeAL table artifact.
 
     The output primary key is generated ``file_id`` in deterministic sorted
@@ -404,9 +406,8 @@ def folder_inventory(
     )
 
 
-
 def _read_csv_files(
-    project: "Project",
+    project: Project,
     root: Path,
     paths: Sequence[Path],
     *,
@@ -419,7 +420,7 @@ def _read_csv_files(
     output_label: str,
     duckdb_options: Mapping[str, Any] | None,
     memo: str | None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     batch_size = _validate_batch_size(batch_size)
     output_label = validate_output_label(output_label)
     options = _validate_duckdb_options(duckdb_options)
@@ -434,22 +435,30 @@ def _read_csv_files(
     try:
         con.execute("SET preserve_insertion_order = true")
         path_values = [path.as_posix() for path in paths]
-        source_sql = _duckdb_source_sql_many("csv", path_values, {**options, "filename": True})
+        source_sql = _duckdb_source_sql_many(
+            "csv", path_values, {**options, "filename": True}
+        )
         source_relation = con.sql(f"SELECT * FROM {source_sql}")
         columns = tuple(str(column) for column in source_relation.columns)
         duckdb_types = tuple(str(dtype) for dtype in source_relation.dtypes)
         if "filename" not in columns:
-            raise ArtifactError("DuckDB CSV folder import did not expose filename provenance.")
+            raise ArtifactError(
+                "DuckDB CSV folder import did not expose filename provenance."
+            )
         source_columns = tuple(column for column in columns if column != "filename")
         source_types = tuple(
-            dtype for column, dtype in zip(columns, duckdb_types, strict=True) if column != "filename"
+            dtype
+            for column, dtype in zip(columns, duckdb_types, strict=True)
+            if column != "filename"
         )
         plan = _plan_tabular_columns(
             source_columns,
             text_fields=text_fields,
             metadata_fields=metadata_fields,
         )
-        collisions = sorted(set(source_columns).intersection(provenance_fields.values()))
+        collisions = sorted(
+            set(source_columns).intersection(provenance_fields.values())
+        )
         if collisions:
             raise ArtifactError(
                 "CSV-folder provenance field name(s) collide with selected source columns: "
@@ -457,7 +466,9 @@ def _read_csv_files(
             )
 
         selected_fields = (*plan["text_fields"], *plan["metadata_fields"], "filename")
-        projection = ", ".join(_quote_duckdb_identifier(field) for field in selected_fields)
+        projection = ", ".join(
+            _quote_duckdb_identifier(field) for field in selected_fields
+        )
         relation = con.sql(f"SELECT {projection} FROM {source_sql}")
 
         request = {
@@ -547,10 +558,8 @@ def _read_csv_files(
         con.close()
 
 
-
-
 def _read_excel_files(
-    project: "Project",
+    project: Project,
     *,
     root: Path | None,
     paths: Sequence[Path],
@@ -564,7 +573,7 @@ def _read_excel_files(
     batch_size: int,
     output_label: str,
     memo: str | None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     batch_size = _validate_batch_size(batch_size)
     output_label = validate_output_label(output_label)
     header_row = _validate_header_row(header_row)
@@ -608,10 +617,14 @@ def _read_excel_files(
                 columns = _excel_header_columns(worksheet, header_row=header_row)
                 available = tuple(columns)
                 requested = (*text, *metadata)
-                missing = tuple(field for field in requested if field not in set(available))
+                missing = tuple(
+                    field for field in requested if field not in set(available)
+                )
                 if missing and missing_policy["mode"] == "error":
                     relative = (
-                        path.relative_to(root).as_posix() if root is not None else str(path)
+                        path.relative_to(root).as_posix()
+                        if root is not None
+                        else str(path)
                     )
                     raise ArtifactError(
                         f"Excel source {relative!r}, sheet {sheet_name!r} is missing "
@@ -619,7 +632,9 @@ def _read_excel_files(
                         f"{list(available)}. Pass missing_fields=None to fill missing "
                         "requested fields with nulls, or pass another scalar default value."
                     )
-                discarded = tuple(field for field in available if field not in set(requested))
+                discarded = tuple(
+                    field for field in available if field not in set(requested)
+                )
                 plan = {
                     "sheet_name": sheet_name,
                     "sheet_index": int(sheet_index),
@@ -630,7 +645,11 @@ def _read_excel_files(
                 sheet_plans.append(plan)
                 inspections.append(
                     {
-                        **({"source_file": path.relative_to(root).as_posix()} if root is not None else {}),
+                        **(
+                            {"source_file": path.relative_to(root).as_posix()}
+                            if root is not None
+                            else {}
+                        ),
                         "sheet": sheet_name,
                         "sheet_index": int(sheet_index),
                         "columns": list(available),
@@ -714,7 +733,9 @@ def _read_excel_files(
                     sheet_name = str(sheet_plan["sheet_name"])
                     sheet_index = int(sheet_plan["sheet_index"])
                     columns = tuple(str(column) for column in sheet_plan["columns"])
-                    column_positions = {column: index for index, column in enumerate(columns)}
+                    column_positions = {
+                        column: index for index, column in enumerate(columns)
+                    }
                     worksheet = workbook[sheet_name]
                     row_iter = worksheet.iter_rows(
                         min_row=header_row + 2,
@@ -742,7 +763,9 @@ def _read_excel_files(
                         next_row_id += count
                         out_metadata = frame.loc[:, list(metadata)].copy()
                         if root is not None:
-                            out_metadata["source_file"] = path.relative_to(root).as_posix()
+                            out_metadata["source_file"] = path.relative_to(
+                                root
+                            ).as_posix()
                         out_metadata["source_sheet"] = sheet_name
                         out_metadata["source_sheet_index"] = np.full(
                             count, sheet_index, dtype="int64"
@@ -802,7 +825,9 @@ def _normalize_sheet_selectors(
     if sheets is None:
         return None
     if isinstance(sheets, bool):
-        raise TypeError("sheets entries must be sheet names or zero-based integer positions.")
+        raise TypeError(
+            "sheets entries must be sheet names or zero-based integer positions."
+        )
     if isinstance(sheets, (str, int)):
         values: tuple[Any, ...] = (sheets,)
     elif isinstance(sheets, Sequence):
@@ -812,7 +837,9 @@ def _normalize_sheet_selectors(
             "sheets must be a sheet name, integer position, sequence of names/positions, or None."
         )
     if not values:
-        raise ValueError("sheets cannot be an empty sequence; use None to import all sheets.")
+        raise ValueError(
+            "sheets cannot be an empty sequence; use None to import all sheets."
+        )
     normalized: list[ExcelSheetSelector] = []
     for value in values:
         if isinstance(value, bool) or not isinstance(value, (str, int)):
@@ -820,7 +847,9 @@ def _normalize_sheet_selectors(
                 "sheets entries must be sheet names or zero-based integer positions."
             )
         if isinstance(value, int) and value < 0:
-            raise ValueError("Excel sheet positions must be zero-based non-negative integers.")
+            raise ValueError(
+                "Excel sheet positions must be zero-based non-negative integers."
+            )
         if isinstance(value, str) and not value:
             raise ValueError("Excel sheet names cannot be empty.")
         normalized.append(value)
@@ -964,8 +993,9 @@ def _import_openpyxl():
         ) from exc
     return openpyxl
 
+
 def _read_tabular(
-    project: "Project",
+    project: Project,
     path: str | Path,
     *,
     format: TabularFormat,
@@ -975,7 +1005,7 @@ def _read_tabular(
     output_label: str,
     duckdb_options: Mapping[str, Any] | None,
     memo: str | None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     source_path = _validate_source_file(path)
     batch_size = _validate_batch_size(batch_size)
     output_label = validate_output_label(output_label)
@@ -996,7 +1026,9 @@ def _read_tabular(
         )
 
         selected_fields = (*plan["text_fields"], *plan["metadata_fields"])
-        projection = ", ".join(_quote_duckdb_identifier(field) for field in selected_fields)
+        projection = ", ".join(
+            _quote_duckdb_identifier(field) for field in selected_fields
+        )
         relation = con.sql(f"SELECT {projection} FROM {source_sql}")
 
         request = {
@@ -1068,7 +1100,7 @@ def _read_tabular(
 
 
 def _execute_import(
-    project: "Project",
+    project: Project,
     *,
     kind: str,
     output_label: str,
@@ -1076,7 +1108,7 @@ def _execute_import(
     external_source: Mapping[str, Any],
     payloads: Iterable[Mapping[str, Any]],
     memo: str | None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     operator = ImportOperator(kind)
     operator_id = next_id(project.storage.manifest_path, "operator")
     operator.assign_operator_id(operator_id)
@@ -1377,7 +1409,6 @@ def _duckdb_source_sql(
     return f"{function}({', '.join(args)})"
 
 
-
 def _duckdb_source_sql_many(
     format: TabularFormat,
     paths: Sequence[str],
@@ -1388,11 +1419,9 @@ def _duckdb_source_sql_many(
     if format != "csv":
         raise ValueError("Multi-file source SQL is currently implemented only for CSV.")
     args = [_duckdb_literal(list(paths))]
-    args.extend(
-        f"{name} = {_duckdb_literal(value)}"
-        for name, value in options.items()
-    )
+    args.extend(f"{name} = {_duckdb_literal(value)}" for name, value in options.items())
     return f"read_csv({', '.join(args)})"
+
 
 def _duckdb_literal(value: Any) -> str:
     if value is None:

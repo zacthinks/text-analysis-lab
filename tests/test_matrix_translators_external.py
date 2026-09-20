@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import importlib.util
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -13,8 +13,13 @@ pytest.importorskip("duckdb")
 
 import text_analysis_lab as teal
 from text_analysis_lab.core.writer import create_artifact_writer
-from text_analysis_lab.translators import LDA, SVD, UMAP, MatrixNormalizer, TfidfTransformer
-
+from text_analysis_lab.translators import (
+    LDA,
+    SVD,
+    UMAP,
+    MatrixNormalizer,
+    TfidfTransformer,
+)
 
 WORKERS = 2 if importlib.util.find_spec("distributed") is not None else 1
 
@@ -81,15 +86,22 @@ def test_real_tfidf_normalization_svd_lda_round_trip(tmp_path: Path) -> None:
         assert tfidf.get_matrix().shape == VALUES.shape
 
         normalized = project.translate(
-            MatrixNormalizer(axis="rows", norm="l2"), tfidf, batch_size=3, workers=WORKERS
+            MatrixNormalizer(axis="rows", norm="l2"),
+            tfidf,
+            batch_size=3,
+            workers=WORKERS,
         )["output"]
-        norms = np.sqrt(np.asarray(normalized.get_matrix().power(2).sum(axis=1)).reshape(-1))
+        norms = np.sqrt(
+            np.asarray(normalized.get_matrix().power(2).sum(axis=1)).reshape(-1)
+        )
         assert norms.tolist() == pytest.approx([1.0] * len(VALUES))
 
         column_normalized = project.translate(
             MatrixNormalizer(axis="columns", norm="l1"), counts, batch_size=3
         )["output"]
-        col_norms = np.asarray(abs(column_normalized.get_matrix()).sum(axis=0)).reshape(-1)
+        col_norms = np.asarray(abs(column_normalized.get_matrix()).sum(axis=0)).reshape(
+            -1
+        )
         assert col_norms.tolist() == pytest.approx([1.0] * len(FEATURES))
 
         svd_op = SVD(n_components=2, random_state=7)
@@ -111,17 +123,26 @@ def test_real_tfidf_normalization_svd_lda_round_trip(tmp_path: Path) -> None:
         doc_topics = lda_outputs["output"]
         topics = lda_outputs["topics"]
         assert doc_topics.get_matrix().shape == (len(VALUES), 2)
-        assert doc_topics.get_matrix().sum(axis=1).tolist() == pytest.approx([1.0] * len(VALUES))
+        assert doc_topics.get_matrix().sum(axis=1).tolist() == pytest.approx(
+            [1.0] * len(VALUES)
+        )
         assert topics.get_matrix().shape == (2, len(FEATURES))
         assert topics.primary_key == ["topic_id"]
 
         tfidf_operator_id = tfidf_op.operator_id
         svd_operator_id = svd_op.operator_id
         lda_operator_id = lda_op.operator_id
-        ids = {name: artifact.artifact_id for name, artifact in {
-            "tfidf": tfidf, "normalized": normalized, "reduced": reduced,
-            "components": components, "doc_topics": doc_topics, "topics": topics,
-        }.items()}
+        ids = {
+            name: artifact.artifact_id
+            for name, artifact in {
+                "tfidf": tfidf,
+                "normalized": normalized,
+                "reduced": reduced,
+                "components": components,
+                "doc_topics": doc_topics,
+                "topics": topics,
+            }.items()
+        }
     finally:
         project.close()
 
@@ -131,18 +152,42 @@ def test_real_tfidf_normalization_svd_lda_round_trip(tmp_path: Path) -> None:
             assert reopened.get_artifact(artifact_id).status == "complete"
 
         fitted_tfidf = reopened.get_operator(str(tfidf_operator_id))
-        reused_tfidf = reopened.translate(fitted_tfidf, reopened.get_artifact("art_counts_round14"), batch_size=3, workers=WORKERS)["output"]
-        assert np.allclose(reused_tfidf.get_matrix().toarray(), reopened.get_artifact(ids["tfidf"]).get_matrix().toarray())
+        reused_tfidf = reopened.translate(
+            fitted_tfidf,
+            reopened.get_artifact("art_counts_round14"),
+            batch_size=3,
+            workers=WORKERS,
+        )["output"]
+        assert np.allclose(
+            reused_tfidf.get_matrix().toarray(),
+            reopened.get_artifact(ids["tfidf"]).get_matrix().toarray(),
+        )
 
         fitted_svd = reopened.get_operator(str(svd_operator_id))
-        reused_svd = reopened.translate(fitted_svd, reopened.get_artifact(ids["normalized"]), batch_size=3, workers=WORKERS)
+        reused_svd = reopened.translate(
+            fitted_svd,
+            reopened.get_artifact(ids["normalized"]),
+            batch_size=3,
+            workers=WORKERS,
+        )
         assert set(reused_svd) == {"output"}
-        assert np.allclose(reused_svd["output"].get_matrix(), reopened.get_artifact(ids["reduced"]).get_matrix())
+        assert np.allclose(
+            reused_svd["output"].get_matrix(),
+            reopened.get_artifact(ids["reduced"]).get_matrix(),
+        )
 
         fitted_lda = reopened.get_operator(str(lda_operator_id))
-        reused_lda = reopened.translate(fitted_lda, reopened.get_artifact("art_counts_round14"), batch_size=3, workers=WORKERS)
+        reused_lda = reopened.translate(
+            fitted_lda,
+            reopened.get_artifact("art_counts_round14"),
+            batch_size=3,
+            workers=WORKERS,
+        )
         assert set(reused_lda) == {"output"}
-        assert np.allclose(reused_lda["output"].get_matrix(), reopened.get_artifact(ids["doc_topics"]).get_matrix())
+        assert np.allclose(
+            reused_lda["output"].get_matrix(),
+            reopened.get_artifact(ids["doc_topics"]).get_matrix(),
+        )
     finally:
         reopened.close()
 
@@ -153,7 +198,9 @@ def test_real_umap_round_trip_if_installed(tmp_path: Path) -> None:
     project = teal.Project.create(project_path, name="round14_umap")
     try:
         counts = _register_counts(project)
-        op = UMAP(n_components=2, n_neighbors=3, min_dist=0.1, metric="cosine", random_state=7)
+        op = UMAP(
+            n_components=2, n_neighbors=3, min_dist=0.1, metric="cosine", random_state=7
+        )
         output = project.translate(op, counts)["output"]
         values = output.get_matrix()
         assert values.shape == (len(VALUES), 2)
@@ -166,7 +213,9 @@ def test_real_umap_round_trip_if_installed(tmp_path: Path) -> None:
     reopened = teal.Project.open(project_path)
     try:
         fitted = reopened.get_operator(str(operator_id))
-        reused = reopened.translate(fitted, reopened.get_artifact("art_counts_round14"), batch_size=3)["output"]
+        reused = reopened.translate(
+            fitted, reopened.get_artifact("art_counts_round14"), batch_size=3
+        )["output"]
         assert reused.get_matrix().shape == (len(VALUES), 2)
         assert np.isfinite(reused.get_matrix()).all()
         assert reopened.get_artifact(artifact_id).status == "complete"
@@ -200,7 +249,10 @@ def test_real_feature_trimmer_round_trip_and_reuse(tmp_path: Path) -> None:
             batch_size=3,
             workers=WORKERS,
         )["output"]
-        assert reused.get_data_columns() == reopened.get_artifact(trimmed_id).get_data_columns()
+        assert (
+            reused.get_data_columns()
+            == reopened.get_artifact(trimmed_id).get_data_columns()
+        )
         assert np.array_equal(
             reused.get_matrix().toarray(),
             reopened.get_artifact(trimmed_id).get_matrix().toarray(),

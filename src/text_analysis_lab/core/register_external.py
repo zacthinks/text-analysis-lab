@@ -42,7 +42,7 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
     validate_output_label,
 )
-from text_analysis_lab.core.types import ArtifactType, DEFAULT_OUTPUT_LABEL, LineageMode
+from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, ArtifactType, LineageMode
 from text_analysis_lab.core.writer import create_artifact_writer
 
 if TYPE_CHECKING:
@@ -96,7 +96,7 @@ class RegisteredExternalOperator(BaseOperator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> Mapping[str, OutputSpec]:
         _ = request
@@ -124,7 +124,7 @@ class RegisteredExternalOperator(BaseOperator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "RegisteredExternalOperator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> RegisteredExternalOperator:
         return cls(
             artifact_type=str(state["artifact_type"]),
             primary_key=tuple(str(v) for v in state.get("primary_key", ())),
@@ -136,7 +136,7 @@ class RegisteredExternalOperator(BaseOperator):
 
 
 def register_external(
-    project: "Project",
+    project: Project,
     external: Any,
     *,
     artifact_type: ArtifactType | str = ArtifactType.TABLE,
@@ -146,12 +146,12 @@ def register_external(
     format: TabularExternalFormat | None = None,
     batch_size: int = 10_000,
     duckdb_options: Mapping[str, Any] | None = None,
-    sources: Mapping[str, "BaseArtifact | str"] | None = None,
+    sources: Mapping[str, BaseArtifact | str] | None = None,
     lineage_mode: LineageMode | str = "new_key",
     basis_labels: str | Sequence[str] | None = None,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Register an externally produced result as a normal TeAL artifact.
 
     Canonical input is one writer-shaped payload mapping, or an iterable of such
@@ -185,7 +185,11 @@ def register_external(
     resolved_sources = _resolve_sources(project, sources)
     _validate_lineage_declaration(mode, bases, resolved_sources)
 
-    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
+    if (
+        isinstance(batch_size, bool)
+        or not isinstance(batch_size, int)
+        or batch_size <= 0
+    ):
         raise ValueError("batch_size must be a positive integer.")
 
     external_kind, external_descriptor, payloads = _normalize_external(
@@ -222,7 +226,9 @@ def register_external(
         snapshot_status="pending",
     )
     try:
-        operator.save_to_dir(project.storage.operator_dir(operator_id), operator_id=operator_id)
+        operator.save_to_dir(
+            project.storage.operator_dir(operator_id), operator_id=operator_id
+        )
         project.catalog.mark_operator_serialized(operator_id)
     except Exception:
         project.catalog.mark_operator_snapshot_failed(operator_id)
@@ -238,7 +244,9 @@ def register_external(
         status="incomplete",
     )
     for source_label, artifact in resolved_sources.items():
-        project.catalog.add_operation_source(operation_id, source_label, artifact.artifact_id)
+        project.catalog.add_operation_source(
+            operation_id, source_label, artifact.artifact_id
+        )
 
     basis_ids = tuple(artifact.artifact_id for artifact in basis_artifacts)
     artifact_id = next_id(project.storage.manifest_path, "artifact")
@@ -357,13 +365,19 @@ def _normalize_external(
 ) -> tuple[str, dict[str, Any], Iterable[Mapping[str, Any]]]:
     if isinstance(external, pd.DataFrame):
         if artifact_type != ArtifactType.TABLE:
-            raise TypeError("DataFrame registration is supported only for table artifacts.")
+            raise TypeError(
+                "DataFrame registration is supported only for table artifacts."
+            )
         _validate_tabular_namespaces(primary_key, data_fields, metadata_fields)
-        frame = _select_frame_fields(external, primary_key, data_fields, metadata_fields)
+        frame = _select_frame_fields(
+            external, primary_key, data_fields, metadata_fields
+        )
         return (
             "dataframe",
-            {"kind": "dataframe", "rows": int(len(frame))},
-            _frame_payloads(frame, primary_key, data_fields, metadata_fields, batch_size),
+            {"kind": "dataframe", "rows": len(frame)},
+            _frame_payloads(
+                frame, primary_key, data_fields, metadata_fields, batch_size
+            ),
         )
 
     if isinstance(external, (str, Path)):
@@ -393,6 +407,7 @@ def _normalize_external(
         return "payload", {"kind": "payload"}, iter((external,))
 
     if isinstance(external, Iterable):
+
         def payload_iter() -> Iterator[Mapping[str, Any]]:
             for index, item in enumerate(external):
                 if isinstance(item, pd.DataFrame):
@@ -400,11 +415,15 @@ def _normalize_external(
                         raise TypeError(
                             "DataFrame batch items are supported only for table artifacts."
                         )
-                    _validate_tabular_namespaces(primary_key, data_fields, metadata_fields)
+                    _validate_tabular_namespaces(
+                        primary_key, data_fields, metadata_fields
+                    )
                     frame = _select_frame_fields(
                         item, primary_key, data_fields, metadata_fields
                     )
-                    yield _frame_payload(frame, primary_key, data_fields, metadata_fields)
+                    yield _frame_payload(
+                        frame, primary_key, data_fields, metadata_fields
+                    )
                     continue
                 if not isinstance(item, Mapping) or "keys" not in item:
                     raise TypeError(
@@ -442,10 +461,14 @@ def _path_payloads(
 
     if path.is_dir():
         if resolved_format != "parquet":
-            raise ArtifactError("Directory registration currently supports Parquet datasets only.")
+            raise ArtifactError(
+                "Directory registration currently supports Parquet datasets only."
+            )
         files = sorted(p for p in path.rglob("*.parquet") if p.is_file())
         if not files:
-            raise ArtifactError(f"Parquet dataset folder contains no .parquet files: {path}")
+            raise ArtifactError(
+                f"Parquet dataset folder contains no .parquet files: {path}"
+            )
         source_arg = _duckdb_literal([p.as_posix() for p in files])
         option_sql = "".join(
             f", {name} = {_duckdb_literal(value)}" for name, value in options.items()
@@ -571,7 +594,9 @@ def _select_frame_fields(
     required = [*primary_key, *data_fields, *metadata_fields]
     missing = [name for name in required if name not in columns]
     if missing:
-        raise ArtifactError(f"External DataFrame is missing required column(s) {missing}.")
+        raise ArtifactError(
+            f"External DataFrame is missing required column(s) {missing}."
+        )
     reserved = sorted(set(required).intersection(_RESERVED))
     if reserved:
         raise ArtifactError(
@@ -589,8 +614,12 @@ def _validate_tabular_namespaces(
 ) -> None:
     groups = [set(primary_key), set(data_fields), set(metadata_fields)]
     if groups[0] & groups[1] or groups[0] & groups[2] or groups[1] & groups[2]:
-        raise ArtifactError("External table primary_key, data_fields, and metadata_fields must not overlap.")
-    reserved = sorted(set([*primary_key, *data_fields, *metadata_fields]).intersection(_RESERVED))
+        raise ArtifactError(
+            "External table primary_key, data_fields, and metadata_fields must not overlap."
+        )
+    reserved = sorted(
+        set([*primary_key, *data_fields, *metadata_fields]).intersection(_RESERVED)
+    )
     if reserved:
         raise ArtifactError(
             f"External registration cannot use reserved structural column(s) {reserved}."
@@ -619,7 +648,7 @@ def _validate_payload_primary_key(
 def _validate_lineage_declaration(
     mode: LineageMode,
     bases: Sequence[str],
-    sources: Mapping[str, "BaseArtifact"],
+    sources: Mapping[str, BaseArtifact],
 ) -> None:
     if mode == "new_key":
         if bases:
@@ -635,9 +664,9 @@ def _validate_lineage_declaration(
 
 
 def _resolve_sources(
-    project: "Project",
-    sources: Mapping[str, "BaseArtifact | str"] | None,
-) -> dict[str, "BaseArtifact"]:
+    project: Project,
+    sources: Mapping[str, BaseArtifact | str] | None,
+) -> dict[str, BaseArtifact]:
     if sources is None:
         return {}
     if not isinstance(sources, Mapping):
@@ -668,7 +697,9 @@ def _normalize_basis_labels(value: str | Sequence[str] | None) -> tuple[str, ...
     return values
 
 
-def _normalize_required_fields(value: str | Sequence[str], *, name: str) -> tuple[str, ...]:
+def _normalize_required_fields(
+    value: str | Sequence[str], *, name: str
+) -> tuple[str, ...]:
     values = _normalize_optional_fields(value, name=name)
     if not values:
         raise ValueError(f"{name} must contain at least one field.")

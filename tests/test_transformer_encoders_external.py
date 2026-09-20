@@ -13,11 +13,18 @@ pytest.importorskip("transformers")
 pytest.importorskip("sentence_transformers")
 
 import text_analysis_lab as teal
-from text_analysis_lab.translators import ContextualTransformer, SentenceTransformerEncoder
+from text_analysis_lab.translators import (
+    ContextualTransformer,
+    SentenceTransformerEncoder,
+)
 
 
 def _enabled() -> bool:
-    return os.environ.get("TEAL_RUN_HF_EXTERNAL", "").strip().lower() in {"1", "true", "yes"}
+    return os.environ.get("TEAL_RUN_HF_EXTERNAL", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def _seed_documents(project: teal.Project):
@@ -54,8 +61,12 @@ def _seed_documents(project: teal.Project):
     return project.get_artifact("art_hf_docs")
 
 
-@pytest.mark.skipif(not _enabled(), reason="set TEAL_RUN_HF_EXTERNAL=1 to allow real model downloads")
-def test_real_sentence_and_contextual_transformers_saved_offline(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.skipif(
+    not _enabled(), reason="set TEAL_RUN_HF_EXTERNAL=1 to allow real model downloads"
+)
+def test_real_sentence_and_contextual_transformers_saved_offline(
+    tmp_path: Path, monkeypatch
+) -> None:
     model_id = os.environ.get(
         "TEAL_HF_TEST_MODEL", "sentence-transformers-testing/stsb-bert-tiny-safetensors"
     )
@@ -91,12 +102,22 @@ def test_real_sentence_and_contextual_transformers_saved_offline(tmp_path: Path,
         contextual = contextual_outputs["contextual_embeddings"]
         assert contextual.get_matrix().shape[0] == len(tokens.query(form="table"))
         assert contextual.primary_key == tokens.primary_key
-        assert contextual.descriptor["lineage"]["basis_artifact_ids"] == [tokens.artifact_id]
+        assert contextual.descriptor["lineage"]["basis_artifact_ids"] == [
+            tokens.artifact_id
+        ]
 
-        sentence_operator_id = str(project.catalog.get_operation(sentence.operation_id)["operator_id"])
-        contextual_operator_id = str(project.catalog.get_operation(contextual.operation_id)["operator_id"])
-        assert (project.storage.operator_dir(sentence_operator_id) / "assets" / "model").is_dir()
-        assert (project.storage.operator_dir(contextual_operator_id) / "assets" / "model").is_dir()
+        sentence_operator_id = str(
+            project.catalog.get_operation(sentence.operation_id)["operator_id"]
+        )
+        contextual_operator_id = str(
+            project.catalog.get_operation(contextual.operation_id)["operator_id"]
+        )
+        assert (
+            project.storage.operator_dir(sentence_operator_id) / "assets" / "model"
+        ).is_dir()
+        assert (
+            project.storage.operator_dir(contextual_operator_id) / "assets" / "model"
+        ).is_dir()
     finally:
         project.close()
 

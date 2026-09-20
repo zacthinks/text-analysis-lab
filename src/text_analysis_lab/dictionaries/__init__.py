@@ -4,7 +4,6 @@ from text_analysis_lab.dictionaries.catalog import catalog
 from text_analysis_lab.dictionaries.dictionary import Dictionary, ValueType
 from text_analysis_lab.dictionaries.polarity import PolarityDictionary
 from text_analysis_lab.dictionaries.provenance import DictionaryProvenance
-from text_analysis_lab.dictionaries.source import DictionarySource
 from text_analysis_lab.dictionaries.providers import (
     DictionaryResourceError,
     afinn,
@@ -13,6 +12,7 @@ from text_analysis_lab.dictionaries.providers import (
     nltk_sentiwordnet,
     nltk_vader,
 )
+from text_analysis_lab.dictionaries.source import DictionarySource
 from text_analysis_lab.dictionaries.valence import ValenceDictionary
 
 # Friendly aliases for the standard resources. Provider-prefixed names remain

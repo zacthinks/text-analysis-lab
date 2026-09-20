@@ -11,10 +11,10 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Callable, cast, get_args
+from typing import TYPE_CHECKING, Any, cast, get_args
 
 import cloudpickle
 import numpy as np
@@ -22,14 +22,14 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError, QueryError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
     OutputSpec,
-    SourceRequest,
     RunRoute,
+    SourceRequest,
     TranslationMode,
     TranslationRequest,
 )
@@ -54,8 +54,8 @@ _FUNCTION_ASSET = "function.pkl"
 
 
 def subset(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     function: FunctionSpec,
     *,
     key_columns: ColumnSelect = True,
@@ -71,7 +71,7 @@ def subset(
     memo: str | None = None,
     alias: str | None = None,
     overwrite: bool = False,
-) -> Mapping[str, "BaseArtifact"]:
+) -> Mapping[str, BaseArtifact]:
     """Create a keys-only subset artifact using a boolean-mask function.
 
     ``function`` receives each materialized source packet in the requested
@@ -127,7 +127,7 @@ class FunctionSubsetTranslator(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> Mapping[str, OutputSpec]:
         source = _source_artifact(sources)
@@ -152,7 +152,7 @@ class FunctionSubsetTranslator(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = mode
@@ -213,7 +213,7 @@ class FunctionSubsetTranslator(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -222,8 +222,10 @@ class FunctionSubsetTranslator(BaseTranslator):
         params = request.params
         iter_batches = bool(params["iter_batches"])
         effective_batch_size = (
-            request.batch_size if request.batch_size is not None else 10_000
-        ) if iter_batches else None
+            (request.batch_size if request.batch_size is not None else 10_000)
+            if iter_batches
+            else None
+        )
         return SourceRequest(
             artifact_type=source.artifact_type,
             mode="batches" if iter_batches else "full_artifact",
@@ -303,7 +305,7 @@ class FunctionSubsetTranslator(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "FunctionSubsetTranslator":
+    ) -> FunctionSubsetTranslator:
         _ = mode, request
         function = cloudpickle.loads(cloudpickle.dumps(self._require_function()))
         return self.__class__(
@@ -340,9 +342,11 @@ class FunctionSubsetTranslator(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "FunctionSubsetTranslator":
+    ) -> FunctionSubsetTranslator:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         if not isinstance(state, Mapping):
             raise OperatorError("Subset intermediate state must contain a JSON object.")
         origin = state.get("function_origin")
@@ -368,7 +372,9 @@ class FunctionSubsetTranslator(BaseTranslator):
                 path = Path(ref.get("path", ""))
                 if not path.is_absolute():
                     path = intermediate_dir / path
-                function = _load_function_from_file(path, str(ref.get("function_name", "")))
+                function = _load_function_from_file(
+                    path, str(ref.get("function_name", ""))
+                )
             elif kind == "import":
                 function = _resolve_legacy_function_ref(ref)
             else:
@@ -397,7 +403,9 @@ class FunctionSubsetTranslator(BaseTranslator):
         # later mutation in the caller's Python session.
         function = cloudpickle.loads(payload)
         if not callable(function):  # pragma: no cover - cloudpickle contract guard
-            raise OperatorError("Frozen subset callable did not deserialize to a callable.")
+            raise OperatorError(
+                "Frozen subset callable did not deserialize to a callable."
+            )
         self.function = cast(SubsetFunction, function)
         return {"function_file": path.name}
 
@@ -423,14 +431,16 @@ class FunctionSubsetTranslator(BaseTranslator):
         else:
             function = cloudpickle.loads(path.read_bytes())
         if not callable(function):
-            raise OperatorError("Subset callable asset did not deserialize to a callable.")
+            raise OperatorError(
+                "Subset callable asset did not deserialize to a callable."
+            )
         self.function = cast(SubsetFunction, function)
 
     def to_json_state(self) -> dict[str, Any]:
         return {"function_origin": dict(self.function_origin)}
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "FunctionSubsetTranslator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> FunctionSubsetTranslator:
         origin = state.get("function_origin")
         if isinstance(origin, Mapping):
             return cls(
@@ -463,7 +473,7 @@ class FunctionSubsetTranslator(BaseTranslator):
         return self.function
 
 
-def _source_artifact(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
+def _source_artifact(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
         raise OperatorError(
             "FunctionSubsetTranslator requires exactly one source under "
@@ -477,7 +487,9 @@ def _source_artifact(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
 # ---------------------------------------------------------------------------
 
 
-def _prepare_function(function: FunctionSpec | None) -> tuple[dict[str, str], SubsetFunction]:
+def _prepare_function(
+    function: FunctionSpec | None,
+) -> tuple[dict[str, str], SubsetFunction]:
     if isinstance(function, tuple):
         if len(function) != 2:
             raise ValueError("Function file specs must be (path, function_name).")
@@ -552,13 +564,13 @@ def _exec_module(loader: Any, module: ModuleType) -> None:
 
 def _packet_length(packet: Any) -> int:
     if isinstance(packet, pd.DataFrame):
-        return int(len(packet))
+        return len(packet)
     if isinstance(packet, Mapping) and isinstance(packet.get("info"), pd.DataFrame):
-        return int(len(packet["info"]))
+        return len(packet["info"])
     if isinstance(packet, Sequence) and not isinstance(packet, (str, bytes, bytearray)):
-        return int(len(packet))
+        return len(packet)
     try:
-        return int(len(packet))
+        return len(packet)
     except TypeError as exc:
         raise ArtifactError(
             f"Cannot determine row count for subset packet of type {type(packet).__name__}."
@@ -570,7 +582,9 @@ def _extract_key_frame(packet: Any, *, primary_key: tuple[str, ...]) -> pd.DataF
         frame = packet
     elif isinstance(packet, Mapping) and isinstance(packet.get("info"), pd.DataFrame):
         frame = packet["info"]
-    elif isinstance(packet, Sequence) and not isinstance(packet, (str, bytes, bytearray)):
+    elif isinstance(packet, Sequence) and not isinstance(
+        packet, (str, bytes, bytearray)
+    ):
         frame = pd.DataFrame(list(packet))
     else:
         raise ArtifactError(
@@ -593,7 +607,9 @@ def _extract_key_frame(packet: Any, *, primary_key: tuple[str, ...]) -> pd.DataF
 
 def _normalize_mask(mask: Iterable[bool], *, expected_len: int) -> np.ndarray:
     if isinstance(mask, (bool, np.bool_)):
-        raise ArtifactError("Subset function must return one boolean per row, not a scalar bool.")
+        raise ArtifactError(
+            "Subset function must return one boolean per row, not a scalar bool."
+        )
     if isinstance(mask, pd.Series):
         arr = mask.to_numpy()
     elif isinstance(mask, np.ndarray):
@@ -626,7 +642,7 @@ def _mask_has_na(arr: np.ndarray) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _source_column_info(source: "BaseArtifact") -> Mapping[str, Any]:
+def _source_column_info(source: BaseArtifact) -> Mapping[str, Any]:
     try:
         return source.project.query.query_columns(source, metadata_mode="full")
     except Exception as exc:
@@ -654,7 +670,9 @@ def _validate_column_select(
             "of non-empty strings."
         )
 
-    if not requested or any(not isinstance(column, str) or not column for column in requested):
+    if not requested or any(
+        not isinstance(column, str) or not column for column in requested
+    ):
         raise ValueError(
             f"{name} must be a non-empty string or a sequence of non-empty strings."
         )
@@ -664,8 +682,7 @@ def _validate_column_select(
     output_names = set(info.get("output", ()))
     ambiguous = info.get("ambiguous", {})
     output_to_namespace = {
-        column["output_name"]: column["namespace"]
-        for column in info.get("columns", ())
+        column["output_name"]: column["namespace"] for column in info.get("columns", ())
     }
     available = sorted(
         output_name

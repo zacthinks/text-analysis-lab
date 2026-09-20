@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 import text_analysis_lab as teal
 from text_analysis_lab.core.lineage import LINEAGE_MODES
 from text_analysis_lab.core.types import ArtifactType
@@ -57,8 +58,8 @@ def _allocate_artifact_id(manifest_path: str) -> str:
 
 
 def test_transactional_ids_are_unique_across_processes(tmp_path: Path) -> None:
-    from concurrent.futures import ProcessPoolExecutor
     import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
 
     project = teal.Project.create(tmp_path / "project", name="test_project")
     manifest_path = str(project.storage.manifest_path)
@@ -346,6 +347,7 @@ def test_catalog_uses_wal_mode(tmp_path: Path) -> None:
 
 def test_final_lineage_validation_reuses_existing_validator(tmp_path: Path) -> None:
     from types import SimpleNamespace
+
     import pytest
 
     from text_analysis_lab.core.errors import LineageError
@@ -433,7 +435,9 @@ def test_batched_single_form_rejects_multirow_batches() -> None:
 
 def test_default_query_of_no_data_artifact_returns_available_info() -> None:
     from types import SimpleNamespace
+
     import pandas as pd
+
     from text_analysis_lab.core.artifact_base import BaseArtifact
 
     class DummyQuery:
@@ -470,6 +474,7 @@ def test_default_query_of_no_data_artifact_returns_available_info() -> None:
 
 def test_incomplete_artifact_views_are_refreshed_and_not_cached(tmp_path: Path) -> None:
     from types import SimpleNamespace
+
     from text_analysis_lab.core.query import QueryEngine
 
     class DummyArtifact:
@@ -509,6 +514,7 @@ def test_analysis_kwic_reuses_existing_implementation() -> None:
 
 def test_no_data_artifact_rejects_explicit_data_column_request() -> None:
     from types import SimpleNamespace
+
     from text_analysis_lab.core.artifact_base import BaseArtifact
     from text_analysis_lab.core.errors import MissingDataComponentError
 
@@ -652,6 +658,7 @@ def test_completed_status_transition_refreshes_stale_descriptor_before_caching(
     tmp_path: Path,
 ) -> None:
     from types import SimpleNamespace
+
     from text_analysis_lab.core.query import QueryEngine
 
     class DummyArtifact:
@@ -694,7 +701,9 @@ def test_sample_defaults_to_five_but_rejects_explicit_n_with_frac() -> None:
         BaseArtifact.sample(Dummy(), n=3, frac=0.25)
 
 
-def test_external_data_batches_use_paged_query_to_avoid_invalidating_arrow_reader() -> None:
+def test_external_data_batches_use_paged_query_to_avoid_invalidating_arrow_reader() -> (
+    None
+):
     from types import SimpleNamespace
 
     import numpy as np

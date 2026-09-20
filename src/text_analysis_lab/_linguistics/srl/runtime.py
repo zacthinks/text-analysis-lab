@@ -9,11 +9,13 @@ production pipeline.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
+from text_analysis_lab._linguistics.device import resolve_devices
 from text_analysis_lab._linguistics.srl.decoding import viterbi_decode_bio
 from text_analysis_lab._linguistics.srl.structures import (
     BioRepair,
@@ -21,9 +23,15 @@ from text_analysis_lab._linguistics.srl.structures import (
     bio_spans,
     repair_projected_bio_tags,
 )
-from text_analysis_lab._linguistics.srl.wordpiece import LegacyBertVocabulary, legacy_wordpiece_tokenize
-from text_analysis_lab._linguistics.device import resolve_devices
-from text_analysis_lab._linguistics.srl_bundle import METADATA_NAME, WEIGHTS_NAME, discard_legacy_bert_buffers
+from text_analysis_lab._linguistics.srl.wordpiece import (
+    LegacyBertVocabulary,
+    legacy_wordpiece_tokenize,
+)
+from text_analysis_lab._linguistics.srl_bundle import (
+    METADATA_NAME,
+    WEIGHTS_NAME,
+    discard_legacy_bert_buffers,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +115,9 @@ class AllenNlpSrlRuntime:
         self.mixed_precision = mixed_precision
         self.requested_max_length = max_length
         self.show_progress = show_progress
-        self._loaded: tuple[Any, Any, Any, tuple[str, ...], dict[str, Any], str, int] | None = None
+        self._loaded: (
+            tuple[Any, Any, Any, tuple[str, ...], dict[str, Any], str, int] | None
+        ) = None
 
     @staticmethod
     def _require_runtime() -> tuple[Any, Any, Any, Any]:
@@ -130,7 +140,11 @@ class AllenNlpSrlRuntime:
         metadata_path = self.runtime_dir / METADATA_NAME
         weights_path = self.runtime_dir / WEIGHTS_NAME
         vocab_path = self.runtime_dir / "tokenizer" / "vocab.txt"
-        if not metadata_path.exists() or not weights_path.exists() or not vocab_path.exists():
+        if (
+            not metadata_path.exists()
+            or not weights_path.exists()
+            or not vocab_path.exists()
+        ):
             raise FileNotFoundError(
                 f"Incomplete SRL runtime at {self.runtime_dir}. The runtime must contain "
                 f"{METADATA_NAME}, {WEIGHTS_NAME}, and tokenizer/vocab.txt."
@@ -161,7 +175,9 @@ class AllenNlpSrlRuntime:
                     attention_mask=attention_mask,
                     return_dict=False,
                 )[0]
-                return self.tag_projection_layer(self.embedding_dropout(bert_embeddings))
+                return self.tag_projection_layer(
+                    self.embedding_dropout(bert_embeddings)
+                )
 
         resolved = resolve_devices(self.requested_device, strict=self.strict_device)
         device = resolved.primary
@@ -171,10 +187,14 @@ class AllenNlpSrlRuntime:
         state = discard_legacy_bert_buffers(load_file(str(weights_path), device="cpu"))
         missing, unexpected = model.load_state_dict(state, strict=False)
         material_missing = [
-            key for key in missing if not key.endswith(("position_ids", "token_type_ids"))
+            key
+            for key in missing
+            if not key.endswith(("position_ids", "token_type_ids"))
         ]
         material_unexpected = [
-            key for key in unexpected if not key.endswith(("position_ids", "token_type_ids"))
+            key
+            for key in unexpected
+            if not key.endswith(("position_ids", "token_type_ids"))
         ]
         if material_missing or material_unexpected:
             raise RuntimeError(

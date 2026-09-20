@@ -113,7 +113,9 @@ def test_single_sparse_source_list_batch_and_round_trip(tmp_path: Path) -> None:
         np.testing.assert_allclose(frame["probability"], [0.10, 0.25, 0.60, 0.80, 0.45])
         assert frame["prediction"].astype(int).tolist() == [0, 0, 1, 1, 0]
         assert output.descriptor["lineage"]["lineage_mode"] == "preserved_key"
-        assert output.descriptor["lineage"]["basis_artifact_ids"] == [source.artifact_id]
+        assert output.descriptor["lineage"]["basis_artifact_ids"] == [
+            source.artifact_id
+        ]
         operator_id = predictor.operator_id
         source_id = source.artifact_id
     finally:
@@ -123,7 +125,9 @@ def test_single_sparse_source_list_batch_and_round_trip(tmp_path: Path) -> None:
     try:
         frozen = reopened.get_operator(operator_id)
         assert isinstance(frozen, GeCoPredictor)
-        reused = reopened.translate(frozen, [reopened.get_artifact(source_id)], batch_size=3)["output"]
+        reused = reopened.translate(
+            frozen, [reopened.get_artifact(source_id)], batch_size=3
+        )["output"]
         np.testing.assert_allclose(
             _frame(reused)["probability"], [0.10, 0.25, 0.60, 0.80, 0.45]
         )
@@ -162,7 +166,9 @@ def test_fixed_committee_shared_source_is_supplied_once(tmp_path: Path) -> None:
         project.close()
 
 
-def test_fixed_committee_mixed_sparse_dense_sources_and_preserved_output_lineage(tmp_path: Path) -> None:
+def test_fixed_committee_mixed_sparse_dense_sources_and_preserved_output_lineage(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="mixed_sources")
     try:
         sparse_source = _seed_matrix(
@@ -187,14 +193,18 @@ def test_fixed_committee_mixed_sparse_dense_sources_and_preserved_output_lineage
             ],
             aggregation="maximum",
         )
-        output = project.translate(predictor, [sparse_source, dense_source], batch_size=2)["output"]
+        output = project.translate(
+            predictor, [sparse_source, dense_source], batch_size=2
+        )["output"]
         np.testing.assert_allclose(_frame(output)["probability"], [0.9, 0.6, 0.8])
         assert output.descriptor["lineage"]["lineage_mode"] == "preserved_key"
         assert output.descriptor["lineage"]["basis_artifact_ids"] == [
             sparse_source.artifact_id,
         ]
         op_sources = project.catalog.operation_sources(output.operation_id)
-        assert {row["source_label"]: row["source_artifact_id"] for row in op_sources} == {
+        assert {
+            row["source_label"]: row["source_artifact_id"] for row in op_sources
+        } == {
             "source_0": sparse_source.artifact_id,
             "source_1": dense_source.artifact_id,
         }
@@ -208,7 +218,9 @@ def test_logistic_stacker_preserves_member_order(tmp_path: Path) -> None:
         source0 = _seed_matrix(
             project,
             "g0",
-            sparse.csr_matrix(np.array([[0.1, 0], [0.8, 0], [0.3, 0], [0.9, 0], [0.6, 0]])),
+            sparse.csr_matrix(
+                np.array([[0.1, 0], [0.8, 0], [0.3, 0], [0.9, 0], [0.6, 0]])
+            ),
         )
         source1 = _seed_matrix(
             project,
@@ -234,7 +246,9 @@ def test_logistic_stacker_preserves_member_order(tmp_path: Path) -> None:
             stacker=stacker,
             stacker_positive_class=1,
         )
-        output = project.translate(predictor, [source0, source1], batch_size=2)["output"]
+        output = project.translate(predictor, [source0, source1], batch_size=2)[
+            "output"
+        ]
         np.testing.assert_allclose(_frame(output)["probability"], expected)
     finally:
         project.close()
@@ -243,8 +257,12 @@ def test_logistic_stacker_preserves_member_order(tmp_path: Path) -> None:
 def test_same_length_reordered_keys_fail_before_prediction(tmp_path: Path) -> None:
     project = teal.Project.create(tmp_path / "project", name="misaligned")
     try:
-        source0 = _seed_matrix(project, "g0", np.array([[0.1], [0.2], [0.3]]), keys=[0, 1, 2])
-        source1 = _seed_matrix(project, "g1", np.array([[0.4], [0.5], [0.6]]), keys=[1, 0, 2])
+        source0 = _seed_matrix(
+            project, "g0", np.array([[0.1], [0.2], [0.3]]), keys=[0, 1, 2]
+        )
+        source1 = _seed_matrix(
+            project, "g1", np.array([[0.4], [0.5], [0.6]]), keys=[1, 0, 2]
+        )
         predictor = GeCoPredictor(
             [_ColumnProbability(0), _ColumnProbability(0)],
             source_specs=[{"source_index": 0}, {"source_index": 1}],
@@ -301,6 +319,8 @@ def test_batch_size_equivalence(tmp_path: Path) -> None:
         first = project.translate(p1, [source], batch_size=1)["output"]
         p2 = _single_predictor(_ColumnProbability(0))
         second = project.translate(p2, [source], batch_size=4)["output"]
-        np.testing.assert_allclose(_frame(first)["probability"], _frame(second)["probability"])
+        np.testing.assert_allclose(
+            _frame(first)["probability"], _frame(second)["probability"]
+        )
     finally:
         project.close()

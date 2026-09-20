@@ -12,10 +12,14 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from text_analysis_lab.core.errors import ArtifactError, OperatorError, OperatorNotFittedError
+from text_analysis_lab.core.errors import (
+    ArtifactError,
+    OperatorError,
+    OperatorNotFittedError,
+)
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -59,8 +63,8 @@ class ArtifactCountVectorizer(BaseTranslator):
         group_by: str | Sequence[str],
         sequence_by: str | Sequence[str] | None = None,
         ngram_range: tuple[int, int] = (1, 1),
-        min_df: int | float = 1,
-        max_df: int | float = 1.0,
+        min_df: float = 1,
+        max_df: float = 1.0,
         max_features: int | None = None,
         binary: bool = False,
         drop_empty: bool = True,
@@ -89,7 +93,9 @@ class ArtifactCountVectorizer(BaseTranslator):
         if not isinstance(ngram_separator, str) or not ngram_separator:
             raise ValueError("ngram_separator must be a non-empty string.")
         if _INTERNAL_NGRAM_SEPARATOR in ngram_separator:
-            raise ValueError("ngram_separator cannot contain TeAL's reserved separator.")
+            raise ValueError(
+                "ngram_separator cannot contain TeAL's reserved separator."
+            )
         self.ngram_separator = ngram_separator
         self.vocabulary_: dict[str, int] | None = (
             None if vocabulary is None else _normalize_vocabulary(vocabulary)
@@ -120,7 +126,7 @@ class ArtifactCountVectorizer(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -136,7 +142,7 @@ class ArtifactCountVectorizer(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -150,14 +156,16 @@ class ArtifactCountVectorizer(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
         _ = mode, request
         source = _single_source(sources)
         if source.artifact_type.value != "table":
-            raise OperatorError("ArtifactCountVectorizer requires a table artifact source.")
+            raise OperatorError(
+                "ArtifactCountVectorizer requires a table artifact source."
+            )
         self._validate_source_key(source.primary_key)
         return SourceRequest(
             artifact_type="table",
@@ -274,7 +282,7 @@ class ArtifactCountVectorizer(BaseTranslator):
         return state
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "ArtifactCountVectorizer":
+    def from_json_state(cls, state: Mapping[str, Any]) -> ArtifactCountVectorizer:
         return cls(
             field=str(state["field"]),
             group_by=cast(Sequence[str], state["group_by"]),
@@ -334,9 +342,11 @@ class ArtifactCountVectorizer(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "ArtifactCountVectorizer":
+    ) -> ArtifactCountVectorizer:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         obj = cls.from_json_state(cast(Mapping[str, Any], state))
         assets = state.get("assets", {})
         if not isinstance(assets, Mapping):
@@ -354,7 +364,9 @@ class ArtifactCountVectorizer(BaseTranslator):
                 "ArtifactCountVectorizer requires a source with a hierarchical "
                 "primary key so it can reduce to a parent grain."
             )
-        if not _is_prefix(self.group_by, source_key) or len(self.group_by) >= len(source_key):
+        if not _is_prefix(self.group_by, source_key) or len(self.group_by) >= len(
+            source_key
+        ):
             raise OperatorError(
                 "group_by must be a non-empty proper retained prefix of the source "
                 f"primary key {list(source_key)}; got {list(self.group_by)}."
@@ -367,7 +379,9 @@ class ArtifactCountVectorizer(BaseTranslator):
                 "sequence_by must retain group_by as its prefix; got "
                 f"group_by={list(self.group_by)}, sequence_by={list(sequence_by)}."
             )
-        if not _is_prefix(sequence_by, source_key) or len(sequence_by) >= len(source_key):
+        if not _is_prefix(sequence_by, source_key) or len(sequence_by) >= len(
+            source_key
+        ):
             raise OperatorError(
                 "sequence_by must be a proper retained prefix of the source primary "
                 f"key {list(source_key)}; got {list(sequence_by)}."
@@ -394,7 +408,7 @@ def _normalize_ngram_range(value: Sequence[int]) -> tuple[int, int]:
     return min_n, max_n
 
 
-def _validate_df_threshold(value: int | float, *, name: str) -> int | float:
+def _validate_df_threshold(value: float, *, name: str) -> int | float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be an integer count or float proportion.")
     if isinstance(value, int):
@@ -440,7 +454,9 @@ def _build_feature_events(
     source_group_index = pd.MultiIndex.from_frame(frame.loc[:, group_by])
     group_ids = group_index.get_indexer(source_group_index)
     if np.any(group_ids < 0):  # pragma: no cover - defensive
-        raise ArtifactError("Failed to map source rows to ArtifactCountVectorizer groups.")
+        raise ArtifactError(
+            "Failed to map source rows to ArtifactCountVectorizer groups."
+        )
 
     work = frame.loc[:, [*dict.fromkeys([*sequence_by, field])]].copy()
     work["_group_id"] = group_ids.astype("int64", copy=False)
@@ -468,7 +484,9 @@ def _build_feature_events(
 
     event_frames: list[pd.DataFrame] = []
     for n in range(ngram_range[0], ngram_range[1] + 1):
-        pieces = [base.groupby(sequence_ids, sort=False).shift(-offset) for offset in range(n)]
+        pieces = [
+            base.groupby(sequence_ids, sort=False).shift(-offset) for offset in range(n)
+        ]
         valid_ngram = pd.concat(pieces, axis=1).notna().all(axis=1)
         if not bool(valid_ngram.any()):
             continue
@@ -495,7 +513,9 @@ def _build_feature_events(
     mapping = events.loc[:, ["_feature_key", "_feature_label"]].drop_duplicates()
     collisions = mapping["_feature_label"].duplicated(keep=False)
     if bool(collisions.any()):
-        examples = mapping.loc[collisions, "_feature_label"].drop_duplicates().head(5).tolist()
+        examples = (
+            mapping.loc[collisions, "_feature_label"].drop_duplicates().head(5).tolist()
+        )
         raise ArtifactError(
             "ArtifactCountVectorizer n-gram labels are ambiguous because atomic field "
             f"values contain the display separator {ngram_separator!r}. Example(s): {examples}. "
@@ -508,8 +528,8 @@ def _fit_vocabulary(
     events: pd.DataFrame,
     *,
     n_groups: int,
-    min_df: int | float,
-    max_df: int | float,
+    min_df: float,
+    max_df: float,
     max_features: int | None,
 ) -> dict[str, int]:
     if events.empty:
@@ -523,7 +543,10 @@ def _fit_vocabulary(
     )
     stats = (
         counts.groupby(["_feature_key", "_feature_label"], sort=False)
-        .agg(document_frequency=("_group_id", "size"), term_frequency=("term_count", "sum"))
+        .agg(
+            document_frequency=("_group_id", "size"),
+            term_frequency=("term_count", "sum"),
+        )
         .reset_index()
     )
     min_count = _resolve_min_df(min_df, n_groups)
@@ -547,12 +570,20 @@ def _fit_vocabulary(
     return {label: index for index, label in enumerate(labels)}
 
 
-def _resolve_min_df(value: int | float, n_groups: int) -> int:
-    return int(value) if isinstance(value, int) else int(math.ceil(float(value) * n_groups))
+def _resolve_min_df(value: float, n_groups: int) -> int:
+    return (
+        int(value)
+        if isinstance(value, int)
+        else int(math.ceil(float(value) * n_groups))
+    )
 
 
-def _resolve_max_df(value: int | float, n_groups: int) -> int:
-    return int(value) if isinstance(value, int) else int(math.floor(float(value) * n_groups))
+def _resolve_max_df(value: float, n_groups: int) -> int:
+    return (
+        int(value)
+        if isinstance(value, int)
+        else int(math.floor(float(value) * n_groups))
+    )
 
 
 def _events_to_matrix(
@@ -616,7 +647,13 @@ def _vocabulary_from_frame(frame: pd.DataFrame) -> dict[str, int]:
             f"ArtifactCountVectorizer vocabulary asset must contain {sorted(required)}."
         )
     return _normalize_vocabulary(
-        dict(zip(frame["feature"].astype(str), frame["feature_id"].astype("int64"), strict=True))
+        dict(
+            zip(
+                frame["feature"].astype(str),
+                frame["feature_id"].astype("int64"),
+                strict=True,
+            )
+        )
     )
 
 
@@ -624,7 +661,7 @@ def _feature_names(vocabulary: Mapping[str, int]) -> list[str]:
     return _vocabulary_frame(vocabulary)["feature"].astype(str).tolist()
 
 
-def _single_source(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
+def _single_source(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
         raise OperatorError(
             "ArtifactCountVectorizer requires exactly one source under "

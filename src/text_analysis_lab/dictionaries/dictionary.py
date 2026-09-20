@@ -92,7 +92,7 @@ class Dictionary:
     def __len__(self) -> int:
         return len(self._entries)
 
-    def __getitem__(self, selection: str | Sequence[str]) -> "Dictionary":
+    def __getitem__(self, selection: str | Sequence[str]) -> Dictionary:
         keys = [selection] if isinstance(selection, str) else list(selection)
         missing = [str(key) for key in keys if str(key) not in self._entries]
         if missing:
@@ -126,7 +126,7 @@ class Dictionary:
         case_sensitive: bool = False,
         name: str | None = None,
         provenance: DictionaryProvenance | Mapping[str, Any] | None = None,
-    ) -> "Dictionary":
+    ) -> Dictionary:
         """Construct a dictionary from a tidy key/pattern data frame."""
         missing = [column for column in (key, pattern) if column not in frame.columns]
         if missing:

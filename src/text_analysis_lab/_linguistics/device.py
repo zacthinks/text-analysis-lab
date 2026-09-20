@@ -26,7 +26,8 @@ def _torch_capabilities() -> tuple[bool, int, bool]:
     cuda_available = bool(torch.cuda.is_available())
     cuda_count = int(torch.cuda.device_count()) if cuda_available else 0
     mps_available = bool(
-        getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available()
+        getattr(torch.backends, "mps", None) is not None
+        and torch.backends.mps.is_available()
     )
     return cuda_available, cuda_count, mps_available
 

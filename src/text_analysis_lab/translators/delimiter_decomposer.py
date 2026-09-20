@@ -11,8 +11,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -70,7 +70,7 @@ class DelimiterDecomposer(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -97,7 +97,7 @@ class DelimiterDecomposer(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -110,7 +110,7 @@ class DelimiterDecomposer(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -139,7 +139,11 @@ class DelimiterDecomposer(BaseTranslator):
         packet = _single_input(inputs)
         frame = _require_frame(packet.data)
         key_columns = [str(name) for name in packet.primary_key]
-        missing = [name for name in [*key_columns, self.text_field] if name not in frame.columns]
+        missing = [
+            name
+            for name in [*key_columns, self.text_field]
+            if name not in frame.columns
+        ]
         if missing:
             raise ArtifactError(
                 f"DelimiterDecomposer source batch is missing columns {missing}."
@@ -171,12 +175,12 @@ class DelimiterDecomposer(BaseTranslator):
             .astype("int64")
         )
         keys = exploded.loc[:, [*key_columns, self.new_key]].reset_index(drop=True)
-        data = exploded.loc[:, ["__teal_part"]].rename(
-            columns={"__teal_part": self.output_text_field}
-        ).reset_index(drop=True)
-        return BatchResult(
-            outputs={DEFAULT_OUTPUT_LABEL: {"keys": keys, "data": data}}
+        data = (
+            exploded.loc[:, ["__teal_part"]]
+            .rename(columns={"__teal_part": self.output_text_field})
+            .reset_index(drop=True)
         )
+        return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: {"keys": keys, "data": data}})
 
     def handle_batch_result(
         self,
@@ -203,7 +207,7 @@ class DelimiterDecomposer(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "DelimiterDecomposer":
+    ) -> DelimiterDecomposer:
         _ = mode, request
         return self.from_json_state(self.to_json_state())
 
@@ -218,12 +222,14 @@ class DelimiterDecomposer(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "DelimiterDecomposer":
+    def from_json_state(cls, state: Mapping[str, Any]) -> DelimiterDecomposer:
         return cls(
             delimiter=str(state.get("delimiter", "\n")),
             new_key=str(state.get("new_key", "segment_id")),
             text_field=str(state.get("text_field", "text")),
-            output_text_field=str(state.get("output_text_field", state.get("text_field", "text"))),
+            output_text_field=str(
+                state.get("output_text_field", state.get("text_field", "text"))
+            ),
             drop_empty=bool(state.get("drop_empty", True)),
             strip=bool(state.get("strip", True)),
         )
@@ -252,15 +258,17 @@ class DelimiterDecomposer(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "DelimiterDecomposer":
+    ) -> DelimiterDecomposer:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         obj = cls.from_json_state(cast(Mapping[str, Any], state))
         obj.operator_id = operator_id
         return obj
 
 
-def _single_source(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
+def _single_source(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
         raise OperatorError(
             f"DelimiterDecomposer requires exactly one source under {DEFAULT_SOURCE_LABEL!r}."

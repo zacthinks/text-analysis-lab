@@ -6,14 +6,17 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from text_analysis_lab.analysis._matrix_utils import matrix_block_stats, require_matrix_artifact
+from text_analysis_lab.analysis._matrix_utils import (
+    matrix_block_stats,
+    require_matrix_artifact,
+)
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
 
 
 def row_summary(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     batch_size: int = 10_000,
 ) -> pd.DataFrame:
@@ -58,7 +61,9 @@ def row_summary(
             stats["nonzero"] / float(n_features) if n_features else 0.0
         )
         result["sum"] = stats["sum"]
-        result["mean"] = stats["sum"] / float(n_features) if n_features else float("nan")
+        result["mean"] = (
+            stats["sum"] / float(n_features) if n_features else float("nan")
+        )
         result["min"] = stats["min"]
         result["max"] = stats["max"]
         result["l1_norm"] = stats["l1"]

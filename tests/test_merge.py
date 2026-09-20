@@ -77,7 +77,9 @@ def test_merged_key_is_virtual_data_provider_for_preserved_descendants() -> None
     assert find_data_artifact(child) is merged
 
 
-def test_full_metadata_can_cross_merge_boundary_and_deduplicates_common_ancestor() -> None:
+def test_full_metadata_can_cross_merge_boundary_and_deduplicates_common_ancestor() -> (
+    None
+):
     from text_analysis_lab.core.lineage import iter_metadata_lineage_sources
 
     class FakeArtifact:

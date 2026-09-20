@@ -22,7 +22,16 @@ def _enabled() -> bool:
     }
 
 
-def _write_table(project, artifact_id, label, key_frame, data_frame, *, lineage_mode="new_key", basis=()):
+def _write_table(
+    project,
+    artifact_id,
+    label,
+    key_frame,
+    data_frame,
+    *,
+    lineage_mode="new_key",
+    basis=(),
+):
     from text_analysis_lab.core.writer import create_artifact_writer
 
     writer = create_artifact_writer(
@@ -33,7 +42,12 @@ def _write_table(project, artifact_id, label, key_frame, data_frame, *, lineage_
         lineage_mode=lineage_mode,
         basis_artifact_ids=tuple(basis),
     )
-    writer.write({"keys": key_frame.reset_index(drop=True), "data": data_frame.reset_index(drop=True)})
+    writer.write(
+        {
+            "keys": key_frame.reset_index(drop=True),
+            "data": data_frame.reset_index(drop=True),
+        }
+    )
     writer.finalize()
     project.catalog.register_artifact(
         artifact_id=artifact_id,
@@ -96,11 +110,51 @@ def test_real_unit10_models_on_one_sentence(tmp_path: Path) -> None:
         )
         token_data = pd.DataFrame(
             {
-                "text": ["Alice", "runs", "quickly", ".", "She", "likes", "the", "race", "."],
-                "lemma": ["Alice", "run", "quickly", ".", "she", "like", "the", "race", "."],
-                "pos": ["PROPN", "VERB", "ADV", "PUNCT", "PRON", "VERB", "DET", "NOUN", "PUNCT"],
+                "text": [
+                    "Alice",
+                    "runs",
+                    "quickly",
+                    ".",
+                    "She",
+                    "likes",
+                    "the",
+                    "race",
+                    ".",
+                ],
+                "lemma": [
+                    "Alice",
+                    "run",
+                    "quickly",
+                    ".",
+                    "she",
+                    "like",
+                    "the",
+                    "race",
+                    ".",
+                ],
+                "pos": [
+                    "PROPN",
+                    "VERB",
+                    "ADV",
+                    "PUNCT",
+                    "PRON",
+                    "VERB",
+                    "DET",
+                    "NOUN",
+                    "PUNCT",
+                ],
                 "tag": ["NNP", "VBZ", "RB", ".", "PRP", "VBZ", "DT", "NN", "."],
-                "dep": ["nsubj", "ROOT", "advmod", "punct", "nsubj", "ROOT", "det", "dobj", "punct"],
+                "dep": [
+                    "nsubj",
+                    "ROOT",
+                    "advmod",
+                    "punct",
+                    "nsubj",
+                    "ROOT",
+                    "det",
+                    "dobj",
+                    "punct",
+                ],
                 "head_token_id": [1, 1, 1, 1, 1, 1, 3, 1, 1],
                 "ent_type": ["PERSON", "", "", "", "", "", "", "", ""],
                 "char_start": [0, 6, 11, 18, 20, 24, 30, 34, 38],
@@ -171,7 +225,9 @@ def test_real_wsd_ignores_spacy_space_token_in_reader_context(tmp_path: Path) ->
     except Exception:
         wn.download("oewn:2025+")
 
-    project = teal.Project.create(tmp_path / "project_space_wsd", name="unit10_space_wsd")
+    project = teal.Project.create(
+        tmp_path / "project_space_wsd", name="unit10_space_wsd"
+    )
     try:
         tokens = _write_table(
             project,
@@ -186,8 +242,24 @@ def test_real_wsd_ignores_spacy_space_token_in_reader_context(tmp_path: Path) ->
             ),
             pd.DataFrame(
                 {
-                    "text": ["Participant", "\f", "(", "see", "symposium", "abstract", ")"],
-                    "lemma": ["Participant", "", "(", "see", "symposium", "abstract", ")"],
+                    "text": [
+                        "Participant",
+                        "\f",
+                        "(",
+                        "see",
+                        "symposium",
+                        "abstract",
+                        ")",
+                    ],
+                    "lemma": [
+                        "Participant",
+                        "",
+                        "(",
+                        "see",
+                        "symposium",
+                        "abstract",
+                        ")",
+                    ],
                     "pos": ["PROPN", "SPACE", "PUNCT", "VERB", "NOUN", "ADJ", "PUNCT"],
                     "ent_type": [""] * 7,
                 }
@@ -209,6 +281,8 @@ def test_real_wsd_ignores_spacy_space_token_in_reader_context(tmp_path: Path) ->
             form="table",
         )
         assert 1 not in set(resolved["token_id"].astype(int))
-        assert set(resolved["surface_form"]).intersection({"see", "symposium", "abstract"})
+        assert set(resolved["surface_form"]).intersection(
+            {"see", "symposium", "abstract"}
+        )
     finally:
         project.close()

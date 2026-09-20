@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from text_analysis_lab.dictionaries.polarity import PolarityDictionary
+from text_analysis_lab.dictionaries.providers.nltk import DictionaryResourceError
 from text_analysis_lab.dictionaries.source import DictionarySource
 from text_analysis_lab.dictionaries.valence import ValenceDictionary
-from text_analysis_lab.dictionaries.providers.nltk import DictionaryResourceError
 
 
 def load_dictionary_source(

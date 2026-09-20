@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -50,12 +49,14 @@ class KeyedFrameOperator(BaseOperator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> Mapping[str, OutputSpec]:
         _ = request
         if set(sources) != {DEFAULT_SOURCE_LABEL}:
-            raise ArtifactError("KeyedFrameOperator requires exactly one source artifact.")
+            raise ArtifactError(
+                "KeyedFrameOperator requires exactly one source artifact."
+            )
         return {
             self.output_label: OutputSpec(
                 artifact_type="table",
@@ -72,7 +73,7 @@ class KeyedFrameOperator(BaseOperator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "KeyedFrameOperator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> KeyedFrameOperator:
         return cls(
             data_fields=tuple(str(v) for v in state.get("data_fields", ())),
             require_complete=bool(state.get("require_complete", False)),
@@ -81,15 +82,15 @@ class KeyedFrameOperator(BaseOperator):
 
 
 def from_keyed_frame(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     frame: pd.DataFrame,
     *,
     data_fields: str | Sequence[str],
     require_complete: bool = False,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Create a same-key table measurement aligned to an existing artifact."""
     source_artifact = project.get_artifact(source)
     source_artifact.require_complete()
@@ -111,7 +112,9 @@ def from_keyed_frame(
     )
     if not isinstance(source_keys, pd.DataFrame):
         raise ArtifactError("Could not materialize source keys for from_keyed_frame.")
-    source_keys = source_keys.sort_values("_position", kind="stable").reset_index(drop=True)
+    source_keys = source_keys.sort_values("_position", kind="stable").reset_index(
+        drop=True
+    )
     source_keys = source_keys.loc[:, list(keys)]
     source_keys = _coerce_keys(source_keys, keys)
 
@@ -158,7 +161,9 @@ def from_keyed_frame(
         operator_id=operator_id, operation_type="translate", snapshot_status="pending"
     )
     try:
-        operator.save_to_dir(project.storage.operator_dir(operator_id), operator_id=operator_id)
+        operator.save_to_dir(
+            project.storage.operator_dir(operator_id), operator_id=operator_id
+        )
         project.catalog.mark_operator_serialized(operator_id)
     except Exception:
         project.catalog.mark_operator_snapshot_failed(operator_id)
@@ -219,15 +224,17 @@ def from_keyed_frame(
 
     try:
         if memo is not None:
-            project.catalog.add_memo(target_type="operation", target_id=operation_id, body=memo)
+            project.catalog.add_memo(
+                target_type="operation", target_id=operation_id, body=memo
+            )
         writer.write({"keys": key_payload, "data": data_payload})
         writer.finalize()
         project.catalog.mark_artifact_complete(artifact_id)
         project.catalog.mark_operation_complete(operation_id)
         descriptor["status"] = "complete"
         (op_dir / "operation.json").write_text(
-        json.dumps(descriptor, indent=2, sort_keys=True), encoding="utf-8"
-    )
+            json.dumps(descriptor, indent=2, sort_keys=True), encoding="utf-8"
+        )
         project.storage.touch_manifest()
         return project.get_artifact(artifact_id)
     except Exception as exc:
@@ -246,8 +253,8 @@ def from_keyed_frame(
         descriptor["status"] = "failed"
         descriptor["error"] = f"{exc.__class__.__name__}: {exc}"
         (op_dir / "operation.json").write_text(
-        json.dumps(descriptor, indent=2, sort_keys=True), encoding="utf-8"
-    )
+            json.dumps(descriptor, indent=2, sort_keys=True), encoding="utf-8"
+        )
         raise
 
 
@@ -273,13 +280,19 @@ def _validate_frame_columns(
         raise ArtifactError("from_keyed_frame frame must have unique column names.")
     missing = [v for v in [*keys, *data_fields] if v not in columns]
     if missing:
-        raise ArtifactError(f"from_keyed_frame frame is missing required column(s) {missing}.")
+        raise ArtifactError(
+            f"from_keyed_frame frame is missing required column(s) {missing}."
+        )
     overlap = sorted(set(keys).intersection(data_fields))
     if overlap:
-        raise ArtifactError(f"data_fields cannot include primary-key column(s) {overlap}.")
+        raise ArtifactError(
+            f"data_fields cannot include primary-key column(s) {overlap}."
+        )
     reserved = sorted(set(data_fields).intersection(_RESERVED))
     if reserved:
-        raise ArtifactError(f"data_fields cannot include reserved structural column(s) {reserved}.")
+        raise ArtifactError(
+            f"data_fields cannot include reserved structural column(s) {reserved}."
+        )
 
 
 def _coerce_keys(frame: pd.DataFrame, keys: Sequence[str]) -> pd.DataFrame:
@@ -288,7 +301,9 @@ def _coerce_keys(frame: pd.DataFrame, keys: Sequence[str]) -> pd.DataFrame:
         values = pd.to_numeric(out[key], errors="coerce")
         bad = values.isna() | ~np.isfinite(values) | (values != np.floor(values))
         if bad.any():
-            raise ArtifactError(f"Primary-key column {key!r} must contain non-null integers.")
+            raise ArtifactError(
+                f"Primary-key column {key!r} must contain non-null integers."
+            )
         out[key] = values.astype("int64")
     return out
 

@@ -48,12 +48,14 @@ class KeyedMetadataOperator(BaseOperator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> Mapping[str, OutputSpec]:
         _ = request
         if set(sources) != {DEFAULT_SOURCE_LABEL}:
-            raise ArtifactError("KeyedMetadataOperator requires exactly one source artifact.")
+            raise ArtifactError(
+                "KeyedMetadataOperator requires exactly one source artifact."
+            )
         return {
             self.output_label: OutputSpec(
                 artifact_type="table",
@@ -70,7 +72,7 @@ class KeyedMetadataOperator(BaseOperator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "KeyedMetadataOperator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> KeyedMetadataOperator:
         return cls(
             metadata_fields=tuple(str(v) for v in state.get("metadata_fields", ())),
             require_complete=bool(state.get("require_complete", True)),
@@ -79,15 +81,15 @@ class KeyedMetadataOperator(BaseOperator):
 
 
 def attach_metadata(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     frame: pd.DataFrame,
     *,
     metadata_fields: str | Sequence[str],
     require_complete: bool = True,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Attach same-key descriptive metadata without materializing new data.
 
     The returned table artifact owns keys plus the selected metadata columns and
@@ -116,7 +118,9 @@ def attach_metadata(
     )
     if not isinstance(source_keys, pd.DataFrame):
         raise ArtifactError("Could not materialize source keys for attach_metadata.")
-    source_keys = source_keys.sort_values("_position", kind="stable").reset_index(drop=True)
+    source_keys = source_keys.sort_values("_position", kind="stable").reset_index(
+        drop=True
+    )
     source_keys = _coerce_keys(source_keys.loc[:, list(keys)], keys)
 
     incoming = frame.loc[:, [*keys, *fields]].copy().reset_index(drop=True)
@@ -162,7 +166,9 @@ def attach_metadata(
         operator_id=operator_id, operation_type="translate", snapshot_status="pending"
     )
     try:
-        operator.save_to_dir(project.storage.operator_dir(operator_id), operator_id=operator_id)
+        operator.save_to_dir(
+            project.storage.operator_dir(operator_id), operator_id=operator_id
+        )
         project.catalog.mark_operator_serialized(operator_id)
     except Exception:
         project.catalog.mark_operator_snapshot_failed(operator_id)
@@ -279,7 +285,9 @@ def _validate_frame_columns(
         raise ArtifactError("attach_metadata frame must have unique column names.")
     missing = [v for v in [*keys, *metadata_fields] if v not in columns]
     if missing:
-        raise ArtifactError(f"attach_metadata frame is missing required column(s) {missing}.")
+        raise ArtifactError(
+            f"attach_metadata frame is missing required column(s) {missing}."
+        )
     overlap = sorted(set(keys).intersection(metadata_fields))
     if overlap:
         raise ArtifactError(

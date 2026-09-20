@@ -8,10 +8,10 @@ data belongs to artifact subclasses, not here.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args
-from collections.abc import Sequence, Iterable
 from uuid import uuid4
 
 import numpy as np
@@ -33,9 +33,9 @@ from text_analysis_lab.core.types import (
 )
 from text_analysis_lab.core.utils import (
     quote_identifier,
+    resolve_names,
     sql_literal,
     str_keys,
-    resolve_names,
 )
 
 if TYPE_CHECKING:
@@ -57,7 +57,7 @@ class Location:
     row_offset: int
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> "Location":
+    def from_row(cls, row: dict[str, Any]) -> Location:
         return cls(
             position=int(row["_position"]),
             batch=int(row["_batch"]),
@@ -247,8 +247,8 @@ class QueryEngine:
     # ------------------------------------------------------------------
 
     def _by_key(
-        self, artifact: "BaseArtifact", key: dict[str, Any], select: str
-    ) -> tuple["DuckDBPyConnection", tuple[Any, ...]]:
+        self, artifact: BaseArtifact, key: dict[str, Any], select: str
+    ) -> tuple[DuckDBPyConnection, tuple[Any, ...]]:
         primary_key = [str(col) for col in artifact.primary_key]
         if not primary_key:
             raise QueryError(f"Artifact {artifact.artifact_id} has no primary key.")
@@ -271,17 +271,17 @@ class QueryEngine:
         return result, row
 
     def key_row_by_key(
-        self, artifact: "BaseArtifact", key: dict[str, Any]
+        self, artifact: BaseArtifact, key: dict[str, Any]
     ) -> dict[str, Any]:
         result, row = self._by_key(artifact, key, select="*")
         return _record_from_row(_result_columns(result), row)
 
-    def position_by_key(self, artifact: "BaseArtifact", key: dict[str, Any]) -> int:
+    def position_by_key(self, artifact: BaseArtifact, key: dict[str, Any]) -> int:
         _, row = self._by_key(artifact, key, select="_position")
         return int(row[0])
 
     def key_row_by_position(
-        self, artifact: "BaseArtifact", position: int
+        self, artifact: BaseArtifact, position: int
     ) -> dict[str, Any]:
         sql = (
             f"SELECT * FROM {_parquet_dataset_expr(artifact.keys_dir)} "
@@ -293,17 +293,15 @@ class QueryEngine:
             raise IndexError(position)
         return _record_from_row(_result_columns(result), row)
 
-    def location_by_key(
-        self, artifact: "BaseArtifact", key: dict[str, Any]
-    ) -> Location:
+    def location_by_key(self, artifact: BaseArtifact, key: dict[str, Any]) -> Location:
         return Location.from_row(self.key_row_by_key(artifact, key))
 
-    def location_by_position(self, artifact: "BaseArtifact", position: int) -> Location:
+    def location_by_position(self, artifact: BaseArtifact, position: int) -> Location:
         return Location.from_row(self.key_row_by_position(artifact, int(position)))
 
     def _fetch_by_positions(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         positions: Sequence[int],
         *,
         select_exprs: Sequence[str],
@@ -343,7 +341,7 @@ class QueryEngine:
 
     def _fetch_by_keys(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         keys: Sequence[dict[str, Any]],
         *,
         select_exprs: Sequence[str],
@@ -389,7 +387,7 @@ class QueryEngine:
 
     def positions_by_keys(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         keys: Sequence[dict[str, Any]],
     ) -> list[int]:
         records = self._fetch_by_keys(
@@ -405,7 +403,7 @@ class QueryEngine:
 
     def key_rows_by_positions(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         positions: Sequence[int],
     ) -> list[dict[str, Any]]:
         primary_key = [str(col) for col in artifact.primary_key]
@@ -431,7 +429,7 @@ class QueryEngine:
 
     def locations_by_positions(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         positions: Sequence[int],
     ) -> list[Location]:
         records = self._fetch_by_positions(
@@ -451,7 +449,7 @@ class QueryEngine:
 
     def key_rows_by_keys(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         keys: Sequence[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         primary_key = [str(col) for col in artifact.primary_key]
@@ -477,7 +475,7 @@ class QueryEngine:
 
     def locations_by_keys(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         keys: Sequence[dict[str, Any]],
     ) -> list[Location]:
         records = self._fetch_by_keys(
@@ -497,7 +495,7 @@ class QueryEngine:
 
     def positions_where_keys(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         *,
         where: str | None = None,
         order_by: str | Sequence[str] | None = "_position",
@@ -515,7 +513,7 @@ class QueryEngine:
 
     def sample_positions_where(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         *,
         where: str,
         metadata_mode: MetadataMode,
@@ -643,9 +641,9 @@ class QueryEngine:
 
     def _lineage_paths_between(
         self,
-        descendant: "BaseArtifact",
-        ancestor: "BaseArtifact",
-    ) -> list[tuple["BaseArtifact", ...]]:
+        descendant: BaseArtifact,
+        ancestor: BaseArtifact,
+    ) -> list[tuple[BaseArtifact, ...]]:
         paths = lineage_paths_to_ancestor(self.project, descendant, ancestor)
         if not paths:
             raise QueryError(
@@ -655,7 +653,7 @@ class QueryEngine:
         return paths
 
     @staticmethod
-    def _path_crosses_rekey(path: Sequence["BaseArtifact"]) -> bool:
+    def _path_crosses_rekey(path: Sequence[BaseArtifact]) -> bool:
         return any(
             lineage_mode_for_artifact(artifact) == "rekeyed_key"
             for artifact in path[:-1]
@@ -663,8 +661,8 @@ class QueryEngine:
 
     def _requires_rekey_mapping(
         self,
-        descendant: "BaseArtifact",
-        ancestor: "BaseArtifact",
+        descendant: BaseArtifact,
+        ancestor: BaseArtifact,
     ) -> bool:
         return any(
             self._path_crosses_rekey(path)
@@ -673,7 +671,7 @@ class QueryEngine:
 
     def _mapping_sql_for_path(
         self,
-        path: Sequence["BaseArtifact"],
+        path: Sequence[BaseArtifact],
     ) -> str | None:
         """Return target-position -> source-position SQL for one lineage path.
 
@@ -755,8 +753,8 @@ class QueryEngine:
 
     def lineage_position_mapping_sql(
         self,
-        descendant: "BaseArtifact",
-        ancestor: "BaseArtifact",
+        descendant: BaseArtifact,
+        ancestor: BaseArtifact,
     ) -> str:
         """Return SQL mapping descendant positions to one ancestor's positions.
 
@@ -806,8 +804,8 @@ class QueryEngine:
 
     def map_descendant_positions_to_ancestor_positions(
         self,
-        descendant: "BaseArtifact",
-        ancestor: "BaseArtifact",
+        descendant: BaseArtifact,
+        ancestor: BaseArtifact,
         positions: Sequence[int],
     ) -> list[int]:
         """Resolve descendant positions to an ancestor, crossing rekeys safely."""
@@ -858,8 +856,8 @@ class QueryEngine:
 
     def map_left_positions_to_right_positions(
         self,
-        left_artifact: "BaseArtifact",
-        right_artifact: "BaseArtifact",
+        left_artifact: BaseArtifact,
+        right_artifact: BaseArtifact,
         left_positions: Sequence[int],
     ) -> list[int]:
         if not left_positions:
@@ -951,7 +949,7 @@ class QueryEngine:
         return _parquet_dataset_expr(Path(path))
 
     def _table_data_relation_sql(
-        self, artifact: "BaseArtifact"
+        self, artifact: BaseArtifact
     ) -> tuple[str, tuple[str, ...]] | None:
         if artifact.artifact_type != ArtifactType.TABLE:
             return None
@@ -966,7 +964,7 @@ class QueryEngine:
         return sql, columns
 
     def _jsonl_data_relation_sql(
-        self, artifact: "BaseArtifact"
+        self, artifact: BaseArtifact
     ) -> tuple[str, tuple[str, ...]] | None:
         if artifact.artifact_type != ArtifactType.JSONL:
             return None
@@ -999,10 +997,13 @@ class QueryEngine:
         ), columns
 
     def _data_relation_sql(
-        self, artifact: "BaseArtifact"
+        self, artifact: BaseArtifact
     ) -> tuple[str, tuple[str, ...]] | None:
         lineage = artifact.descriptor.get("lineage", {})
-        if isinstance(lineage, dict) and lineage.get("lineage_mode") in {"merged_key", "joined_key"}:
+        if isinstance(lineage, dict) and lineage.get("lineage_mode") in {
+            "merged_key",
+            "joined_key",
+        }:
             view = self.build_artifact_view_sql(
                 artifact,
                 metadata_mode="none",
@@ -1026,7 +1027,7 @@ class QueryEngine:
             return table_sql
         return self._jsonl_data_relation_sql(artifact)
 
-    def _local_metadata_relation_sql(self, artifact: "BaseArtifact") -> str | None:
+    def _local_metadata_relation_sql(self, artifact: BaseArtifact) -> str | None:
         return self._parquet_component_sql(getattr(artifact, "metadata_dir", None))
 
     # ------------------------------------------------------------------
@@ -1035,7 +1036,7 @@ class QueryEngine:
 
     def _metadata_join_specs(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         *,
         metadata_mode: MetadataMode,
     ) -> list[MetadataJoinSpec]:
@@ -1072,7 +1073,7 @@ class QueryEngine:
 
     def build_artifact_view_sql(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         *,
         metadata_mode: MetadataMode = "none",
         include_data: bool = True,
@@ -1166,7 +1167,9 @@ class QueryEngine:
                     )
                     ctes.append(f"data_raw AS (SELECT {raw_selected} FROM {data_sql})")
                     if self._requires_rekey_mapping(artifact, data_artifact):
-                        mapping_sql = self.lineage_position_mapping_sql(artifact, data_artifact)
+                        mapping_sql = self.lineage_position_mapping_sql(
+                            artifact, data_artifact
+                        )
                         missing_sql = (
                             "SELECT COUNT(*) FROM "
                             f"{_parquet_dataset_expr(artifact.keys_dir)} tk "
@@ -1280,7 +1283,9 @@ class QueryEngine:
                 metadata_select = ", ".join(metadata_select_parts)
 
                 if self._requires_rekey_mapping(artifact, source_artifact):
-                    mapping_sql = self.lineage_position_mapping_sql(artifact, source_artifact)
+                    mapping_sql = self.lineage_position_mapping_sql(
+                        artifact, source_artifact
+                    )
                     ctes.append(
                         f"{spec.alias} AS ("
                         "SELECT lm._target_position AS _position, "
@@ -1376,7 +1381,7 @@ class QueryEngine:
 
     def _build_joined_artifact_view_sql(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         *,
         metadata_mode: MetadataMode,
         include_data: bool,
@@ -1426,7 +1431,9 @@ class QueryEngine:
                 branch = self.build_artifact_view_sql(
                     basis, metadata_mode="none", include_data=True
                 )
-                data_columns = [col for col in branch.columns if col.namespace == "data"]
+                data_columns = [
+                    col for col in branch.columns if col.namespace == "data"
+                ]
                 selected_columns = [
                     col
                     for col in data_columns
@@ -1435,7 +1442,10 @@ class QueryEngine:
                 if not selected_columns:
                     continue
                 alias = f"jd{index}"
-                selected_names = [*current_pk, *[col.output_name for col in selected_columns]]
+                selected_names = [
+                    *current_pk,
+                    *[col.output_name for col in selected_columns],
+                ]
                 select_sql = ", ".join(
                     f"b.{quote_identifier(name)} AS {quote_identifier(name)}"
                     for name in selected_names
@@ -1460,7 +1470,9 @@ class QueryEngine:
 
         # Metadata follows ordinary lineage rules. joined_key traversal branches
         # through all bases and de-duplicates common upstream metadata artifacts.
-        metadata_specs = self._metadata_join_specs(artifact, metadata_mode=metadata_mode)
+        metadata_specs = self._metadata_join_specs(
+            artifact, metadata_mode=metadata_mode
+        )
         seen_metadata_aliases: set[str] = set()
         metadata_internal_names: dict[tuple[str, str], str] = {}
         for spec in metadata_specs:
@@ -1468,9 +1480,14 @@ class QueryEngine:
                 continue
             if spec.artifact_id == artifact.artifact_id:
                 selected = ", ".join(
-                    ["_position", *[quote_identifier(col) for col in spec.source_columns]]
+                    [
+                        "_position",
+                        *[quote_identifier(col) for col in spec.source_columns],
+                    ]
                 )
-                ctes.append(f"{spec.alias} AS (SELECT {selected} FROM {spec.metadata_sql})")
+                ctes.append(
+                    f"{spec.alias} AS (SELECT {selected} FROM {spec.metadata_sql})"
+                )
                 joins.append(f"LEFT JOIN {spec.alias} USING (_position)")
                 for col in spec.source_columns:
                     metadata_internal_names[(spec.alias, col)] = col
@@ -1487,7 +1504,9 @@ class QueryEngine:
                 metadata_select = ", ".join(metadata_select_parts)
 
                 if self._requires_rekey_mapping(artifact, source_artifact):
-                    mapping_sql = self.lineage_position_mapping_sql(artifact, source_artifact)
+                    mapping_sql = self.lineage_position_mapping_sql(
+                        artifact, source_artifact
+                    )
                     ctes.append(
                         f"{spec.alias} AS (SELECT lm._target_position AS _position, "
                         f"{metadata_select} FROM ({mapping_sql}) lm "
@@ -1550,8 +1569,12 @@ class QueryEngine:
             sql=sql,
             columns=view_columns,
             structural_columns=STRUCTURAL_COLUMNS,
-            key_columns=tuple(col.output_name for col in view_columns if col.namespace == "key"),
-            data_columns=tuple(col.output_name for col in view_columns if col.namespace == "data"),
+            key_columns=tuple(
+                col.output_name for col in view_columns if col.namespace == "key"
+            ),
+            data_columns=tuple(
+                col.output_name for col in view_columns if col.namespace == "data"
+            ),
             metadata_columns=tuple(
                 col.output_name for col in view_columns if col.namespace == "metadata"
             ),
@@ -1562,7 +1585,7 @@ class QueryEngine:
 
     def _build_merged_artifact_view_sql(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         *,
         metadata_mode: MetadataMode,
         include_data: bool,
@@ -1661,14 +1684,15 @@ class QueryEngine:
         if non_key_columns:
             branch_selects: list[str] = []
             for branch in branch_views:
-                selected_names = [*current_pk, *[col.output_name for col in non_key_columns]]
+                selected_names = [
+                    *current_pk,
+                    *[col.output_name for col in non_key_columns],
+                ]
                 selected_sql = ", ".join(
                     f"b.{quote_identifier(name)} AS {quote_identifier(name)}"
                     for name in selected_names
                 )
-                branch_selects.append(
-                    f"SELECT {selected_sql} FROM ({branch.sql}) b"
-                )
+                branch_selects.append(f"SELECT {selected_sql} FROM ({branch.sql}) b")
             ctes.append("resolved AS (" + " UNION ALL ".join(branch_selects) + ")")
             predicates = " AND ".join(
                 f"k.{quote_identifier(col)} = r.{quote_identifier(col)}"
@@ -1727,7 +1751,9 @@ class QueryEngine:
         # Type narrowing: _assign_view_output_names accepts dictionaries of
         # strings, while source_artifact_id is intentionally optional.
         raw_pending = [dict(item) for item in pending_columns]
-        view_columns, ambiguous_columns, mapping = _assign_view_output_names(raw_pending)  # type: ignore[arg-type]
+        view_columns, ambiguous_columns, mapping = _assign_view_output_names(
+            raw_pending
+        )  # type: ignore[arg-type]
         for column in view_columns:
             select_exprs.append(
                 f"{column.sql_expr} AS {quote_identifier(column.output_name)}"
@@ -1766,7 +1792,7 @@ class QueryEngine:
 
     def query_columns(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         *,
         metadata_mode: MetadataMode = "none",
     ) -> dict[str, Any]:
@@ -1890,7 +1916,7 @@ class QueryEngine:
 
     def _artifact_select_sql(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         *,
         key_columns: ColumnSelect,
         data_columns: ColumnSelect,
@@ -1973,7 +1999,7 @@ class QueryEngine:
 
     def artifact_query(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         *,
         key_columns: ColumnSelect = True,
         data_columns: ColumnSelect = True,
@@ -2017,7 +2043,7 @@ class QueryEngine:
 
     def artifact_query_batches(
         self,
-        artifact: "BaseArtifact",
+        artifact: BaseArtifact,
         *,
         key_columns: ColumnSelect = True,
         data_columns: ColumnSelect = True,
@@ -2118,7 +2144,7 @@ class QueryEngine:
 
     def project_sql(
         self,
-        artifacts: Sequence["BaseArtifact | str"],
+        artifacts: Sequence[BaseArtifact | str],
         sql: str,
     ) -> pd.DataFrame:
         """Run SQL against explicitly registered artifact views.

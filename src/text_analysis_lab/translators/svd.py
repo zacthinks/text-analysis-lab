@@ -12,8 +12,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import OperatorError, OperatorNotFittedError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -92,38 +92,81 @@ class SVD(BaseTranslator):
         return self.is_fitted
 
     def supports_resume(self, *, mode: TranslationMode, route: RunRoute) -> bool:
-        return route == "sequential" and mode in {"fit_translate", "translate"} or (mode == "translate" and route == "parallel")
+        return (
+            route == "sequential"
+            and mode in {"fit_translate", "translate"}
+            or (mode == "translate" and route == "parallel")
+        )
 
-    def output_specs(self, *, sources: Mapping[str, "BaseArtifact"], request: TranslationRequest):
+    def output_specs(
+        self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest
+    ):
         _ = request
         single_source(sources, name="SVD")
         specs: dict[str, OutputSpec] = {
-            DEFAULT_OUTPUT_LABEL: OutputSpec(artifact_type="dense_matrix", lineage_mode="preserved_key", basis_labels=DEFAULT_SOURCE_LABEL)
+            DEFAULT_OUTPUT_LABEL: OutputSpec(
+                artifact_type="dense_matrix",
+                lineage_mode="preserved_key",
+                basis_labels=DEFAULT_SOURCE_LABEL,
+            )
         }
         if not self.is_fitted:
-            specs[SVD_COMPONENTS_LABEL] = OutputSpec(artifact_type="dense_matrix", lineage_mode="new_key", basis_labels=DEFAULT_SOURCE_LABEL)
+            specs[SVD_COMPONENTS_LABEL] = OutputSpec(
+                artifact_type="dense_matrix",
+                lineage_mode="new_key",
+                basis_labels=DEFAULT_SOURCE_LABEL,
+            )
         return specs
 
-    def validate_operation_params(self, params: Mapping[str, Any], *, sources: Mapping[str, "BaseArtifact"], mode: TranslationMode) -> Mapping[str, Any]:
+    def validate_operation_params(
+        self,
+        params: Mapping[str, Any],
+        *,
+        sources: Mapping[str, BaseArtifact],
+        mode: TranslationMode,
+    ) -> Mapping[str, Any]:
         _ = sources, mode
         if params:
-            raise OperatorError(f"SVD does not accept operation parameters; got {sorted(params)}.")
+            raise OperatorError(
+                f"SVD does not accept operation parameters; got {sorted(params)}."
+            )
         return {}
 
-    def input_request(self, *, sources: Mapping[str, "BaseArtifact"], mode: TranslationMode, request: TranslationRequest) -> SourceRequest:
+    def input_request(
+        self,
+        *,
+        sources: Mapping[str, BaseArtifact],
+        mode: TranslationMode,
+        request: TranslationRequest,
+    ) -> SourceRequest:
         source = single_source(sources, name="SVD")
         if source.artifact_type.value not in {"sparse_matrix", "dense_matrix"}:
             raise OperatorError("SVD requires a sparse_matrix or dense_matrix source.")
-        self.source_features_ = establish_or_validate_features(self.source_features_, source.get_data_columns(), fitted=self.is_fitted, name="SVD")
+        self.source_features_ = establish_or_validate_features(
+            self.source_features_,
+            source.get_data_columns(),
+            fitted=self.is_fitted,
+            name="SVD",
+        )
         return SourceRequest(
             artifact_type=("sparse_matrix", "dense_matrix"),
             mode="full_artifact" if mode == "fit_translate" else "batches",
             columns=ColumnRequest(keys=True, data=True, metadata=False),
-            batch_size=None if mode == "fit_translate" else (request.batch_size or 10_000),
-            form="native", metadata_mode="none", include_position=False,
+            batch_size=None
+            if mode == "fit_translate"
+            else (request.batch_size or 10_000),
+            form="native",
+            metadata_mode="none",
+            include_position=False,
         )
 
-    def translate_batch(self, inputs: Mapping[str, InputBatch], *, mode: TranslationMode, request: TranslationRequest) -> BatchResult:
+    def translate_batch(
+        self,
+        inputs: Mapping[str, InputBatch],
+        *,
+        mode: TranslationMode,
+        request: TranslationRequest,
+    ) -> BatchResult:
         _ = request
         packet = single_input(inputs, name="SVD")
         info, matrix, key_columns = native_matrix_packet(packet, name="SVD")
@@ -135,15 +178,28 @@ class SVD(BaseTranslator):
             reduced = estimator.fit_transform(matrix)
             self._estimator = estimator
             components = np.asarray(estimator.components_, dtype=float)
-            component_meta = pd.DataFrame({
-                "explained_variance": np.asarray(estimator.explained_variance_, dtype=float),
-                "explained_variance_ratio": np.asarray(estimator.explained_variance_ratio_, dtype=float),
-                "singular_value": np.asarray(estimator.singular_values_, dtype=float),
-            })
+            component_meta = pd.DataFrame(
+                {
+                    "explained_variance": np.asarray(
+                        estimator.explained_variance_, dtype=float
+                    ),
+                    "explained_variance_ratio": np.asarray(
+                        estimator.explained_variance_ratio_, dtype=float
+                    ),
+                    "singular_value": np.asarray(
+                        estimator.singular_values_, dtype=float
+                    ),
+                }
+            )
             outputs[SVD_COMPONENTS_LABEL] = {
-                "keys": pd.DataFrame({"component_id": np.arange(components.shape[0], dtype=np.int64)}),
+                "keys": pd.DataFrame(
+                    {"component_id": np.arange(components.shape[0], dtype=np.int64)}
+                ),
                 "metadata": component_meta,
-                "data": {"values": components, "columns": list(self._require_features())},
+                "data": {
+                    "values": components,
+                    "columns": list(self._require_features()),
+                },
             }
         elif mode == "translate":
             reduced = self._require_estimator().transform(matrix)
@@ -151,7 +207,10 @@ class SVD(BaseTranslator):
             raise OperatorError(f"Unsupported SVD mode {mode!r}.")
         outputs[DEFAULT_OUTPUT_LABEL] = {
             "keys": key_frame(info, key_columns),
-            "data": {"values": np.asarray(reduced), "columns": _component_columns(self.n_components)},
+            "data": {
+                "values": np.asarray(reduced),
+                "columns": _component_columns(self.n_components),
+            },
         }
         return BatchResult(outputs=outputs)
 
@@ -170,15 +229,26 @@ class SVD(BaseTranslator):
         _ = query
         return input_kind == "matrix" and self.is_fitted
 
-    def handle_batch_result(self, result: BatchResult, *, batch_index: int, mode: TranslationMode, request: TranslationRequest) -> OutputMap | None:
+    def handle_batch_result(
+        self,
+        result: BatchResult,
+        *,
+        batch_index: int,
+        mode: TranslationMode,
+        request: TranslationRequest,
+    ) -> OutputMap | None:
         _ = batch_index, mode, request
         return result.outputs
 
-    def finalize_translation(self, *, mode: TranslationMode, request: TranslationRequest) -> OutputMap | None:
+    def finalize_translation(
+        self, *, mode: TranslationMode, request: TranslationRequest
+    ) -> OutputMap | None:
         _ = mode, request
         return None
 
-    def make_translate_worker(self, *, mode: TranslationMode, request: TranslationRequest) -> "SVD":
+    def make_translate_worker(
+        self, *, mode: TranslationMode, request: TranslationRequest
+    ) -> SVD:
         _ = request
         if mode != "translate" or not self.is_fitted:
             raise OperatorNotFittedError("Parallel SVD workers require a fitted model.")
@@ -188,19 +258,29 @@ class SVD(BaseTranslator):
 
     def to_json_state(self) -> dict[str, Any]:
         return {
-            "n_components": self.n_components, "algorithm": self.algorithm, "n_iter": self.n_iter,
-            "random_state": self.random_state, "n_oversamples": self.n_oversamples,
+            "n_components": self.n_components,
+            "algorithm": self.algorithm,
+            "n_iter": self.n_iter,
+            "random_state": self.random_state,
+            "n_oversamples": self.n_oversamples,
             "power_iteration_normalizer": self.power_iteration_normalizer,
-            "source_features": None if self.source_features_ is None else list(self.source_features_),
+            "source_features": None
+            if self.source_features_ is None
+            else list(self.source_features_),
             "is_fitted": self.is_fitted,
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "SVD":
+    def from_json_state(cls, state: Mapping[str, Any]) -> SVD:
         obj = cls(
-            n_components=int(state.get("n_components", 2)), algorithm=str(state.get("algorithm", "randomized")),
-            n_iter=int(state.get("n_iter", 5)), random_state=state.get("random_state", 42),
-            n_oversamples=int(state.get("n_oversamples", 10)), power_iteration_normalizer=str(state.get("power_iteration_normalizer", "auto")),
+            n_components=int(state.get("n_components", 2)),
+            algorithm=str(state.get("algorithm", "randomized")),
+            n_iter=int(state.get("n_iter", 5)),
+            random_state=state.get("random_state", 42),
+            n_oversamples=int(state.get("n_oversamples", 10)),
+            power_iteration_normalizer=str(
+                state.get("power_iteration_normalizer", "auto")
+            ),
         )
         raw = state.get("source_features")
         if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
@@ -222,24 +302,50 @@ class SVD(BaseTranslator):
                 raise OperatorError("SVD asset manifest has invalid estimator_file.")
             self._estimator = load_estimator(assets_dir / filename)
 
-    def save_intermediate_state(self, intermediate_dir: Path, *, operator_id: str, mode: TranslationMode, route: RunRoute) -> None:
+    def save_intermediate_state(
+        self,
+        intermediate_dir: Path,
+        *,
+        operator_id: str,
+        mode: TranslationMode,
+        route: RunRoute,
+    ) -> None:
         _ = mode, route
         intermediate_dir.mkdir(parents=True, exist_ok=True)
-        state = self.to_json_state(); state["assets"] = dict(self.save_assets(intermediate_dir)); state["operator_id"] = operator_id
-        (intermediate_dir / "state.json").write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+        state = self.to_json_state()
+        state["assets"] = dict(self.save_assets(intermediate_dir))
+        state["operator_id"] = operator_id
+        (intermediate_dir / "state.json").write_text(
+            json.dumps(state, indent=2, sort_keys=True), encoding="utf-8"
+        )
 
     @classmethod
-    def load_intermediate_state(cls, intermediate_dir: Path, *, operator_id: str, mode: TranslationMode, route: RunRoute) -> "SVD":
+    def load_intermediate_state(
+        cls,
+        intermediate_dir: Path,
+        *,
+        operator_id: str,
+        mode: TranslationMode,
+        route: RunRoute,
+    ) -> SVD:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
-        obj = cls.from_json_state(state); obj.load_assets(intermediate_dir, state.get("assets", {})); obj.operator_id = operator_id
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
+        obj = cls.from_json_state(state)
+        obj.load_assets(intermediate_dir, state.get("assets", {}))
+        obj.operator_id = operator_id
         return obj
 
     def _make_estimator(self):
         from sklearn.decomposition import TruncatedSVD
+
         return TruncatedSVD(
-            n_components=self.n_components, algorithm=self.algorithm, n_iter=self.n_iter,
-            random_state=self.random_state, n_oversamples=self.n_oversamples,
+            n_components=self.n_components,
+            algorithm=self.algorithm,
+            n_iter=self.n_iter,
+            random_state=self.random_state,
+            n_oversamples=self.n_oversamples,
             power_iteration_normalizer=self.power_iteration_normalizer,
         )
 

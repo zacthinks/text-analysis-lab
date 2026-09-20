@@ -25,13 +25,22 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 
-from text_analysis_lab.core.errors import ArtifactError, MetadataAggregationError, QueryError
+from text_analysis_lab.core.errors import (
+    ArtifactError,
+    MetadataAggregationError,
+    QueryError,
+)
 from text_analysis_lab.core.ids import next_id
 from text_analysis_lab.core.lineage import validate_primary_key_relationship
 from text_analysis_lab.core.metadata_aggregation import normalize_aggregation_spec
-from text_analysis_lab.core.operator import BaseOperator, OutputSpec, TranslationRequest, validate_output_label
+from text_analysis_lab.core.operator import (
+    BaseOperator,
+    OutputSpec,
+    TranslationRequest,
+    validate_output_label,
+)
 from text_analysis_lab.core.query import quote_identifier
-from text_analysis_lab.core.types import ArtifactType, DEFAULT_OUTPUT_LABEL
+from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, ArtifactType
 from text_analysis_lab.core.writer import create_artifact_writer
 
 if TYPE_CHECKING:
@@ -153,7 +162,7 @@ class _OutputRule:
     is_literal: bool = False
     resolved_source_name: str | None = None
 
-    def resolved(self, source_name: str) -> "_OutputRule":
+    def resolved(self, source_name: str) -> _OutputRule:
         return _OutputRule(
             output_name=self.output_name,
             source_name=self.source_name,
@@ -189,21 +198,26 @@ class AggregateOperator(BaseOperator):
         self.retained_key = tuple(str(value) for value in retained_key)
         self.data_spec = _json_safe_spec(data_spec)
         self.metadata_spec = _json_safe_spec(metadata_spec)
-        self.legacy_aggregations = _json_safe_legacy_aggregations(legacy_aggregations or {})
+        self.legacy_aggregations = _json_safe_legacy_aggregations(
+            legacy_aggregations or {}
+        )
 
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
         if len(sources) != 1:
-            raise ArtifactError("AggregateOperator expects exactly one source artifact.")
+            raise ArtifactError(
+                "AggregateOperator expects exactly one source artifact."
+            )
         source = next(iter(sources.values()))
         artifact_type = (
             source.artifact_type.value
-            if source.artifact_type in {ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX}
+            if source.artifact_type
+            in {ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX}
             else ArtifactType.TABLE.value
         )
         return OutputSpec(
@@ -221,7 +235,7 @@ class AggregateOperator(BaseOperator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "AggregateOperator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> AggregateOperator:
         # Round-27-and-earlier snapshots stored only ``aggregations``.  Preserve
         # deserialization compatibility even though new calls use data/metadata.
         raw_legacy = state.get("legacy_aggregations", state.get("aggregations", {}))
@@ -234,8 +248,8 @@ class AggregateOperator(BaseOperator):
 
 
 def aggregate(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     *,
     to_key: str | Sequence[str],
     data: str | FieldAggregationSpec | None = None,
@@ -244,7 +258,7 @@ def aggregate(
     output_label: str = DEFAULT_OUTPUT_LABEL,
     batch_size: int = 10_000,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Aggregate an artifact to a retained primary-key prefix.
 
     ``to_key`` names the last primary-key field to retain, or supplies the
@@ -302,7 +316,10 @@ def aggregate(
             )
         data_rules = _normalize_field_spec(data, label="data")
         metadata_rules = _normalize_field_spec(metadata, label="metadata")
-    elif artifact.artifact_type in {ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX}:
+    elif artifact.artifact_type in {
+        ArtifactType.DENSE_MATRIX,
+        ArtifactType.SPARSE_MATRIX,
+    }:
         if not isinstance(data, str) or data not in _MATRIX_METHODS:
             raise ArtifactError(
                 "Matrix aggregation requires data='sum' or data='mean'; the reducer applies "
@@ -353,8 +370,8 @@ def aggregate(
 
 
 def _aggregate_relational(
-    project: "Project",
-    artifact: "BaseArtifact",
+    project: Project,
+    artifact: BaseArtifact,
     *,
     retained_key: tuple[str, ...],
     data_rules: Mapping[str, _OutputRule],
@@ -365,7 +382,7 @@ def _aggregate_relational(
     output_label: str,
     batch_size: int,
     memo: str | None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     label = validate_output_label(output_label)
 
     include_data = any(not rule.is_literal for rule in data_rules.values())
@@ -375,7 +392,9 @@ def _aggregate_relational(
         include_data=include_data,
     )
     resolved_data = _resolve_rule_sources(view, data_rules, namespace="data")
-    resolved_metadata = _resolve_rule_sources(view, metadata_rules, namespace="metadata")
+    resolved_metadata = _resolve_rule_sources(
+        view, metadata_rules, namespace="metadata"
+    )
 
     operator = AggregateOperator(
         retained_key=retained_key,
@@ -411,13 +430,17 @@ def _aggregate_relational(
         postprocess: dict[str, tuple[str, str]] = {}
 
         for output_name, rule in resolved_data.items():
-            expression, post_method = _rule_sql_expression(rule, source_order=source_order)
+            expression, post_method = _rule_sql_expression(
+                rule, source_order=source_order
+            )
             select_exprs.append(f"{expression} AS {quote_identifier(output_name)}")
             if post_method is not None:
                 postprocess[output_name] = (post_method, _concat_separator(rule))
 
         for output_name, rule in resolved_metadata.items():
-            expression, post_method = _rule_sql_expression(rule, source_order=source_order)
+            expression, post_method = _rule_sql_expression(
+                rule, source_order=source_order
+            )
             select_exprs.append(f"{expression} AS {quote_identifier(output_name)}")
             if post_method is not None:
                 postprocess[output_name] = (post_method, _concat_separator(rule))
@@ -477,8 +500,8 @@ def _aggregate_relational(
 
 
 def _aggregate_matrix(
-    project: "Project",
-    artifact: "BaseArtifact",
+    project: Project,
+    artifact: BaseArtifact,
     *,
     retained_key: tuple[str, ...],
     pooling: str,
@@ -487,7 +510,7 @@ def _aggregate_matrix(
     output_label: str,
     batch_size: int,
     memo: str | None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     if pooling not in _MATRIX_METHODS:
         raise ArtifactError(f"Unsupported matrix reducer {pooling!r}.")
 
@@ -565,13 +588,17 @@ def _aggregate_matrix(
 
         for group_start in range(0, n_groups, batch_size):
             group_stop = min(group_start + batch_size, n_groups)
-            groups = project.query.con.execute(
-                "SELECT * FROM "
-                + quote_identifier(group_table)
-                + f" WHERE __teal_group_order >= {group_start} "
-                + f"AND __teal_group_order < {group_stop} "
-                + "ORDER BY __teal_group_order"
-            ).fetchdf().reset_index(drop=True)
+            groups = (
+                project.query.con.execute(
+                    "SELECT * FROM "
+                    + quote_identifier(group_table)
+                    + f" WHERE __teal_group_order >= {group_start} "
+                    + f"AND __teal_group_order < {group_stop} "
+                    + "ORDER BY __teal_group_order"
+                )
+                .fetchdf()
+                .reset_index(drop=True)
+            )
             if groups.empty:
                 continue
 
@@ -653,8 +680,8 @@ def _aggregate_matrix(
 
 
 def _matrix_child_rows_for_groups(
-    project: "Project",
-    artifact: "BaseArtifact",
+    project: Project,
+    artifact: BaseArtifact,
     *,
     key_view_sql: str,
     retained_key: Sequence[str],
@@ -735,7 +762,9 @@ def _pool_matrix_by_complete_groups(
 
     values = np.asarray(matrix)
     if values.ndim != 2:
-        raise ArtifactError("Dense matrix aggregation requires a two-dimensional matrix.")
+        raise ArtifactError(
+            "Dense matrix aggregation requires a two-dimensional matrix."
+        )
     starts = np.concatenate(([0], np.cumsum(counts[:-1], dtype="int64")))
     pooled = np.add.reduceat(values, starts, axis=0)
     if pooling == "mean":
@@ -762,7 +791,9 @@ def _aggregate_group_metadata(
                 raise ArtifactError(
                     f"Missing source metadata for aggregate output {output_name!r}."
                 )
-            values = source_metadata[rule.resolved_source_name].iloc[start:stop].tolist()
+            values = (
+                source_metadata[rule.resolved_source_name].iloc[start:stop].tolist()
+            )
             row[output_name] = _reduce_ordered_values(
                 values,
                 rule.reducer,
@@ -780,13 +811,17 @@ def _normalize_field_spec(
     if spec is None:
         return {}
     if not isinstance(spec, Mapping):
-        raise TypeError(f"aggregate {label}= must be a mapping of output fields to reducers.")
+        raise TypeError(
+            f"aggregate {label}= must be a mapping of output fields to reducers."
+        )
 
     out: dict[str, _OutputRule] = {}
     for raw_output, value in spec.items():
         output_name = str(raw_output)
         if not output_name:
-            raise ValueError(f"aggregate {label} output names must be non-empty strings.")
+            raise ValueError(
+                f"aggregate {label} output names must be non-empty strings."
+            )
         if isinstance(value, LiteralValue):
             rule = _OutputRule(
                 output_name=output_name,
@@ -864,7 +899,9 @@ def _validate_output_names(
                 )
 
 
-def _resolve_rule_sources(view: Any, rules: Mapping[str, _OutputRule], *, namespace: str) -> dict[str, _OutputRule]:
+def _resolve_rule_sources(
+    view: Any, rules: Mapping[str, _OutputRule], *, namespace: str
+) -> dict[str, _OutputRule]:
     resolved: dict[str, _OutputRule] = {}
     columns = [column for column in view.columns if column.namespace == namespace]
     for output_name, rule in rules.items():
@@ -873,7 +910,9 @@ def _resolve_rule_sources(view: Any, rules: Mapping[str, _OutputRule], *, namesp
             continue
         assert rule.source_name is not None
         name = rule.source_name
-        exact_qualified = [column for column in columns if column.qualified_name == name]
+        exact_qualified = [
+            column for column in columns if column.qualified_name == name
+        ]
         if len(exact_qualified) == 1:
             resolved[output_name] = rule.resolved(exact_qualified[0].output_name)
             continue
@@ -897,7 +936,9 @@ def _resolve_rule_sources(view: Any, rules: Mapping[str, _OutputRule], *, namesp
     return resolved
 
 
-def _rule_sql_expression(rule: _OutputRule, *, source_order: str) -> tuple[str, str | None]:
+def _rule_sql_expression(
+    rule: _OutputRule, *, source_order: str
+) -> tuple[str, str | None]:
     if rule.is_literal:
         return _sql_literal(rule.literal_value), None
     if rule.resolved_source_name is None or rule.reducer is None:
@@ -948,7 +989,9 @@ def _as_list(value: Any) -> list[Any]:
     return [value]
 
 
-def _reduce_ordered_values(values: Sequence[Any], reducer: str | ConcatReducer | None) -> Any:
+def _reduce_ordered_values(
+    values: Sequence[Any], reducer: str | ConcatReducer | None
+) -> Any:
     if reducer is None:
         raise MetadataAggregationError("Aggregation reducer is missing.")
     method = "concat" if isinstance(reducer, ConcatReducer) else str(reducer)
@@ -989,7 +1032,9 @@ def _reduce_ordered_values(values: Sequence[Any], reducer: str | ConcatReducer |
         if not non_null:
             return pd.NA
         unique = _ordered_unique(non_null)
-        counts = [sum(_values_equal(value, other) for other in non_null) for value in unique]
+        counts = [
+            sum(_values_equal(value, other) for other in non_null) for value in unique
+        ]
         return unique[int(np.argmax(np.asarray(counts, dtype="int64")))]
     if method == "all_equal":
         return len(_ordered_unique(non_null)) <= 1
@@ -1032,7 +1077,9 @@ def _is_null(value: Any) -> bool:
     return False
 
 
-def _resolve_retained_key(source_pk: Sequence[str], to_key: str | Sequence[str]) -> tuple[str, ...]:
+def _resolve_retained_key(
+    source_pk: Sequence[str], to_key: str | Sequence[str]
+) -> tuple[str, ...]:
     source = tuple(str(value) for value in source_pk)
     if not source:
         raise ArtifactError("aggregate source has no primary key.")
@@ -1146,7 +1193,9 @@ def _json_safe_legacy_aggregations(value: Mapping[str, Any]) -> dict[str, Any]:
             out[key] = rule
         elif isinstance(rule, Mapping):
             out[key] = {str(k): str(v) for k, v in rule.items()}
-        elif isinstance(rule, Sequence) and not isinstance(rule, (str, bytes, bytearray)):
+        elif isinstance(rule, Sequence) and not isinstance(
+            rule, (str, bytes, bytearray)
+        ):
             out[key] = [str(item) for item in rule]
         else:
             raise TypeError(
@@ -1157,8 +1206,8 @@ def _json_safe_legacy_aggregations(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _start_operation(
-    project: "Project",
-    artifact: "BaseArtifact",
+    project: Project,
+    artifact: BaseArtifact,
     *,
     operator: AggregateOperator,
     output_artifact_type: ArtifactType,
@@ -1176,7 +1225,9 @@ def _start_operation(
         snapshot_status="pending",
     )
     try:
-        operator.save_to_dir(project.storage.operator_dir(operator_id), operator_id=operator_id)
+        operator.save_to_dir(
+            project.storage.operator_dir(operator_id), operator_id=operator_id
+        )
         project.catalog.mark_operator_serialized(operator_id)
     except Exception:
         project.catalog.mark_operator_snapshot_failed(operator_id)
@@ -1202,7 +1253,9 @@ def _start_operation(
         status="incomplete",
         basis_artifact_ids=(artifact.artifact_id,),
     )
-    project.catalog.add_operation_output(operation_id, output_label, artifact_id, ordinal=0)
+    project.catalog.add_operation_output(
+        operation_id, output_label, artifact_id, ordinal=0
+    )
     writer = create_artifact_writer(
         artifact_type=output_artifact_type,
         artifact_dir=project.storage.artifact_dir(artifact_id),
@@ -1233,7 +1286,9 @@ def _start_operation(
     }
     _write_descriptor(operation_dir, descriptor)
     if memo is not None:
-        project.catalog.add_memo(target_type="operation", target_id=operation_id, body=memo)
+        project.catalog.add_memo(
+            target_type="operation", target_id=operation_id, body=memo
+        )
 
     return {
         "operator_id": operator_id,
@@ -1246,12 +1301,12 @@ def _start_operation(
 
 
 def _finish_operation(
-    project: "Project",
-    artifact: "BaseArtifact",
+    project: Project,
+    artifact: BaseArtifact,
     *,
     retained_key: Sequence[str],
     operation: Mapping[str, Any],
-) -> "BaseArtifact":
+) -> BaseArtifact:
     writer = operation["writer"]
     writer.finalize()
     validate_primary_key_relationship(
@@ -1272,7 +1327,7 @@ def _finish_operation(
 
 
 def _fail_operation(
-    project: "Project",
+    project: Project,
     *,
     operation: Mapping[str, Any],
     exc: BaseException,

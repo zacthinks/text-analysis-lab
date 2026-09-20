@@ -9,7 +9,11 @@ import pytest
 pytest.importorskip("duckdb")
 
 import text_analysis_lab as teal
-from text_analysis_lab.translators import CountVectorizer, FeatureTrimmer, MatrixTranspose
+from text_analysis_lab.translators import (
+    CountVectorizer,
+    FeatureTrimmer,
+    MatrixTranspose,
+)
 
 
 def _build_count_matrix(tmp_path: Path):
@@ -76,7 +80,9 @@ def test_feature_subset_is_lazy_positional_view_and_chains(tmp_path: Path) -> No
         project.close()
 
 
-def test_feature_trimmer_outputs_lazy_feature_view_and_replays_by_width(tmp_path: Path) -> None:
+def test_feature_trimmer_outputs_lazy_feature_view_and_replays_by_width(
+    tmp_path: Path,
+) -> None:
     project, counts = _build_count_matrix(tmp_path)
     try:
         trimmer = FeatureTrimmer(min_df=2)
@@ -103,7 +109,9 @@ def test_feature_trimmer_outputs_lazy_feature_view_and_replays_by_width(tmp_path
         assert restored.source_width_ == 4
         assert restored.kept_indices_ == (0, 1, 3)
 
-        replayed = reopened.translate(restored, reopened.get_artifact("counts"))["output"]
+        replayed = reopened.translate(restored, reopened.get_artifact("counts"))[
+            "output"
+        ]
         assert replayed.components.get("data") is None
         assert replayed.get_data_columns() == ["alpha", "beta", "gamma"]
     finally:

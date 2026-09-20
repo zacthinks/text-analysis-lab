@@ -17,14 +17,20 @@ _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9“\"'])")
 
 
 def _load_articles() -> pd.DataFrame:
-    rows = [json.loads(line) for line in ARTICLES_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows = [
+        json.loads(line)
+        for line in ARTICLES_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     return pd.DataFrame(rows).sort_values("article_id").reset_index(drop=True)
 
 
 def _sentence_frame(articles: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for article in articles.to_dict("records"):
-        paragraphs = [p.strip() for p in str(article["text"]).split("\n\n") if p.strip()]
+        paragraphs = [
+            p.strip() for p in str(article["text"]).split("\n\n") if p.strip()
+        ]
         for paragraph_id, paragraph in enumerate(paragraphs):
             sentences = [s.strip() for s in _SENTENCE_RE.split(paragraph) if s.strip()]
             for sentence_id, sentence in enumerate(sentences):
@@ -45,12 +51,20 @@ def test_wikinews_fixture_is_frozen_and_structurally_realistic() -> None:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
     assert len(articles) == manifest["article_count"] == 15
-    assert articles["article_id"].astype(int).tolist() == manifest["article_ids"] == list(range(1, 16))
+    assert (
+        articles["article_id"].astype(int).tolist()
+        == manifest["article_ids"]
+        == list(range(1, 16))
+    )
     assert len(sentences) == manifest["sentence_count"] == 93
-    assert sum(manifest["per_article"][str(i)]["paragraphs"] for i in range(1, 16)) == manifest["paragraph_count"] == 39
+    assert (
+        sum(manifest["per_article"][str(i)]["paragraphs"] for i in range(1, 16))
+        == manifest["paragraph_count"]
+        == 39
+    )
     assert articles["source"].eq("Wikinews").all()
     assert articles["license"].eq("CC BY 4.0").all()
-    assert articles["excerpted"].eq(True).all()  # noqa: E712 - explicit fixture invariant
+    assert articles["excerpted"].eq(True).all()
     assert articles["source_url"].str.startswith("https://en.wikinews.org/wiki/").all()
     assert articles["topic_group"].nunique() >= 5
     assert articles["region_group"].nunique() >= 6
@@ -59,7 +73,9 @@ def test_wikinews_fixture_is_frozen_and_structurally_realistic() -> None:
     # different sentence counts and paragraphs have different sentence counts.
     per_article_sentence_counts = sentences.groupby("article_id").size()
     assert per_article_sentence_counts.nunique() > 1
-    per_paragraph_sentence_counts = sentences.groupby(["article_id", "paragraph_id"]).size()
+    per_paragraph_sentence_counts = sentences.groupby(
+        ["article_id", "paragraph_id"]
+    ).size()
     assert per_paragraph_sentence_counts.nunique() > 1
 
 
@@ -123,7 +139,9 @@ def _seed_wikinews_project(project: teal.Project):
         label="articles",
         keys=articles[["article_id"]],
         data=articles[["title", "text"]],
-        metadata=articles[["published_date", "topic_group", "region_group", "source_url", "license"]],
+        metadata=articles[
+            ["published_date", "topic_group", "region_group", "source_url", "license"]
+        ],
         lineage_mode="new_key",
         batch_size=4,
     )
@@ -152,7 +170,10 @@ def _key_tuples(artifact) -> list[tuple[int, ...]]:
         include_position=True,
         order_by="_position",
     )
-    return [tuple(int(row[col]) for col in artifact.primary_key) for _, row in frame.iterrows()]
+    return [
+        tuple(int(row[col]) for col in artifact.primary_key)
+        for _, row in frame.iterrows()
+    ]
 
 
 def test_wikinews_query_lineage_context_kwic_sql_and_reopen(tmp_path: Path) -> None:
@@ -160,7 +181,9 @@ def test_wikinews_query_lineage_context_kwic_sql_and_reopen(tmp_path: Path) -> N
     project_path = tmp_path / "wikinews_project"
     project = teal.Project.create(project_path, name="wikinews_golden")
     try:
-        articles_artifact, sentences_artifact, articles, sentences = _seed_wikinews_project(project)
+        articles_artifact, sentences_artifact, articles, sentences = (
+            _seed_wikinews_project(project)
+        )
 
         # Extended-key metadata should bubble from article rows to their sentences.
         sample = sentences_artifact.query(
@@ -172,28 +195,40 @@ def test_wikinews_query_lineage_context_kwic_sql_and_reopen(tmp_path: Path) -> N
             limit=12,
             form="table",
         )
-        assert {"article_id", "paragraph_id", "sentence_id", "sentence_text"}.issubset(sample.columns)
-        assert {"published_date", "topic_group", "region_group"}.issubset(sample.columns)
+        assert {"article_id", "paragraph_id", "sentence_id", "sentence_text"}.issubset(
+            sample.columns
+        )
+        assert {"published_date", "topic_group", "region_group"}.issubset(
+            sample.columns
+        )
         first_article = articles.iloc[0]
-        assert set(sample.loc[sample["article_id"] == 1, "published_date"]) == {first_article["published_date"]}
-        assert set(sample.loc[sample["article_id"] == 1, "topic_group"]) == {first_article["topic_group"]}
+        assert set(sample.loc[sample["article_id"] == 1, "published_date"]) == {
+            first_article["published_date"]
+        }
+        assert set(sample.loc[sample["article_id"] == 1, "topic_group"]) == {
+            first_article["topic_group"]
+        }
 
         # Context is deliberately position-based. The primary keys make paragraph
         # and article boundary crossings directly visible without dummy rows.
         first_of_second_paragraph = tuple(
-            sentences.loc[(sentences["article_id"] == 1) & (sentences["paragraph_id"] == 1)].iloc[0][
-                ["article_id", "paragraph_id", "sentence_id"]
-            ].astype(int)
+            sentences.loc[
+                (sentences["article_id"] == 1) & (sentences["paragraph_id"] == 1)
+            ]
+            .iloc[0][["article_id", "paragraph_id", "sentence_id"]]
+            .astype(int)
         )
-        context = sentences_artifact.get_context(first_of_second_paragraph, before=1, after=1)
+        context = sentences_artifact.get_context(
+            first_of_second_paragraph, before=1, after=1
+        )
         assert context["article_id"].astype(int).tolist() == [1, 1, 1]
         assert context["paragraph_id"].astype(int).tolist()[0] == 0
         assert context["paragraph_id"].astype(int).tolist()[1] == 1
 
         first_article_2 = tuple(
-            sentences.loc[sentences["article_id"] == 2].iloc[0][
-                ["article_id", "paragraph_id", "sentence_id"]
-            ].astype(int)
+            sentences.loc[sentences["article_id"] == 2]
+            .iloc[0][["article_id", "paragraph_id", "sentence_id"]]
+            .astype(int)
         )
         previous = sentences_artifact.get_previous(first_article_2, n=1)
         assert int(previous.iloc[0]["article_id"]) == 1
@@ -218,7 +253,11 @@ def test_wikinews_query_lineage_context_kwic_sql_and_reopen(tmp_path: Path) -> N
 
         summary = teal.analysis.summarize(sentences_artifact)
         assert summary.n_rows == len(sentences) == 93
-        assert tuple(summary.primary_key) == ("article_id", "paragraph_id", "sentence_id")
+        assert tuple(summary.primary_key) == (
+            "article_id",
+            "paragraph_id",
+            "sentence_id",
+        )
     finally:
         project.close()
 
@@ -229,13 +268,17 @@ def test_wikinews_query_lineage_context_kwic_sql_and_reopen(tmp_path: Path) -> N
         assert reopened_sentences.n_rows == 93
         assert _key_tuples(reopened_sentences) == [
             tuple(map(int, row))
-            for row in sentences[["article_id", "paragraph_id", "sentence_id"]].itertuples(index=False, name=None)
+            for row in sentences[
+                ["article_id", "paragraph_id", "sentence_id"]
+            ].itertuples(index=False, name=None)
         ]
     finally:
         reopened.close()
 
 
-def test_wikinews_split_is_reproducible_exhaustive_and_stratified(tmp_path: Path) -> None:
+def test_wikinews_split_is_reproducible_exhaustive_and_stratified(
+    tmp_path: Path,
+) -> None:
     _external_modules()
     project = teal.Project.create(tmp_path / "project", name="wikinews_split")
     try:
@@ -270,7 +313,9 @@ def test_wikinews_split_is_reproducible_exhaustive_and_stratified(tmp_path: Path
         # in the combined split exactly as in the source.
         source_topics = articles.set_index("article_id")["topic_group"].to_dict()
         combined = list(explore_a | confirm_a)
-        assert sorted(source_topics[i] for i in combined) == sorted(articles["topic_group"].tolist())
+        assert sorted(source_topics[i] for i in combined) == sorted(
+            articles["topic_group"].tolist()
+        )
     finally:
         project.close()
 
@@ -284,8 +329,7 @@ def test_wikinews_parallel_subset_matches_sequential(tmp_path: Path) -> None:
         _, sentences_artifact, _, _ = _seed_wikinews_project(project)
         rule_path = tmp_path / "keep_politics.py"
         rule_path.write_text(
-            "def keep(packet):\n"
-            "    return packet['topic_group'] == 'politics'\n",
+            "def keep(packet):\n    return packet['topic_group'] == 'politics'\n",
             encoding="utf-8",
         )
 
@@ -364,8 +408,10 @@ def test_wikinews_parallel_subset_fail_reopen_resume(tmp_path: Path) -> None:
         actual = _key_tuples(resumed)
         expected = [
             tuple(map(int, row))
-            for row in sentences.loc[sentences["article_id"] % 2 == 1, ["article_id", "paragraph_id", "sentence_id"]]
-            .itertuples(index=False, name=None)
+            for row in sentences.loc[
+                sentences["article_id"] % 2 == 1,
+                ["article_id", "paragraph_id", "sentence_id"],
+            ].itertuples(index=False, name=None)
         ]
         assert actual == expected
 
@@ -373,7 +419,12 @@ def test_wikinews_parallel_subset_fail_reopen_resume(tmp_path: Path) -> None:
 
         plan_path = project.storage.operation_dir(operation_id) / "plan.sqlite"
         with sqlite3.connect(plan_path) as con:
-            statuses = [row[0] for row in con.execute("SELECT status FROM plan_units ORDER BY unit_index")]
+            statuses = [
+                row[0]
+                for row in con.execute(
+                    "SELECT status FROM plan_units ORDER BY unit_index"
+                )
+            ]
         assert statuses and set(statuses) == {"complete"}
     finally:
         project.close()

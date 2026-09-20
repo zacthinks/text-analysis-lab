@@ -69,7 +69,9 @@ def test_sparse_matrix_pooling_is_group_safe_and_stays_sparse():
         np.array([[1, 1, 2], [5, 3, 2]], dtype=float)
     )
 
-    meaned = _pool_matrix_by_complete_groups(matrix, group_counts=counts, pooling="mean")
+    meaned = _pool_matrix_by_complete_groups(
+        matrix, group_counts=counts, pooling="mean"
+    )
     assert sparse.issparse(meaned)
     assert meaned.toarray() == pytest.approx(
         np.array([[0.5, 0.5, 1.0], [5 / 3, 1.0, 2 / 3]], dtype=float)

@@ -81,7 +81,13 @@ def test_collapse_runs_gapped_keys_aggregates_data_and_metadata(tmp_path: Path) 
             ),
             metadata=pd.DataFrame(
                 {
-                    "speaker_role": ["child", "child", "interlocutor", "interlocutor", "child"],
+                    "speaker_role": [
+                        "child",
+                        "child",
+                        "interlocutor",
+                        "interlocutor",
+                        "child",
+                    ],
                     "note": ["n1", "n2", "n3", "n4", "n5"],
                 }
             ),
@@ -125,7 +131,9 @@ def test_collapse_runs_gapped_keys_aggregates_data_and_metadata(tmp_path: Path) 
         project.close()
 
 
-def test_collapse_runs_permits_nonmonotonic_keys_and_uses_leaf_range_semantics(tmp_path: Path) -> None:
+def test_collapse_runs_permits_nonmonotonic_keys_and_uses_leaf_range_semantics(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="collapse_nonmonotonic")
     try:
         source = _register_table(
@@ -156,7 +164,9 @@ def test_collapse_runs_permits_nonmonotonic_keys_and_uses_leaf_range_semantics(t
         project.close()
 
 
-def test_collapse_runs_span_resolves_only_against_immediate_subset_basis(tmp_path: Path) -> None:
+def test_collapse_runs_span_resolves_only_against_immediate_subset_basis(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="collapse_subset_basis")
     try:
         source = _register_table(
@@ -174,14 +184,18 @@ def test_collapse_runs_span_resolves_only_against_immediate_subset_basis(tmp_pat
             output_label="collapsed",
         )
         frame = _frame(collapsed, metadata_mode="local")
-        assert frame[["turn_id_start", "turn_id_end"]].astype(int).values.tolist() == [[0, 2]]
+        assert frame[["turn_id_start", "turn_id_end"]].astype(int).values.tolist() == [
+            [0, 2]
+        ]
         assert frame["text"].tolist() == ["zero two"]
         assert frame["n_rows"].astype(int).tolist() == [2]
     finally:
         project.close()
 
 
-def test_collapse_runs_coarser_metadata_bubbles_but_leaf_metadata_requires_aggregation(tmp_path: Path) -> None:
+def test_collapse_runs_coarser_metadata_bubbles_but_leaf_metadata_requires_aggregation(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="collapse_lineage")
     try:
         docs = _register_table(
@@ -224,7 +238,9 @@ def test_collapse_runs_coarser_metadata_bubbles_but_leaf_metadata_requires_aggre
         project.close()
 
 
-def test_collapse_runs_context_navigation_is_positional_and_atomic_context_uses_span_range(tmp_path: Path) -> None:
+def test_collapse_runs_context_navigation_is_positional_and_atomic_context_uses_span_range(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="collapse_context")
     try:
         source = _register_table(
@@ -243,8 +259,12 @@ def test_collapse_runs_context_navigation_is_positional_and_atomic_context_uses_
 
         previous = collapsed.get_previous(middle, n=1, data_columns=False)
         following = collapsed.get_next(middle, n=1, data_columns=False)
-        assert previous[["turn_id_start", "turn_id_end"]].astype(int).values.tolist() == [[1, 3]]
-        assert following[["turn_id_start", "turn_id_end"]].astype(int).values.tolist() == [[12, 12]]
+        assert previous[["turn_id_start", "turn_id_end"]].astype(
+            int
+        ).values.tolist() == [[1, 3]]
+        assert following[["turn_id_start", "turn_id_end"]].astype(
+            int
+        ).values.tolist() == [[12, 12]]
 
         atomic = collapsed.get_context(
             middle,
@@ -327,7 +347,9 @@ def test_collapse_runs_empty_artifact_preserves_span_schema(tmp_path: Path) -> N
         project.close()
 
 
-def test_collapse_runs_rejects_invalid_by_and_duplicate_local_output(tmp_path: Path) -> None:
+def test_collapse_runs_rejects_invalid_by_and_duplicate_local_output(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="collapse_validation")
     try:
         source = _register_table(

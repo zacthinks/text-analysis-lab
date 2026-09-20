@@ -117,7 +117,9 @@ def test_unit6_teal_only_vertical_close_reopen(tmp_path: Path, monkeypatch) -> N
             pd.DataFrame({"row_id": t_rows[:3], "label": [1, 0, 1]}),
             data_fields=["label"],
         )
-        assert _query(L_T, ["label"])["row_id"].astype(int).tolist() == sorted(t_rows[:3])
+        assert _query(L_T, ["label"])["row_id"].astype(int).tolist() == sorted(
+            t_rows[:3]
+        )
         with pytest.raises(ArtifactError, match="not present in source"):
             project.from_keyed_frame(
                 T,
@@ -128,7 +130,9 @@ def test_unit6_teal_only_vertical_close_reopen(tmp_path: Path, monkeypatch) -> N
         with pytest.raises(ArtifactError, match="duplicate primary keys"):
             project.from_keyed_frame(
                 T,
-                pd.DataFrame({"row_id": [duplicate_key, duplicate_key], "label": [0, 1]}),
+                pd.DataFrame(
+                    {"row_id": [duplicate_key, duplicate_key], "label": [0, 1]}
+                ),
                 data_fields=["label"],
             )
         with pytest.raises(ArtifactError, match="exactly equal source"):
@@ -178,8 +182,12 @@ def test_unit6_teal_only_vertical_close_reopen(tmp_path: Path, monkeypatch) -> N
                     "data": pd.DataFrame(
                         {
                             "length": packet["data"]["text"].str.len().astype(float),
-                            "cold": packet["data"]["text"].str.contains("cold", case=False).astype(float),
-                            "temperature": packet["data"]["text"].str.contains("temperature", case=False).astype(float),
+                            "cold": packet["data"]["text"]
+                            .str.contains("cold", case=False)
+                            .astype(float),
+                            "temperature": packet["data"]["text"]
+                            .str.contains("temperature", case=False)
+                            .astype(float),
                         }
                     )
                 }
@@ -199,10 +207,17 @@ def test_unit6_teal_only_vertical_close_reopen(tmp_path: Path, monkeypatch) -> N
 
         # Independently code A; answers are based only on A's text, not predictions.
         a_order = _query(A, False)["row_id"].astype(int).tolist()
-        text_by_key = dict(zip(_query(F, ["text"])["row_id"], _query(F, ["text"])["text"], strict=True))
+        text_by_key = dict(
+            zip(_query(F, ["text"])["row_id"], _query(F, ["text"])["text"], strict=True)
+        )
         answers = iter(
             [
-                "1" if ("cold" in text_by_key[key].lower() or "temperature" in text_by_key[key].lower()) else "0"
+                "1"
+                if (
+                    "cold" in text_by_key[key].lower()
+                    or "temperature" in text_by_key[key].lower()
+                )
+                else "0"
                 for key in a_order
             ]
         )
@@ -271,7 +286,9 @@ def test_unit6_teal_only_vertical_close_reopen(tmp_path: Path, monkeypatch) -> N
         reopened.close()
 
 
-def test_binary_code_progress_survives_real_project_close_reopen(tmp_path: Path, monkeypatch) -> None:
+def test_binary_code_progress_survives_real_project_close_reopen(
+    tmp_path: Path, monkeypatch
+) -> None:
     project_path = tmp_path / "binary_resume_project"
     project = teal.Project.create(project_path, name="binary_resume")
     try:
@@ -326,9 +343,12 @@ def test_binary_code_progress_survives_real_project_close_reopen(tmp_path: Path,
         reopened.close()
 
 
-def test_function_mapper_real_sparse_matrix_to_table_preserves_keys(tmp_path: Path) -> None:
+def test_function_mapper_real_sparse_matrix_to_table_preserves_keys(
+    tmp_path: Path,
+) -> None:
     """FunctionMapper must expose matrix batches as named DataFrames, not densify the corpus."""
     from scipy import sparse
+
     from text_analysis_lab.core.writer import create_artifact_writer
 
     project = teal.Project.create(tmp_path / "function_mapper_sparse", name="fm_sparse")
@@ -368,7 +388,9 @@ def test_function_mapper_real_sparse_matrix_to_table_preserves_keys(tmp_path: Pa
                     "data": pd.DataFrame(
                         {
                             "qual": (packet["data"]["qualitative"] > 0).astype("int8"),
-                            "quant": (packet["data"]["quantitative"] > 0).astype("int8"),
+                            "quant": (packet["data"]["quantitative"] > 0).astype(
+                                "int8"
+                            ),
                         }
                     )
                 }

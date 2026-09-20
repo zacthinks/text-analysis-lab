@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import Any, Mapping
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -27,14 +28,16 @@ class DictionaryProvenance:
 
     @classmethod
     def from_value(
-        cls, value: "DictionaryProvenance | Mapping[str, Any] | None"
-    ) -> "DictionaryProvenance | None":
+        cls, value: DictionaryProvenance | Mapping[str, Any] | None
+    ) -> DictionaryProvenance | None:
         if value is None:
             return None
         if isinstance(value, cls):
             return value
         if not isinstance(value, Mapping):
-            raise TypeError("provenance must be DictionaryProvenance, a mapping, or None.")
+            raise TypeError(
+                "provenance must be DictionaryProvenance, a mapping, or None."
+            )
         allowed = {
             "provider",
             "resource",
@@ -48,8 +51,5 @@ class DictionaryProvenance:
         if unknown:
             raise ValueError(f"Unknown dictionary provenance field(s): {unknown}.")
         return cls(
-            **{
-                key: None if raw is None else str(raw)
-                for key, raw in value.items()
-            }
+            **{key: None if raw is None else str(raw) for key, raw in value.items()}
         )

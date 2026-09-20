@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from enum import Enum
-from typing import Literal, Final
 from collections.abc import Sequence
+from enum import Enum
+from typing import Final, Literal
 
 MetadataMode = Literal["none", "local", "full"]
 
@@ -23,7 +23,9 @@ StreamingMode = Literal["auto", "arrow", "paged"]
 
 ArtifactStatus = Literal["incomplete", "complete", "failed"]
 
-OperationType = Literal["import", "register", "split", "subset", "merge", "join", "rekey", "translate"]
+OperationType = Literal[
+    "import", "register", "split", "subset", "merge", "join", "rekey", "translate"
+]
 
 OperationStatus = Literal["incomplete", "complete", "failed"]
 
@@ -37,6 +39,7 @@ ColumnSelect = bool | str | Sequence[str]
 
 DEFAULT_SOURCE_LABEL: Final = "source"
 DEFAULT_OUTPUT_LABEL: Final = "output"
+
 
 class ArtifactType(str, Enum):
     TABLE = "table"

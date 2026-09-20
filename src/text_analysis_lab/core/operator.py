@@ -31,7 +31,6 @@ from text_analysis_lab.core.types import (
     MetadataMode,
     OperationType,
     QueryForm,
-    StreamingMode,
 )
 
 if TYPE_CHECKING:
@@ -415,7 +414,7 @@ class BaseOperator(ABC):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpecDeclaration:
         """Return output declarations resolved for these sources and this run."""
@@ -423,7 +422,7 @@ class BaseOperator(ABC):
     def validated_output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> dict[str, OutputSpec]:
         """Return this operator's validated output declarations for one run."""
@@ -434,7 +433,7 @@ class BaseOperator(ABC):
     def output_specs_in_dependency_order(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> tuple[tuple[str, OutputSpec], ...]:
         """Return run-resolved outputs in basis-before-dependent order."""
@@ -563,7 +562,7 @@ class BaseOperator(ABC):
         return path
 
     @classmethod
-    def load_from_dir(cls, operator_dir: str | Path) -> "BaseOperator":
+    def load_from_dir(cls, operator_dir: str | Path) -> BaseOperator:
         """Load an operator snapshot from an operator directory."""
         path = Path(operator_dir)
         descriptor = json.loads((path / "operator.json").read_text(encoding="utf-8"))
@@ -668,7 +667,7 @@ class BaseTranslator(BaseOperator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         """Validate and normalize operation-specific parameters for one run.
@@ -709,7 +708,7 @@ class BaseTranslator(BaseOperator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest | Mapping[str, SourceRequest]:
@@ -776,7 +775,7 @@ class BaseTranslator(BaseOperator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "BaseTranslator":
+    ) -> BaseTranslator:
         """Return a worker translator for parallel execution."""
         _ = mode, request
         raise OperatorError(
@@ -811,7 +810,7 @@ class BaseTranslator(BaseOperator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "BaseTranslator":
+    ) -> BaseTranslator:
         """Load a translator from operation-local intermediate state."""
         _ = intermediate_dir, operator_id, mode, route
         raise OperatorError(

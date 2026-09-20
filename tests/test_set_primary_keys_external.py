@@ -104,9 +104,36 @@ def _source_table(project: teal.Project):
         metadata=pd.DataFrame(
             {
                 "child": ["B", "A", "A", "A", "B", "B", "A", "A"],
-                "book": ["Road", "Ocean", "Ocean", "Ocean", "Ocean", "Road", "Road", "Road"],
-                "partner": ["robot", "robot", "robot", "parent", "parent", "parent", "robot", "robot"],
-                "speaker": ["child", "child", "interlocutor", "child", "child", "interlocutor", "child", "interlocutor"],
+                "book": [
+                    "Road",
+                    "Ocean",
+                    "Ocean",
+                    "Ocean",
+                    "Ocean",
+                    "Road",
+                    "Road",
+                    "Road",
+                ],
+                "partner": [
+                    "robot",
+                    "robot",
+                    "robot",
+                    "parent",
+                    "parent",
+                    "parent",
+                    "robot",
+                    "robot",
+                ],
+                "speaker": [
+                    "child",
+                    "child",
+                    "interlocutor",
+                    "child",
+                    "child",
+                    "interlocutor",
+                    "child",
+                    "interlocutor",
+                ],
             }
         ),
     )
@@ -124,7 +151,9 @@ def _full(artifact):
     )
 
 
-def test_basic_rekey_is_keys_only_local_integer_hierarchy_and_inherits_everything(tmp_path: Path) -> None:
+def test_basic_rekey_is_keys_only_local_integer_hierarchy_and_inherits_everything(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="rekey_basic")
     try:
         source = _source_table(project)
@@ -166,7 +195,9 @@ def test_basic_rekey_is_keys_only_local_integer_hierarchy_and_inherits_everythin
         project.close()
 
 
-def test_subset_before_and_after_rekey_keeps_only_relevant_source_rows(tmp_path: Path) -> None:
+def test_subset_before_and_after_rekey_keeps_only_relevant_source_rows(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="rekey_subset")
     try:
         source = _source_table(project)
@@ -192,7 +223,9 @@ def test_subset_before_and_after_rekey_keeps_only_relevant_source_rows(tmp_path:
         project.close()
 
 
-def test_two_rekeys_with_subset_between_translate_back_to_original_data_and_metadata(tmp_path: Path) -> None:
+def test_two_rekeys_with_subset_between_translate_back_to_original_data_and_metadata(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="double_rekey")
     try:
         source = _source_table(project)
@@ -203,7 +236,11 @@ def test_two_rekeys_with_subset_between_translate_back_to_original_data_and_meta
             output_label="first",
         )
         first_frame = _full(first)
-        chosen = first_frame.loc[[1, 2, 4, 7], first.primary_key].astype(int).to_dict("records")
+        chosen = (
+            first_frame.loc[[1, 2, 4, 7], first.primary_key]
+            .astype(int)
+            .to_dict("records")
+        )
         middle = project.select_keys(first, chosen, output_label="middle")
 
         second = project.set_primary_keys(
@@ -217,7 +254,9 @@ def test_two_rekeys_with_subset_between_translate_back_to_original_data_and_meta
         assert second_frame["score"].astype(int).tolist() == [11, 12, 14, 17]
         assert second_frame["child"].tolist() == ["A", "A", "B", "A"]
 
-        last_keys = second_frame.loc[[1, 3], second.primary_key].astype(int).to_dict("records")
+        last_keys = (
+            second_frame.loc[[1, 3], second.primary_key].astype(int).to_dict("records")
+        )
         final = project.select_keys(second, last_keys, output_label="final")
         final_frame = _full(final)
         assert final_frame["text"].tolist() == ["text-2", "text-7"]
@@ -226,7 +265,9 @@ def test_two_rekeys_with_subset_between_translate_back_to_original_data_and_meta
         project.close()
 
 
-def test_extended_key_before_rekey_repeats_ancestor_metadata_correctly(tmp_path: Path) -> None:
+def test_extended_key_before_rekey_repeats_ancestor_metadata_correctly(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="extended_before")
     try:
         docs = _register_table(
@@ -261,7 +302,9 @@ def test_extended_key_before_rekey_repeats_ancestor_metadata_correctly(tmp_path:
         project.close()
 
 
-def test_extended_key_after_rekey_maps_pre_rekey_metadata_to_each_extended_row(tmp_path: Path) -> None:
+def test_extended_key_after_rekey_maps_pre_rekey_metadata_to_each_extended_row(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="extended_after")
     try:
         source = _register_table(
@@ -269,7 +312,9 @@ def test_extended_key_after_rekey_maps_pre_rekey_metadata_to_each_extended_row(t
             artifact_id="art_base",
             label="base",
             keys=pd.DataFrame({"row_id": [0, 1, 2]}),
-            metadata=pd.DataFrame({"child": ["A", "B", "C"], "origin": ["aa", "bb", "cc"]}),
+            metadata=pd.DataFrame(
+                {"child": ["A", "B", "C"], "origin": ["aa", "bb", "cc"]}
+            ),
         )
         rekeyed = project.set_primary_keys(
             source,
@@ -305,7 +350,9 @@ def test_extended_key_after_rekey_maps_pre_rekey_metadata_to_each_extended_row(t
         project.close()
 
 
-def test_reduced_key_after_rekey_does_not_guess_cross_keyspace_metadata(tmp_path: Path) -> None:
+def test_reduced_key_after_rekey_does_not_guess_cross_keyspace_metadata(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="reduced_boundary")
     try:
         source = _register_table(
@@ -336,7 +383,9 @@ def test_reduced_key_after_rekey_does_not_guess_cross_keyspace_metadata(tmp_path
         project.close()
 
 
-def test_rekeyed_sparse_matrix_inherits_values_and_feature_axis_then_feature_subsets(tmp_path: Path) -> None:
+def test_rekeyed_sparse_matrix_inherits_values_and_feature_axis_then_feature_subsets(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="matrix_rekey")
     try:
         values = np.array([[1, 0, 2], [0, 3, 0], [4, 0, 5], [0, 1, 1]], dtype=float)
@@ -363,12 +412,16 @@ def test_rekeyed_sparse_matrix_inherits_values_and_feature_axis_then_feature_sub
             output_label="selected",
         )
         assert selected.get_data_columns() == ["a", "c"]
-        np.testing.assert_array_equal(selected.get_matrix().toarray(), values[:, [0, 2]])
+        np.testing.assert_array_equal(
+            selected.get_matrix().toarray(), values[:, [0, 2]]
+        )
     finally:
         project.close()
 
 
-def test_joined_virtual_table_data_survives_rekey_without_materialization(tmp_path: Path) -> None:
+def test_joined_virtual_table_data_survives_rekey_without_materialization(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="joined_rekey")
     try:
         basis = _register_table(
@@ -401,7 +454,9 @@ def test_joined_virtual_table_data_survives_rekey_without_materialization(tmp_pa
         project.close()
 
 
-def test_rekey_survives_project_reopen_and_operator_state_is_serialized(tmp_path: Path) -> None:
+def test_rekey_survives_project_reopen_and_operator_state_is_serialized(
+    tmp_path: Path,
+) -> None:
     project_path = tmp_path / "project"
     project = teal.Project.create(project_path, name="reopen")
     try:
@@ -432,7 +487,9 @@ def test_rekey_survives_project_reopen_and_operator_state_is_serialized(tmp_path
         reopened.close()
 
 
-def test_validation_rejects_collisions_nulls_duplicate_names_and_ambiguous_source_fields(tmp_path: Path) -> None:
+def test_validation_rejects_collisions_nulls_duplicate_names_and_ambiguous_source_fields(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="validation")
     try:
         source = _register_table(
@@ -441,7 +498,9 @@ def test_validation_rejects_collisions_nulls_duplicate_names_and_ambiguous_sourc
             label="source",
             keys=pd.DataFrame({"row_id": [0, 1]}),
             data=pd.DataFrame({"child": ["data-a", "data-b"], "x": [1, 2]}),
-            metadata=pd.DataFrame({"child": ["meta-a", "meta-b"], "group": ["A", None]}),
+            metadata=pd.DataFrame(
+                {"child": ["meta-a", "meta-b"], "group": ["A", None]}
+            ),
         )
         with pytest.raises(ArtifactError, match="ambiguous"):
             project.set_primary_keys(
@@ -471,7 +530,9 @@ def test_validation_rejects_collisions_nulls_duplicate_names_and_ambiguous_sourc
         project.close()
 
 
-def test_empty_artifact_can_be_rekeyed_without_creating_data_or_metadata(tmp_path: Path) -> None:
+def test_empty_artifact_can_be_rekeyed_without_creating_data_or_metadata(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="empty")
     try:
         source = _register_table(
@@ -495,7 +556,9 @@ def test_empty_artifact_can_be_rekeyed_without_creating_data_or_metadata(tmp_pat
         project.close()
 
 
-def test_malformed_rekey_row_count_is_rejected_on_cross_boundary_query(tmp_path: Path) -> None:
+def test_malformed_rekey_row_count_is_rejected_on_cross_boundary_query(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="malformed")
     try:
         source = _register_table(
@@ -525,7 +588,9 @@ def test_malformed_rekey_row_count_is_rejected_on_cross_boundary_query(tmp_path:
         project.close()
 
 
-def test_rekey_lineage_uses_position_even_when_old_and_new_key_names_happen_to_match(tmp_path: Path) -> None:
+def test_rekey_lineage_uses_position_even_when_old_and_new_key_names_happen_to_match(
+    tmp_path: Path,
+) -> None:
     """Never infer alignment from coincidentally available key columns."""
     project = teal.Project.create(tmp_path / "project", name="same_named_keys")
     try:
@@ -557,7 +622,9 @@ def test_rekey_lineage_uses_position_even_when_old_and_new_key_names_happen_to_m
         project.close()
 
 
-def test_full_metadata_can_mix_sources_from_before_between_and_after_two_rekeys(tmp_path: Path) -> None:
+def test_full_metadata_can_mix_sources_from_before_between_and_after_two_rekeys(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="metadata_depths")
     try:
         source = _register_table(
@@ -633,7 +700,9 @@ def test_full_metadata_can_mix_sources_from_before_between_and_after_two_rekeys(
         project.close()
 
 
-def test_merged_virtual_branches_can_be_rekeyed_and_still_resolve_branch_data(tmp_path: Path) -> None:
+def test_merged_virtual_branches_can_be_rekeyed_and_still_resolve_branch_data(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="merge_rekey")
     try:
         source = _source_table(project)
@@ -649,8 +718,14 @@ def test_merged_virtual_branches_can_be_rekeyed_and_still_resolve_branch_data(tm
         frame = _full(rekeyed)
         # Merge preserves source-list order, then each branch's source order.
         assert frame["text"].tolist() == [
-            "text-0", "text-2", "text-4", "text-6",
-            "text-1", "text-3", "text-5", "text-7",
+            "text-0",
+            "text-2",
+            "text-4",
+            "text-6",
+            "text-1",
+            "text-3",
+            "text-5",
+            "text-7",
         ]
         assert frame["score"].astype(int).tolist() == [10, 12, 14, 16, 11, 13, 15, 17]
         assert frame["child"].tolist() == ["B", "A", "B", "A", "A", "A", "B", "A"]

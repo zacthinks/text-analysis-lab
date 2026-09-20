@@ -55,7 +55,11 @@ class PolarityDictionary:
             "negative": set(self.negative),
             "neutral": set(self.neutral),
         }
-        for left, right in (("positive", "negative"), ("positive", "neutral"), ("negative", "neutral")):
+        for left, right in (
+            ("positive", "negative"),
+            ("positive", "neutral"),
+            ("negative", "neutral"),
+        ):
             overlap = sorted(assignments[left].intersection(assignments[right]))
             if overlap:
                 raise ValueError(

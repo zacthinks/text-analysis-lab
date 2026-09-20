@@ -6,16 +6,15 @@ import json
 import numbers
 import warnings
 from abc import ABC
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, get_args
-from collections.abc import Sequence, Iterable
 
 import numpy as np
 import pandas as pd
 
 from text_analysis_lab.core.errors import (
     ArtifactError,
-    DataInheritanceError,
     IncompleteArtifactError,
     MissingDataComponentError,
     UnsupportedArtifactOperationError,
@@ -23,7 +22,6 @@ from text_analysis_lab.core.errors import (
 from text_analysis_lab.core.kwic import KWICResult, keyword_in_context
 from text_analysis_lab.core.lineage import (
     find_data_artifact,
-    iter_metadata_lineage_sources,
 )
 from text_analysis_lab.core.storage import ArtifactStorage
 from text_analysis_lab.core.types import (
@@ -38,8 +36,8 @@ from text_analysis_lab.core.utils import resolve_names, str_keys
 
 if TYPE_CHECKING:
     from text_analysis_lab.analysis.accessor import ArtifactAnalysis
-    from text_analysis_lab.visualization.accessor import ArtifactVisualization
     from text_analysis_lab.core.project import Project
+    from text_analysis_lab.visualization.accessor import ArtifactVisualization
 
 
 # ---------------------------------------------------------------------------
@@ -283,12 +281,12 @@ def _merge_info_and_data_records(
 
 
 def resolve_artifact_ref(
-    project: "Project",
-    artifact_ref: "BaseArtifact | str | None",
+    project: Project,
+    artifact_ref: BaseArtifact | str | None,
     *,
-    default: "BaseArtifact | None" = None,
+    default: BaseArtifact | None = None,
     parameter_name: str = "artifact",
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Resolve an artifact id/alias or artifact object into a BaseArtifact."""
     if artifact_ref is None:
         if default is None:
@@ -347,7 +345,7 @@ def _context_key_filter(
 
 
 def _resolved_key_column_mapping(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     key_filter: KeyRangeFilter,
     *,
     metadata_mode: MetadataMode,
@@ -449,7 +447,7 @@ class BaseArtifact(ABC):
 
     def __init__(
         self,
-        project: "Project",
+        project: Project,
         artifact_dir: str | Path,
     ) -> None:
         self.project = project
@@ -472,7 +470,9 @@ class BaseArtifact(ABC):
         """Return an informative notebook/debug representation."""
         aliases = self.aliases
         lineage = self.descriptor.get("lineage")
-        lineage_mode = lineage.get("lineage_mode") if isinstance(lineage, dict) else None
+        lineage_mode = (
+            lineage.get("lineage_mode") if isinstance(lineage, dict) else None
+        )
         basis: Any = None
         if isinstance(lineage, dict):
             basis = lineage.get("basis_artifact_ids", lineage.get("basis_artifact_id"))
@@ -509,7 +509,9 @@ class BaseArtifact(ABC):
         aliases = self.aliases
         display_name = aliases[0] if aliases else self.label
         lineage = self.descriptor.get("lineage")
-        lineage_mode = lineage.get("lineage_mode") if isinstance(lineage, dict) else None
+        lineage_mode = (
+            lineage.get("lineage_mode") if isinstance(lineage, dict) else None
+        )
         data_columns = self.get_data_columns()
         data_text = (
             ", ".join(data_columns)
@@ -648,7 +650,7 @@ class BaseArtifact(ABC):
             )
 
     @property
-    def analysis(self) -> "ArtifactAnalysis":
+    def analysis(self) -> ArtifactAnalysis:
         """Return Analytic Methods bound to this artifact.
 
         The accessor is ephemeral: calling ``artifact.analysis.<method>(...)``
@@ -659,7 +661,7 @@ class BaseArtifact(ABC):
         return ArtifactAnalysis(self)
 
     @property
-    def visualize(self) -> "ArtifactVisualization":
+    def visualize(self) -> ArtifactVisualization:
         """Return scalable visualization methods bound to this artifact."""
         from text_analysis_lab.visualization.accessor import ArtifactVisualization
 
@@ -793,7 +795,7 @@ class BaseArtifact(ABC):
             data_columns=data_columns,
         )
 
-    def _require_data_artifact(self) -> "BaseArtifact":
+    def _require_data_artifact(self) -> BaseArtifact:
         if self.data_artifact is None:
             raise MissingDataComponentError(
                 f"Artifact {self.artifact_id} has no available data component."
@@ -825,10 +827,10 @@ class BaseArtifact(ABC):
         if not isinstance(descriptor, dict):
             return False
         lineage = descriptor.get("lineage", {})
-        return (
-            isinstance(lineage, dict)
-            and lineage.get("lineage_mode") in {"merged_key", "joined_key"}
-        )
+        return isinstance(lineage, dict) and lineage.get("lineage_mode") in {
+            "merged_key",
+            "joined_key",
+        }
 
     def _resolve_data_positions(self, positions: Sequence[int]) -> list[int]:
         """Return positions in ``self.data_artifact`` for current artifact positions."""
@@ -1642,7 +1644,7 @@ class BaseArtifact(ABC):
         before: int = 2,
         after: int = 2,
         *,
-        context_artifact: "BaseArtifact | str | None" = None,
+        context_artifact: BaseArtifact | str | None = None,
         key_columns: ColumnSelect = True,
         data_columns: ColumnSelect = True,
         metadata_columns: ColumnSelect = False,

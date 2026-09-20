@@ -43,7 +43,7 @@ class RandomSampleOperator(BaseOperator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -58,7 +58,7 @@ class RandomSampleOperator(BaseOperator):
         return {"n": self.n, "random_state": self.random_state}
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "RandomSampleOperator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> RandomSampleOperator:
         raw_state = state.get("random_state")
         return cls(
             n=int(state["n"]),
@@ -67,14 +67,14 @@ class RandomSampleOperator(BaseOperator):
 
 
 def sample(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     *,
     n: int,
     random_state: int | None = None,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Draw ``n`` source rows without replacement into one child artifact.
 
     Sampling determines membership only. The selected rows are written in source

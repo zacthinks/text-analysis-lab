@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -12,8 +12,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -64,7 +64,7 @@ class TextLength(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -79,7 +79,7 @@ class TextLength(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -92,7 +92,7 @@ class TextLength(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -132,9 +132,7 @@ class TextLength(BaseTranslator):
     @property
     def output_columns(self) -> tuple[str, ...]:
         return tuple(
-            f"{field}_{unit}"
-            for field, units in self.lengths.items()
-            for unit in units
+            f"{field}_{unit}" for field, units in self.lengths.items() for unit in units
         )
 
     def translate_batch(
@@ -154,7 +152,9 @@ class TextLength(BaseTranslator):
         key_columns = [str(name) for name in packet.primary_key]
         missing = [name for name in [*key_columns, *self.lengths] if name not in frame]
         if missing:
-            raise ArtifactError(f"TextLength source batch is missing columns {missing}.")
+            raise ArtifactError(
+                f"TextLength source batch is missing columns {missing}."
+            )
 
         metadata: dict[str, Any] = {}
         for field, units in self.lengths.items():
@@ -206,17 +206,19 @@ class TextLength(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "TextLength":
+    ) -> TextLength:
         _ = request
         if mode != "translate":
             raise OperatorError("TextLength workers support translate mode only.")
         return TextLength(self.lengths)
 
     def to_json_state(self) -> dict[str, Any]:
-        return {"lengths": {field: list(units) for field, units in self.lengths.items()}}
+        return {
+            "lengths": {field: list(units) for field, units in self.lengths.items()}
+        }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "TextLength":
+    def from_json_state(cls, state: Mapping[str, Any]) -> TextLength:
         raw = state.get("lengths")
         if not isinstance(raw, Mapping):
             raise OperatorError("TextLength state is missing its lengths mapping.")
@@ -248,7 +250,7 @@ class TextLength(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "TextLength":
+    ) -> TextLength:
         """Restore a resumable translator from its operation-local state."""
 
         _ = mode, route
@@ -270,7 +272,9 @@ def _normalize_lengths(lengths: LengthRequest) -> dict[str, tuple[LengthUnit, ..
             raise ValueError("TextLength field names must be non-empty strings.")
         values = [raw_units] if isinstance(raw_units, str) else list(raw_units)
         if not values:
-            raise ValueError(f"TextLength field {field!r} must request at least one unit.")
+            raise ValueError(
+                f"TextLength field {field!r} must request at least one unit."
+            )
         units: list[LengthUnit] = []
         for raw_unit in values:
             unit = str(raw_unit)

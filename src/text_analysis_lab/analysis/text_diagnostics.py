@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
@@ -35,10 +35,10 @@ class TextDiagnosticsResult:
 
 
 def text_diagnostics(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     text_field: str = "text",
-    compare_to: "BaseArtifact | str | None" = None,
+    compare_to: BaseArtifact | str | None = None,
     strip: bool = True,
 ) -> TextDiagnosticsResult:
     """Report empty/duplicate text and optional stable-key preservation checks.
@@ -70,7 +70,7 @@ def text_diagnostics(
     observed = comparable.loc[nonempty]
     counts = observed.value_counts(dropna=False)
     duplicate_counts = counts[counts > 1]
-    duplicate_groups = int(len(duplicate_counts))
+    duplicate_groups = len(duplicate_counts)
     duplicate_rows = int(duplicate_counts.sum()) if duplicate_groups else 0
     duplicate_excess = int((duplicate_counts - 1).sum()) if duplicate_groups else 0
 
@@ -97,10 +97,20 @@ def text_diagnostics(
         )
         if not isinstance(other_frame, pd.DataFrame):
             raise ArtifactError("Could not materialize comparison artifact keys.")
-        other_frame = other_frame.sort_values("_position", kind="stable").reset_index(drop=True)
+        other_frame = other_frame.sort_values("_position", kind="stable").reset_index(
+            drop=True
+        )
         key_columns = list(current_keys)
-        current_order = [tuple(row) for row in frame.loc[:, key_columns].itertuples(index=False, name=None)]
-        other_order = [tuple(row) for row in other_frame.loc[:, key_columns].itertuples(index=False, name=None)]
+        current_order = [
+            tuple(row)
+            for row in frame.loc[:, key_columns].itertuples(index=False, name=None)
+        ]
+        other_order = [
+            tuple(row)
+            for row in other_frame.loc[:, key_columns].itertuples(
+                index=False, name=None
+            )
+        ]
         current_set = set(current_order)
         other_set = set(other_order)
         key_set_preserved = current_set == other_set

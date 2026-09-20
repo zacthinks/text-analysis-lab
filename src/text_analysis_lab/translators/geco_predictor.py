@@ -20,8 +20,8 @@ from scipy import sparse
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -116,10 +116,16 @@ class GeCoPredictor(BaseTranslator):
             )
         if self.aggregation == "single" and len(self.member_models) != 1:
             raise ValueError("aggregation='single' requires exactly one member model.")
-        if self.aggregation == "logistic_stack" and stacker is None and not _allow_unloaded_assets:
+        if (
+            self.aggregation == "logistic_stack"
+            and stacker is None
+            and not _allow_unloaded_assets
+        ):
             raise ValueError("aggregation='logistic_stack' requires a fitted stacker.")
         if self.aggregation != "logistic_stack" and stacker is not None:
-            raise ValueError("A fitted stacker is valid only for aggregation='logistic_stack'.")
+            raise ValueError(
+                "A fitted stacker is valid only for aggregation='logistic_stack'."
+            )
         self.stacker = stacker
         self.stacker_positive_class = _json_scalar(
             stacker_positive_class, name="stacker_positive_class"
@@ -127,10 +133,15 @@ class GeCoPredictor(BaseTranslator):
 
         self.threshold = float(threshold)
         if not np.isfinite(self.threshold) or not 0.0 <= self.threshold <= 1.0:
-            raise ValueError("GeCoPredictor threshold must lie in the closed interval [0, 1].")
+            raise ValueError(
+                "GeCoPredictor threshold must lie in the closed interval [0, 1]."
+            )
 
         semantics = dict(output_semantics or {"kind": "binary_classification"})
-        if str(semantics.get("kind", "binary_classification")) != "binary_classification":
+        if (
+            str(semantics.get("kind", "binary_classification"))
+            != "binary_classification"
+        ):
             raise ValueError(
                 "GeCoPredictor format v1 supports only output_semantics kind "
                 "'binary_classification'."
@@ -158,7 +169,7 @@ class GeCoPredictor(BaseTranslator):
         threshold: float = 0.5,
         provenance: Mapping[str, Any] | None = None,
         stale_at_export: bool = False,
-    ) -> "GeCoPredictor":
+    ) -> GeCoPredictor:
         """Construct the one-member case used by legacy GeCo classifier export."""
         source_spec = {
             "source_index": 0,
@@ -188,7 +199,7 @@ class GeCoPredictor(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -209,7 +220,7 @@ class GeCoPredictor(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -222,12 +233,14 @@ class GeCoPredictor(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> Mapping[str, SourceRequest]:
         if mode != "translate":
-            raise OperatorError("GeCoPredictor is inference-only and supports translate mode.")
+            raise OperatorError(
+                "GeCoPredictor is inference-only and supports translate mode."
+            )
         labels = self._validate_source_bindings(sources)
         batch_size = request.batch_size or 10_000
         return {
@@ -258,7 +271,9 @@ class GeCoPredictor(BaseTranslator):
         keys, matrices = _aligned_matrices(packets)
 
         member_probabilities: list[np.ndarray] = []
-        for index, (model, spec) in enumerate(zip(self.member_models, self.member_specs, strict=True)):
+        for index, (model, spec) in enumerate(
+            zip(self.member_models, self.member_specs, strict=True)
+        ):
             fitted = _require_probability_model(model, name=f"member {index}")
             source_index = int(spec["source_index"])
             probability = _positive_probability(
@@ -311,18 +326,24 @@ class GeCoPredictor(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "GeCoPredictor":
+    ) -> GeCoPredictor:
         _ = request
         if mode != "translate":
             raise OperatorError("GeCoPredictor workers support translate mode only.")
         return GeCoPredictor(
-            [clone_estimator(_require_probability_model(model, name=f"member {index}"))
-             for index, model in enumerate(self.member_models)],
+            [
+                clone_estimator(
+                    _require_probability_model(model, name=f"member {index}")
+                )
+                for index, model in enumerate(self.member_models)
+            ],
             source_specs=self.source_specs,
             member_specs=self.member_specs,
             aggregation=self.aggregation,
             stacker=(
-                clone_estimator(_require_probability_model(self.stacker, name="stacker"))
+                clone_estimator(
+                    _require_probability_model(self.stacker, name="stacker")
+                )
                 if self.aggregation == "logistic_stack"
                 else None
             ),
@@ -348,12 +369,16 @@ class GeCoPredictor(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "GeCoPredictor":
+    def from_json_state(cls, state: Mapping[str, Any]) -> GeCoPredictor:
         source_specs = state.get("source_specs", [])
         member_specs = state.get("member_specs", [])
-        if not isinstance(source_specs, Sequence) or isinstance(source_specs, (str, bytes)):
+        if not isinstance(source_specs, Sequence) or isinstance(
+            source_specs, (str, bytes)
+        ):
             raise OperatorError("GeCoPredictor source_specs state must be a sequence.")
-        if not isinstance(member_specs, Sequence) or isinstance(member_specs, (str, bytes)):
+        if not isinstance(member_specs, Sequence) or isinstance(
+            member_specs, (str, bytes)
+        ):
             raise OperatorError("GeCoPredictor member_specs state must be a sequence.")
         aggregation = str(state.get("aggregation", "single"))
         return cls(
@@ -388,18 +413,26 @@ class GeCoPredictor(BaseTranslator):
 
     def load_assets(self, assets_dir: Path, manifest: Mapping[str, Any]) -> None:
         raw_member_files = manifest.get("member_files")
-        if not isinstance(raw_member_files, Sequence) or isinstance(raw_member_files, (str, bytes)):
-            raise OperatorError("GeCoPredictor operator is missing its member asset list.")
+        if not isinstance(raw_member_files, Sequence) or isinstance(
+            raw_member_files, (str, bytes)
+        ):
+            raise OperatorError(
+                "GeCoPredictor operator is missing its member asset list."
+            )
         member_files = [str(value) for value in raw_member_files]
         if len(member_files) != len(self.member_specs):
             raise OperatorError(
                 "GeCoPredictor member asset count does not match serialized member specs."
             )
-        self.member_models = [load_estimator(assets_dir / filename) for filename in member_files]
+        self.member_models = [
+            load_estimator(assets_dir / filename) for filename in member_files
+        ]
         if self.aggregation == "logistic_stack":
             filename = manifest.get("stacker_file")
             if not isinstance(filename, str) or not filename:
-                raise OperatorError("GeCoPredictor logistic stack is missing its stacker asset.")
+                raise OperatorError(
+                    "GeCoPredictor logistic stack is missing its stacker asset."
+                )
             self.stacker = load_estimator(assets_dir / filename)
         else:
             self.stacker = None
@@ -431,9 +464,11 @@ class GeCoPredictor(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "GeCoPredictor":
+    ) -> GeCoPredictor:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         if not isinstance(state, Mapping):
             raise OperatorError("GeCoPredictor intermediate state must be a mapping.")
         obj = cls.from_json_state(state)
@@ -444,7 +479,9 @@ class GeCoPredictor(BaseTranslator):
         obj.load_assets(intermediate_dir, assets)
         return obj
 
-    def _validate_source_bindings(self, sources: Mapping[str, "BaseArtifact"]) -> list[str]:
+    def _validate_source_bindings(
+        self, sources: Mapping[str, BaseArtifact]
+    ) -> list[str]:
         labels = _ordered_source_labels(sources, expected_count=len(self.source_specs))
         first = sources[labels[0]]
         first_key = tuple(str(value) for value in first.primary_key)
@@ -460,7 +497,11 @@ class GeCoPredictor(BaseTranslator):
                 raise OperatorError(
                     "GeCoPredictor sources must use the same primary-key schema."
                 )
-            if first_rows is not None and artifact.n_rows is not None and int(artifact.n_rows) != int(first_rows):
+            if (
+                first_rows is not None
+                and artifact.n_rows is not None
+                and int(artifact.n_rows) != int(first_rows)
+            ):
                 raise OperatorError(
                     "GeCoPredictor sources must have the same number of rows before batching; "
                     f"{labels[0]!r} has {first_rows}, {label!r} has {artifact.n_rows}."
@@ -476,12 +517,18 @@ class GeCoPredictor(BaseTranslator):
                     )
         return labels
 
-    def _combine_probabilities(self, member_probabilities: Sequence[np.ndarray]) -> np.ndarray:
+    def _combine_probabilities(
+        self, member_probabilities: Sequence[np.ndarray]
+    ) -> np.ndarray:
         if not member_probabilities:
             raise OperatorError("GeCoPredictor has no member probabilities to combine.")
-        matrix = np.column_stack([np.asarray(value, dtype=float) for value in member_probabilities])
+        matrix = np.column_stack(
+            [np.asarray(value, dtype=float) for value in member_probabilities]
+        )
         if matrix.ndim != 2 or matrix.shape[0] == 0:
-            raise ArtifactError("GeCoPredictor member probabilities must form a non-empty matrix.")
+            raise ArtifactError(
+                "GeCoPredictor member probabilities must form a non-empty matrix."
+            )
         _validate_probabilities(matrix, name="member probabilities")
 
         if self.aggregation == "single":
@@ -497,7 +544,9 @@ class GeCoPredictor(BaseTranslator):
         elif self.aggregation == "harmonic_mean":
             positive = np.all(matrix > 0.0, axis=1)
             probability = np.zeros(matrix.shape[0], dtype=float)
-            probability[positive] = matrix.shape[1] / np.sum(1.0 / matrix[positive], axis=1)
+            probability[positive] = matrix.shape[1] / np.sum(
+                1.0 / matrix[positive], axis=1
+            )
         elif self.aggregation == "geometric_mean":
             positive = np.all(matrix > 0.0, axis=1)
             probability = np.zeros(matrix.shape[0], dtype=float)
@@ -512,7 +561,9 @@ class GeCoPredictor(BaseTranslator):
                 name="stacker",
             )
         else:  # pragma: no cover - guarded by constructor
-            raise OperatorError(f"Unsupported GeCoPredictor aggregation {self.aggregation!r}.")
+            raise OperatorError(
+                f"Unsupported GeCoPredictor aggregation {self.aggregation!r}."
+            )
 
         probability = np.asarray(probability, dtype=float).reshape(-1)
         _validate_probabilities(probability, name="final probability")
@@ -569,12 +620,16 @@ def _aligned_matrices(packets: Sequence[InputBatch]) -> tuple[pd.DataFrame, list
             )
         if sparse.issparse(matrix):
             if len(matrix.shape) != 2:
-                raise ArtifactError("GeCoPredictor source matrix must be two-dimensional.")
+                raise ArtifactError(
+                    "GeCoPredictor source matrix must be two-dimensional."
+                )
             n_rows = int(matrix.shape[0])
         else:
             matrix = np.asarray(matrix)
             if matrix.ndim != 2:
-                raise ArtifactError("GeCoPredictor source matrix must be two-dimensional.")
+                raise ArtifactError(
+                    "GeCoPredictor source matrix must be two-dimensional."
+                )
             n_rows = int(matrix.shape[0])
         if len(info) != n_rows:
             raise ArtifactError(
@@ -600,7 +655,10 @@ def _aligned_matrices(packets: Sequence[InputBatch]) -> tuple[pd.DataFrame, list
                 raise ArtifactError(
                     "GeCoPredictor source packets use different primary-key schemas."
                 )
-            if int(packet.batch_index) != first_batch_index or int(packet.batch_count) != first_batch_count:
+            if (
+                int(packet.batch_index) != first_batch_index
+                or int(packet.batch_count) != first_batch_count
+            ):
                 raise ArtifactError(
                     "GeCoPredictor source packets are not synchronized to the same batch index/count."
                 )
@@ -631,7 +689,9 @@ def _positive_probability(
         )
     class_values = list(np.asarray(classes).reshape(-1))
     matches = [
-        index for index, value in enumerate(class_values) if _class_equal(value, positive_class)
+        index
+        for index, value in enumerate(class_values)
+        if _class_equal(value, positive_class)
     ]
     if len(matches) != 1:
         raise OperatorError(
@@ -659,7 +719,9 @@ def _validate_probabilities(values: Any, *, name: str) -> None:
     if not np.all(np.isfinite(array)):
         raise ArtifactError(f"GeCoPredictor {name} contains NaN or infinite values.")
     if np.any((array < 0.0) | (array > 1.0)):
-        raise ArtifactError(f"GeCoPredictor {name} must lie in the closed interval [0, 1].")
+        raise ArtifactError(
+            f"GeCoPredictor {name} must lie in the closed interval [0, 1]."
+        )
 
 
 def _require_probability_model(model: Any | None, *, name: str) -> Any:
@@ -672,7 +734,9 @@ def _require_probability_model(model: Any | None, *, name: str) -> Any:
     return model
 
 
-def _normalize_source_specs(source_specs: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_source_specs(
+    source_specs: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
     if isinstance(source_specs, (str, bytes)) or not isinstance(source_specs, Sequence):
         raise TypeError("GeCoPredictor source_specs must be a sequence of mappings.")
     if not source_specs:
@@ -692,7 +756,9 @@ def _normalize_source_specs(source_specs: Sequence[Mapping[str, Any]]) -> list[d
         if spec.get("n_features") is not None:
             n_features = int(spec["n_features"])
             if n_features <= 0:
-                raise ValueError("GeCoPredictor source n_features must be positive when provided.")
+                raise ValueError(
+                    "GeCoPredictor source n_features must be positive when provided."
+                )
             spec["n_features"] = n_features
         normalized.append(_json_mapping(spec, name=f"source_specs[{expected_index}]"))
     return normalized
@@ -711,7 +777,9 @@ def _normalize_member_specs(
             raise TypeError("Each GeCoPredictor member spec must be a mapping.")
         spec = dict(raw)
         if "source_index" not in spec:
-            raise ValueError(f"GeCoPredictor member_specs[{index}] is missing source_index.")
+            raise ValueError(
+                f"GeCoPredictor member_specs[{index}] is missing source_index."
+            )
         source_index = int(spec["source_index"])
         if source_index < 0 or source_index >= source_count:
             raise ValueError(

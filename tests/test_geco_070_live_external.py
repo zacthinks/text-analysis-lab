@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import inspect
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -157,7 +157,9 @@ def test_real_geco_external_create_register_and_reopen(tmp_path: Path):
             )
             matrix = matrix_future.result()
             coordinates = coordinates_future.result()
-        np.testing.assert_array_equal(matrix.toarray(), geometry_values[t_keys, :].toarray())
+        np.testing.assert_array_equal(
+            matrix.toarray(), geometry_values[t_keys, :].toarray()
+        )
         np.testing.assert_array_equal(coordinates, view_values[t_keys, :])
         t_id = T.artifact_id
     finally:

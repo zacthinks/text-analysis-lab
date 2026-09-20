@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import json
 import numbers
-from collections.abc import Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -25,7 +25,11 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
     validate_output_label,
 )
-from text_analysis_lab.core.types import ArtifactType, DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.core.types import (
+    DEFAULT_OUTPUT_LABEL,
+    DEFAULT_SOURCE_LABEL,
+    ArtifactType,
+)
 from text_analysis_lab.core.writer import create_artifact_writer
 
 if TYPE_CHECKING:
@@ -60,7 +64,7 @@ class FeatureSubsetOperator(BaseOperator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -78,10 +82,12 @@ class FeatureSubsetOperator(BaseOperator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "FeatureSubsetOperator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> FeatureSubsetOperator:
         raw = state.get("selected_indices")
         if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
-            raise OperatorError("FeatureSubsetOperator state is missing selected_indices.")
+            raise OperatorError(
+                "FeatureSubsetOperator state is missing selected_indices."
+            )
         return cls(
             source_width=int(state["source_width"]),
             selected_indices=[int(value) for value in raw],
@@ -110,14 +116,14 @@ class FeatureSubsetOperator(BaseOperator):
 
 
 def feature_subset(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     function: FeatureSubsetFunction,
     *,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     batch_size: int = 10_000,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Create a lazy positional feature view of a matrix artifact.
 
     ``function`` receives the source ``feature_frame`` in source-column order and
@@ -166,15 +172,15 @@ def feature_subset(
 
 
 def _create_feature_view(
-    project: "Project",
-    source: "BaseArtifact",
+    project: Project,
+    source: BaseArtifact,
     *,
     indices: Sequence[int],
     source_width: int,
     output_label: str,
     batch_size: int,
     memo: str | None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Persist one keys-only positional feature view."""
     normalized = _normalize_indices(indices, source_width=source_width)
     operator = FeatureSubsetOperator(
@@ -288,7 +294,9 @@ def _create_feature_view(
         ):
             if frame.empty:
                 continue
-            writer.write({"keys": frame.loc[:, source.primary_key].reset_index(drop=True)})
+            writer.write(
+                {"keys": frame.loc[:, source.primary_key].reset_index(drop=True)}
+            )
 
         writer.finalize()
         project.catalog.mark_artifact_complete(artifact_id)
@@ -322,7 +330,9 @@ def _create_feature_view(
         raise
 
 
-def _indices_from_mask(raw_mask: Iterable[bool], *, expected_len: int) -> tuple[int, ...]:
+def _indices_from_mask(
+    raw_mask: Iterable[bool], *, expected_len: int
+) -> tuple[int, ...]:
     if isinstance(raw_mask, pd.Series):
         values = raw_mask.tolist()
     elif isinstance(raw_mask, np.ndarray):

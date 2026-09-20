@@ -72,8 +72,7 @@ def test_spacy_tokens_subset_to_artifact_count_dtm_with_sentence_bounded_ngrams(
 
     subset_file = tmp_path / "keep_content.py"
     subset_file.write_text(
-        "def keep_content(frame):\n"
-        "    return frame['is_alpha'] & ~frame['is_stop']\n",
+        "def keep_content(frame):\n    return frame['is_alpha'] & ~frame['is_stop']\n",
         encoding="utf-8",
     )
 

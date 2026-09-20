@@ -1,4 +1,5 @@
 """Alias-backed idempotent output handling for TeAL operations."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -35,11 +36,13 @@ class AliasPlan:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, object]) -> "AliasPlan":
+    def from_dict(cls, data: Mapping[str, object]) -> AliasPlan:
         labels = tuple(str(x) for x in data.get("output_labels", ()))
         raw_aliases = data.get("aliases", {})
         raw_existing = data.get("existing_artifact_ids", {})
-        if not isinstance(raw_aliases, Mapping) or not isinstance(raw_existing, Mapping):
+        if not isinstance(raw_aliases, Mapping) or not isinstance(
+            raw_existing, Mapping
+        ):
             raise AliasBundleError("Saved alias plan is malformed.")
         return cls(
             output_labels=labels,
@@ -51,7 +54,7 @@ class AliasPlan:
 
 
 def prepare_alias_plan(
-    project: "Project",
+    project: Project,
     output_labels: Sequence[str],
     alias: AliasSpec,
     *,
@@ -59,7 +62,9 @@ def prepare_alias_plan(
 ) -> AliasPlan | None:
     labels = tuple(str(x) for x in output_labels)
     if not labels:
-        raise AliasBundleError("An aliased operation must declare at least one output label.")
+        raise AliasBundleError(
+            "An aliased operation must declare at least one output label."
+        )
     if alias is None:
         if overwrite:
             raise AliasBundleError("overwrite=True requires alias=...")
@@ -125,17 +130,16 @@ def prepare_alias_plan(
     return AliasPlan(labels, aliases, bool(overwrite), {}, reuse=False)
 
 
-def reused_outputs(project: "Project", plan: AliasPlan) -> dict[str, "BaseArtifact"]:
+def reused_outputs(project: Project, plan: AliasPlan) -> dict[str, BaseArtifact]:
     return {
-        label: project.get_artifact(plan.aliases[label])
-        for label in plan.output_labels
+        label: project.get_artifact(plan.aliases[label]) for label in plan.output_labels
     }
 
 
 def finalize_alias_plan(
-    project: "Project",
+    project: Project,
     plan: AliasPlan | None,
-    outputs: Mapping[str, "BaseArtifact"],
+    outputs: Mapping[str, BaseArtifact],
 ) -> None:
     if plan is None or plan.reuse:
         return
@@ -144,7 +148,9 @@ def finalize_alias_plan(
             f"Operation outputs {sorted(outputs)} do not match aliased bundle "
             f"{sorted(plan.output_labels)}."
         )
-    bindings = {plan.aliases[label]: outputs[label].artifact_id for label in plan.output_labels}
+    bindings = {
+        plan.aliases[label]: outputs[label].artifact_id for label in plan.output_labels
+    }
     expected = {
         plan.aliases[label]: plan.existing_artifact_ids.get(label)
         for label in plan.output_labels
@@ -170,7 +176,7 @@ def finalize_alias_plan(
 
 
 def _check_overwrite_safety(
-    project: "Project",
+    project: Project,
     aliases: Mapping[str, str],
     existing: Mapping[str, str],
 ) -> None:
@@ -181,18 +187,21 @@ def _check_overwrite_safety(
 
     problems: list[str] = []
     for artifact_id in sorted(bundle_ids):
-        extra_aliases = set(project.catalog.aliases_for_artifact(artifact_id)) - allowed_aliases_by_id[artifact_id]
+        extra_aliases = (
+            set(project.catalog.aliases_for_artifact(artifact_id))
+            - allowed_aliases_by_id[artifact_id]
+        )
         if extra_aliases:
-            problems.append(
-                f"{artifact_id} also has aliases {sorted(extra_aliases)}"
-            )
+            problems.append(f"{artifact_id} also has aliases {sorted(extra_aliases)}")
         external = [
-            row for row in project.catalog.artifact_dependents(artifact_id)
+            row
+            for row in project.catalog.artifact_dependents(artifact_id)
             if str(row["artifact_id"]) not in bundle_ids
         ]
         if external:
             details = [
-                f"{row['artifact_id']} ({row.get('label', 'output')})" for row in external
+                f"{row['artifact_id']} ({row.get('label', 'output')})"
+                for row in external
             ]
             problems.append(f"{artifact_id} has live dependents {details}")
     if problems:
@@ -203,7 +212,7 @@ def _check_overwrite_safety(
 
 
 def _print_reuse(
-    project: "Project",
+    project: Project,
     labels: Sequence[str],
     aliases: Mapping[str, str],
     existing: Mapping[str, str],

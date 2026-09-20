@@ -207,9 +207,10 @@ def test_wikinews_units_2_to_4_vertical_slice(tmp_path: Path) -> None:
             position=0, other_position=1, metric="cosine"
         )
         assert cosine_distance == pytest.approx(1.0 - cosine)
-        assert dtm.analysis.distance(
-            position=0, other_position=1, metric="euclidean"
-        ) >= 0.0
+        assert (
+            dtm.analysis.distance(position=0, other_position=1, metric="euclidean")
+            >= 0.0
+        )
 
         matrix_stats = dtm.analysis.matrix_summary(batch_size=8)
         assert matrix_stats.n_rows == 39
@@ -280,10 +281,14 @@ def test_count_vectorizer_fit_translate_can_resume_and_freeze_learned_vocabulary
             return result
 
         vectorizer.translate_batch = MethodType(fail_after_fit_once, vectorizer)
-        with pytest.raises(RuntimeError, match="intentional CountVectorizer fit interruption"):
+        with pytest.raises(
+            RuntimeError, match="intentional CountVectorizer fit interruption"
+        ):
             project.translate(vectorizer, paragraphs)
 
-        operation_rows = project.catalog.operations_using_operator(vectorizer.operator_id)
+        operation_rows = project.catalog.operations_using_operator(
+            vectorizer.operator_id
+        )
         assert len(operation_rows) == 1
         operation_id = str(operation_rows[0]["operation_id"])
 

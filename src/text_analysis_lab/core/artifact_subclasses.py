@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence, Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast, get_args
 
@@ -31,6 +31,7 @@ except ImportError:  # Compatibility with the pre-StructuralColumn version.
 
 if TYPE_CHECKING:
     from scipy import sparse as scipy_sparse
+
     from text_analysis_lab.core.project import Project
 
 
@@ -130,7 +131,9 @@ def _validated_feature_indices(
 ) -> list[int]:
     if isinstance(raw_indices, np.ndarray):
         values = raw_indices.tolist()
-    elif isinstance(raw_indices, Sequence) and not isinstance(raw_indices, (str, bytes)):
+    elif isinstance(raw_indices, Sequence) and not isinstance(
+        raw_indices, (str, bytes)
+    ):
         values = list(raw_indices)
     else:
         raise ArtifactError(
@@ -362,7 +365,9 @@ class _MatrixArtifact(BaseArtifact):
                     "artifact for inherited feature access."
                 )
             basis = self.project.get_artifact(basis_ids[0])
-            if basis.artifact_type != self.artifact_type or not isinstance(basis, _MatrixArtifact):
+            if basis.artifact_type != self.artifact_type or not isinstance(
+                basis, _MatrixArtifact
+            ):
                 raise ArtifactError(
                     f"Matrix artifact {self.artifact_id} cannot inherit a feature frame "
                     f"from {basis.artifact_id}."
@@ -412,7 +417,9 @@ class _MatrixArtifact(BaseArtifact):
                 "for inherited matrix data."
             )
         basis = self.project.get_artifact(basis_ids[0])
-        if basis.artifact_type != self.artifact_type or not isinstance(basis, _MatrixArtifact):
+        if basis.artifact_type != self.artifact_type or not isinstance(
+            basis, _MatrixArtifact
+        ):
             raise ArtifactError(
                 f"Matrix artifact {self.artifact_id} cannot inherit matrix features "
                 f"from {basis.artifact_id}."
@@ -442,9 +449,7 @@ class _MatrixArtifact(BaseArtifact):
         value = self.components["data"]["row_names"].get("name")
         return str(value) if value is not None else None
 
-    def get_row_names(
-        self, *, positions: Sequence[int] | None = None
-    ) -> list[str]:
+    def get_row_names(self, *, positions: Sequence[int] | None = None) -> list[str]:
         """Return row names in requested artifact-position order."""
         if not self.has_row_names:
             raise UnsupportedArtifactOperationError(
@@ -531,9 +536,7 @@ class _MatrixArtifact(BaseArtifact):
             )
         return selected, [physical_map[index] for index in local_indices]
 
-    def _resolve_external_data_columns(
-        self, data_columns: ColumnSelect
-    ) -> list[str]:
+    def _resolve_external_data_columns(self, data_columns: ColumnSelect) -> list[str]:
         if data_columns is False:
             return []
         return _requested_data_columns(self.get_data_columns(), data_columns)
@@ -749,7 +752,7 @@ class SparseMatrixArtifact(_MatrixArtifact):
 
     def _load_batch_rows(
         self, batch: int, row_offsets: Sequence[int]
-    ) -> "scipy_sparse.csr_matrix":
+    ) -> scipy_sparse.csr_matrix:
         path = self.storage.data_value_part_path(batch, self.value_suffix)
         if not path.exists():
             raise ArtifactError(f"Missing sparse matrix data part: {path}")
@@ -761,7 +764,7 @@ class SparseMatrixArtifact(_MatrixArtifact):
         positions: Sequence[int],
         *,
         column_indices: Sequence[int],
-    ) -> "scipy_sparse.csr_matrix":
+    ) -> scipy_sparse.csr_matrix:
         sparse = self._sparse_module()
         positions = _positions_as_list(positions)
         resolved_columns = [int(index) for index in column_indices]
@@ -795,7 +798,7 @@ class SparseMatrixArtifact(_MatrixArtifact):
         positions: Sequence[int],
         *,
         data_columns: ColumnSelect = True,
-    ) -> "scipy_sparse.csr_matrix":
+    ) -> scipy_sparse.csr_matrix:
         _, column_indices = self._column_indices(data_columns)
         return self._own_data_native_for_positions_by_indices(
             positions,
@@ -847,7 +850,7 @@ class SparseMatrixArtifact(_MatrixArtifact):
         *,
         data_columns: ColumnSelect = True,
         positions: Sequence[int] | None = None,
-    ) -> "scipy_sparse.csr_matrix":
+    ) -> scipy_sparse.csr_matrix:
         result = self.query(
             key_columns=False,
             data_columns=data_columns,
@@ -934,7 +937,7 @@ ARTIFACT_TYPE_REGISTRY: dict[ArtifactType, type[BaseArtifact]] = _artifact_regis
 )
 
 
-def load_artifact(project: "Project", artifact_dir: str | Path) -> BaseArtifact:
+def load_artifact(project: Project, artifact_dir: str | Path) -> BaseArtifact:
     """Load an artifact handle from an artifact directory."""
     artifact_path = Path(artifact_dir)
     descriptor = _read_json(artifact_path / "artifact.json")

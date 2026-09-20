@@ -10,10 +10,14 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 import pandas as pd
 
-from text_analysis_lab.core.errors import ArtifactError, OperatorError, OperatorNotFittedError
+from text_analysis_lab.core.errors import (
+    ArtifactError,
+    OperatorError,
+    OperatorNotFittedError,
+)
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -44,8 +48,8 @@ class CountVectorizer(BaseTranslator):
         self,
         *,
         text_field: str = "text",
-        min_df: int | float = 1,
-        max_df: int | float = 1.0,
+        min_df: float = 1,
+        max_df: float = 1.0,
         stop_words: str | Sequence[str] | None = None,
         lowercase: bool = True,
         analyzer: str = "word",
@@ -117,7 +121,7 @@ class CountVectorizer(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -132,7 +136,7 @@ class CountVectorizer(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -145,7 +149,7 @@ class CountVectorizer(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -159,7 +163,9 @@ class CountVectorizer(BaseTranslator):
             batch_size=(
                 None
                 if mode == "fit_translate"
-                else request.batch_size if request.batch_size is not None else 10_000
+                else request.batch_size
+                if request.batch_size is not None
+                else 10_000
             ),
             form="table",
             metadata_mode="none",
@@ -177,16 +183,24 @@ class CountVectorizer(BaseTranslator):
         packet = _single_input(inputs)
         frame = _require_frame(packet.data)
         key_columns = [str(name) for name in packet.primary_key]
-        missing = [name for name in [*key_columns, self.text_field] if name not in frame.columns]
+        missing = [
+            name
+            for name in [*key_columns, self.text_field]
+            if name not in frame.columns
+        ]
         if missing:
-            raise ArtifactError(f"CountVectorizer source batch is missing columns {missing}.")
+            raise ArtifactError(
+                f"CountVectorizer source batch is missing columns {missing}."
+            )
 
         texts = frame[self.text_field].fillna("").astype("string").tolist()
         keys = frame.loc[:, key_columns].reset_index(drop=True)
 
         if mode == "fit_translate":
             if self.is_fitted:
-                raise OperatorError("fit_translate received an already fitted CountVectorizer.")
+                raise OperatorError(
+                    "fit_translate received an already fitted CountVectorizer."
+                )
             self._vectorizer = self._make_vectorizer()
             matrix = self._vectorizer.fit_transform(texts)
             self.vocabulary_ = _normalize_vocabulary(self._vectorizer.vocabulary_)
@@ -247,7 +261,7 @@ class CountVectorizer(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "CountVectorizer":
+    ) -> CountVectorizer:
         _ = request
         if mode != "translate" or not self.is_fitted:
             raise OperatorNotFittedError(
@@ -275,7 +289,7 @@ class CountVectorizer(BaseTranslator):
         return state
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "CountVectorizer":
+    def from_json_state(cls, state: Mapping[str, Any]) -> CountVectorizer:
         vocabulary = state.get("vocabulary")
         return cls(
             text_field=str(state.get("text_field", "text")),
@@ -307,7 +321,9 @@ class CountVectorizer(BaseTranslator):
             return
         filename = manifest.get("vocabulary_file")
         if not isinstance(filename, str) or not filename:
-            raise OperatorError("CountVectorizer asset manifest is missing vocabulary_file.")
+            raise OperatorError(
+                "CountVectorizer asset manifest is missing vocabulary_file."
+            )
         frame = pd.read_parquet(assets_dir / filename)
         self.vocabulary_ = _vocabulary_from_frame(frame)
         self._vectorizer = self._make_vectorizer(vocabulary=self.vocabulary_)
@@ -338,20 +354,26 @@ class CountVectorizer(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "CountVectorizer":
+    ) -> CountVectorizer:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         obj = cls.from_json_state(cast(Mapping[str, Any], state))
         assets = state.get("assets", {})
         if not isinstance(assets, Mapping):
-            raise OperatorError("CountVectorizer intermediate assets must be a mapping.")
+            raise OperatorError(
+                "CountVectorizer intermediate assets must be a mapping."
+            )
         obj.load_assets(intermediate_dir, assets)
         obj.operator_id = operator_id
         return obj
 
     def _make_vectorizer(self, *, vocabulary: Mapping[str, int] | None = None):
         try:
-            from sklearn.feature_extraction.text import CountVectorizer as SklearnCountVectorizer
+            from sklearn.feature_extraction.text import (
+                CountVectorizer as SklearnCountVectorizer,
+            )
         except ImportError as exc:  # pragma: no cover - declared dependency
             raise OperatorError("CountVectorizer requires scikit-learn.") from exc
 
@@ -398,7 +420,6 @@ class CountVectorizer(BaseTranslator):
             raise OperatorNotFittedError("CountVectorizer has no fitted vocabulary.")
         frame = _vocabulary_frame(self.vocabulary_)
         return frame["term"].astype(str).tolist()
-
 
 
 class _PorterAnalyzer:
@@ -469,7 +490,9 @@ def _normalize_vocabulary(vocabulary: Mapping[str, int]) -> dict[str, int]:
         raise ValueError("CountVectorizer vocabulary terms must be unique.")
     values = series.to_numpy(dtype="int64", copy=False)
     if not np.array_equal(np.sort(values), np.arange(len(values), dtype="int64")):
-        raise ValueError("CountVectorizer vocabulary indices must be contiguous from zero.")
+        raise ValueError(
+            "CountVectorizer vocabulary indices must be contiguous from zero."
+        )
     series.index = series.index.astype(str)
     return cast(dict[str, int], series.to_dict())
 
@@ -494,7 +517,7 @@ def _vocabulary_from_frame(frame: pd.DataFrame) -> dict[str, int]:
     return _normalize_vocabulary(series.to_dict())
 
 
-def _single_source(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
+def _single_source(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
         raise OperatorError(
             f"CountVectorizer requires exactly one source under {DEFAULT_SOURCE_LABEL!r}."

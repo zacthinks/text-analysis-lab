@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from text_analysis_lab.dictionaries.dictionary import Dictionary
 from text_analysis_lab.dictionaries.polarity import PolarityDictionary
@@ -166,19 +166,24 @@ def _load_with_nltk_data(
 ) -> T:
     try:
         return loader()
-    except LookupError as exc:
-        if download:
-            globals()["download"](packages, quiet=True)
-            try:
-                return loader()
-            except LookupError as retry_exc:  # pragma: no cover - provider failure
-                exc = retry_exc
-        commands = " ".join(packages)
-        raise DictionaryResourceError(
-            "Required NLTK dictionary data are not installed: "
-            f"{', '.join(packages)}. Run `python -m nltk.downloader {commands}` or "
-            "call `teal.dictionaries.download_nltk(...)` explicitly."
-        ) from exc
+    except LookupError as initial_exc:
+        if not download:
+            raise _missing_resource_error(packages) from initial_exc
+
+    globals()["download"](packages, quiet=True)
+    try:
+        return loader()
+    except LookupError as retry_exc:  # pragma: no cover - provider failure
+        raise _missing_resource_error(packages) from retry_exc
+
+
+def _missing_resource_error(packages: tuple[str, ...]) -> DictionaryResourceError:
+    commands = " ".join(packages)
+    return DictionaryResourceError(
+        "Required NLTK dictionary data are not installed: "
+        f"{', '.join(packages)}. Run `python -m nltk.downloader {commands}` or "
+        "call `teal.dictionaries.download_nltk(...)` explicitly."
+    )
 
 
 def _read_opinion_lexicon() -> tuple[list[str], list[str]]:

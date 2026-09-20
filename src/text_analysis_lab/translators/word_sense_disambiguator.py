@@ -14,8 +14,8 @@ DEFAULT_WSL_READER_MODEL = "Babelscape/wsl-reader-deberta-v3-base"
 DEFAULT_WSL_READER_REVISION = "809d05bd12f261d26b42e28dc2b31db430c1585c"
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     OutputSpec,
     SourceRequest,
@@ -118,7 +118,9 @@ class WordSenseDisambiguator(BaseTranslator):
         if not model_name:
             raise ValueError("model_name must be non-empty.")
         if not sentence_key or not token_key or sentence_key == token_key:
-            raise ValueError("sentence_key and token_key must be distinct non-empty names.")
+            raise ValueError(
+                "sentence_key and token_key must be distinct non-empty names."
+            )
         if target_span_policy not in {"carrier_only", "unique_mwe_envelope"}:
             raise ValueError(
                 "target_span_policy must be 'carrier_only' or 'unique_mwe_envelope'."
@@ -141,11 +143,17 @@ class WordSenseDisambiguator(BaseTranslator):
         self.local_files_only = bool(local_files_only)
         self.acknowledge_noncommercial_license = True
 
-    def output_specs(self, *, sources: Mapping[str, "BaseArtifact"], request: TranslationRequest):
+    def output_specs(
+        self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest
+    ):
         _ = request
-        tokens = _validate_sources(sources, sentence_key=self.sentence_key, token_key=self.token_key)
+        tokens = _validate_sources(
+            sources, sentence_key=self.sentence_key, token_key=self.token_key
+        )
         if "candidate_id" in tokens.primary_key:
-            raise OperatorError("WordSenseDisambiguator candidate_id collides with token keys.")
+            raise OperatorError(
+                "WordSenseDisambiguator candidate_id collides with token keys."
+            )
         return {
             SENSES: OutputSpec(
                 artifact_type="table", lineage_mode="preserved_key", basis_labels=TOKENS
@@ -168,7 +176,9 @@ class WordSenseDisambiguator(BaseTranslator):
 
     def input_request(self, *, sources, mode, request):
         _ = mode, request
-        _validate_sources(sources, sentence_key=self.sentence_key, token_key=self.token_key)
+        _validate_sources(
+            sources, sentence_key=self.sentence_key, token_key=self.token_key
+        )
         return {
             TOKENS: SourceRequest(
                 artifact_type="table",
@@ -187,11 +197,16 @@ class WordSenseDisambiguator(BaseTranslator):
     def translate_batch(self, inputs, *, mode, request):
         _ = mode, request
         if set(inputs) != {TOKENS}:
-            raise OperatorError(f"WordSenseDisambiguator expects one input under {TOKENS!r}.")
+            raise OperatorError(
+                f"WordSenseDisambiguator expects one input under {TOKENS!r}."
+            )
         packet = inputs[TOKENS]
         tokens = _frame(packet.data)
         token_keys = list(packet.primary_key)
-        if len(token_keys) < 2 or token_keys[-2:] != [self.sentence_key, self.token_key]:
+        if len(token_keys) < 2 or token_keys[-2:] != [
+            self.sentence_key,
+            self.token_key,
+        ]:
             raise ArtifactError(
                 "WordSenseDisambiguator expects token primary keys to end in "
                 f"{self.sentence_key!r}, {self.token_key!r}."
@@ -199,12 +214,16 @@ class WordSenseDisambiguator(BaseTranslator):
         required = [*token_keys, "text", "lemma", "pos", "ent_type"]
         missing = [name for name in required if name not in tokens]
         if missing:
-            raise ArtifactError(f"WordSenseDisambiguator token source is missing {missing}.")
+            raise ArtifactError(
+                f"WordSenseDisambiguator token source is missing {missing}."
+            )
 
         document_keys = token_keys[:-2]
         sentence_group_keys = [*document_keys, self.sentence_key]
         sentence_tokens: dict[tuple[int, ...], pd.DataFrame] = {}
-        for raw_key, group in tokens.groupby(sentence_group_keys, sort=False, dropna=False):
+        for raw_key, group in tokens.groupby(
+            sentence_group_keys, sort=False, dropna=False
+        ):
             key = raw_key if isinstance(raw_key, tuple) else (raw_key,)
             ordered = group.sort_values(self.token_key).reset_index(drop=True)
             # spaCy legitimately emits SPACE tokens for control/whitespace runs
@@ -213,9 +232,9 @@ class WordSenseDisambiguator(BaseTranslator):
             # tokenizers encode them as zero subwords.  They must not enter the
             # WSL reader context, but their TeAL token rows remain untouched.
             reader_mask = ordered["text"].fillna("").astype(str).str.strip().ne("")
-            sentence_tokens[tuple(int(v) for v in key)] = (
-                ordered.loc[reader_mask].reset_index(drop=True)
-            )
+            sentence_tokens[tuple(int(v) for v in key)] = ordered.loc[
+                reader_mask
+            ].reset_index(drop=True)
 
         document_ordinals: dict[tuple[int, ...], int] = {}
         target_keys: dict[str, dict[str, int]] = {}
@@ -235,7 +254,9 @@ class WordSenseDisambiguator(BaseTranslator):
             context = sentence_tokens.get(sentence_key)
             if context is None or context.empty:
                 continue
-            local_matches = context.index[context[self.token_key].astype(int) == token_id].tolist()
+            local_matches = context.index[
+                context[self.token_key].astype(int) == token_id
+            ].tolist()
             if len(local_matches) != 1:
                 raise ArtifactError(
                     f"Token {sentence_key + (token_id,)} does not align uniquely within its sentence."
@@ -250,6 +271,7 @@ class WordSenseDisambiguator(BaseTranslator):
             target_keys[target_id] = key_record
             target_context[target_id] = (surface, parser_lemma, str(raw_pos or ""))
             from text_analysis_lab._linguistics.wsd.types import WSDTarget
+
             targets.append(
                 WSDTarget(
                     target_id=target_id,
@@ -263,7 +285,9 @@ class WordSenseDisambiguator(BaseTranslator):
                     pos=wn_pos,
                     surface_form=surface,
                     parser_lemma=" ".join(parser_lemma.replace("_", " ").split()),
-                    entity_type=None if pd.isna(row["ent_type"]) else str(row["ent_type"]),
+                    entity_type=None
+                    if pd.isna(row["ent_type"])
+                    else str(row["ent_type"]),
                     source_ids={"token_id": token_id},
                 )
             )
@@ -299,6 +323,7 @@ class WordSenseDisambiguator(BaseTranslator):
             local_files_only=self.local_files_only,
         )
         from text_analysis_lab._linguistics.wsd.experiment import score_wsd_targets
+
         rows, unresolved, _cache_stats = score_wsd_targets(
             targets,
             ontology=ontology,
@@ -317,7 +342,9 @@ class WordSenseDisambiguator(BaseTranslator):
 
         for target_id, target_rows in grouped_rows.items():
             key_record = target_keys[target_id]
-            ordered = sorted(target_rows, key=lambda item: (int(item.rank), item.sense_id))
+            ordered = sorted(
+                target_rows, key=lambda item: (int(item.rank), item.sense_id)
+            )
             for candidate_id, row in enumerate(ordered):
                 candidate_keys.append({**key_record, "candidate_id": int(candidate_id)})
                 candidate_data.append(_candidate_record(self, row))
@@ -331,18 +358,23 @@ class WordSenseDisambiguator(BaseTranslator):
                         "surface_form": surface,
                         "parser_lemma": parser_lemma,
                         "resolved_lemma": resolved_lemma,
-                        "lemma_overrides_parser": _normalized(parser_lemma) != _normalized(resolved_lemma),
+                        "lemma_overrides_parser": _normalized(parser_lemma)
+                        != _normalized(resolved_lemma),
                         "pos": source_pos,
                         "sense_id": str(selected.sense_id),
                         "synset_id": str(selected.synset_id),
                         "sense_label": selected.sense_label,
-                        "aliases": json.dumps(list(selected.aliases), ensure_ascii=False),
+                        "aliases": json.dumps(
+                            list(selected.aliases), ensure_ascii=False
+                        ),
                         "ili": selected.ili,
                         "ontology_id": str(selected.ontology_id),
                         "ontology_version": str(selected.ontology_version),
                         "gloss_text": str(selected.gloss_text),
                         "normalized_score": float(selected.normalized_score),
-                        "top1_margin": None if selected.top1_margin is None else float(selected.top1_margin),
+                        "top1_margin": None
+                        if selected.top1_margin is None
+                        else float(selected.top1_margin),
                         "candidate_kind": str(selected.candidate_kind),
                         "model_name": self.model_name,
                         "model_revision": self.model_revision,
@@ -367,10 +399,14 @@ class WordSenseDisambiguator(BaseTranslator):
         outputs: dict[str, Mapping[str, Any]] = {
             SENSES: {
                 "keys": pd.DataFrame.from_records(sense_keys, columns=token_keys),
-                "data": pd.DataFrame.from_records(sense_data, columns=list(SENSE_DATA_COLUMNS)),
+                "data": pd.DataFrame.from_records(
+                    sense_data, columns=list(SENSE_DATA_COLUMNS)
+                ),
             },
             CANDIDATES: {
-                "keys": pd.DataFrame.from_records(candidate_keys, columns=[*token_keys, "candidate_id"]),
+                "keys": pd.DataFrame.from_records(
+                    candidate_keys, columns=[*token_keys, "candidate_id"]
+                ),
                 "data": pd.DataFrame.from_records(
                     candidate_data, columns=list(CANDIDATE_DATA_COLUMNS)
                 ),
@@ -390,7 +426,6 @@ class WordSenseDisambiguator(BaseTranslator):
 
     def finalize_translation(self, *, mode, request):
         _ = mode, request
-        return None
 
     def to_json_state(self) -> dict[str, Any]:
         return {
@@ -408,12 +443,13 @@ class WordSenseDisambiguator(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "WordSenseDisambiguator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> WordSenseDisambiguator:
         return cls(**cast(dict[str, Any], dict(state)))
 
 
 def _make_ontology(*, lexicon: str, include_multiword_candidates: bool):
     from text_analysis_lab._linguistics.wsd.ontology import WnOntologyProvider
+
     return WnOntologyProvider(
         lexicon,
         include_multiword_candidates=include_multiword_candidates,
@@ -423,6 +459,7 @@ def _make_ontology(*, lexicon: str, include_multiword_candidates: bool):
 
 def _make_backend(*, model_name, model_revision, device, precision, local_files_only):
     from text_analysis_lab._linguistics.wsd.wsl_backend import BabelscapeWSLBackend
+
     return BabelscapeWSLBackend(
         model_name,
         revision=model_revision,
@@ -456,7 +493,9 @@ def _candidate_record(translator: WordSenseDisambiguator, row: Any) -> dict[str,
         "top1_margin": None if row.top1_margin is None else float(row.top1_margin),
         "candidate_source": str(row.source),
         "candidate_kind": str(row.candidate_kind),
-        "candidate_components": json.dumps(list(row.candidate_components), ensure_ascii=False),
+        "candidate_components": json.dumps(
+            list(row.candidate_components), ensure_ascii=False
+        ),
         "candidate_trigger_lemmas": json.dumps(
             list(row.candidate_trigger_lemmas), ensure_ascii=False
         ),
@@ -481,7 +520,10 @@ def _validate_sources(sources, *, sentence_key: str, token_key: str):
     tokens = sources[TOKENS]
     if tokens.artifact_type.value != "table":
         raise OperatorError("WordSenseDisambiguator requires a table token artifact.")
-    if len(tokens.primary_key) < 2 or list(tokens.primary_key[-2:]) != [sentence_key, token_key]:
+    if len(tokens.primary_key) < 2 or list(tokens.primary_key[-2:]) != [
+        sentence_key,
+        token_key,
+    ]:
         raise OperatorError(
             "WordSenseDisambiguator expects token primary keys to end in "
             f"{sentence_key!r}, {token_key!r}."
@@ -491,7 +533,9 @@ def _validate_sources(sources, *, sentence_key: str, token_key: str):
 
 def _frame(value: Any) -> pd.DataFrame:
     if not isinstance(value, pd.DataFrame):
-        raise ArtifactError("WordSenseDisambiguator expected a pandas DataFrame token source.")
+        raise ArtifactError(
+            "WordSenseDisambiguator expected a pandas DataFrame token source."
+        )
     return value
 
 
@@ -501,9 +545,17 @@ def _normalized(text: str) -> str:
 
 def _normalize_wordnet_pos(pos: str | None) -> str | None:
     mapping = {
-        "NOUN": "n", "PROPN": "n", "VERB": "v", "AUX": "v",
-        "ADJ": "a", "ADV": "r", "n": "n", "v": "v",
-        "a": "a", "s": "s", "r": "r",
+        "NOUN": "n",
+        "PROPN": "n",
+        "VERB": "v",
+        "AUX": "v",
+        "ADJ": "a",
+        "ADV": "r",
+        "n": "n",
+        "v": "v",
+        "a": "a",
+        "s": "s",
+        "r": "r",
     }
     if pos is None:
         return None

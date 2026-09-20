@@ -18,7 +18,9 @@ from text_analysis_lab.translators.spacy_translator import (
 )
 
 
-def _packet(frame: pd.DataFrame, *, primary_key=("collection_id", "document_id")) -> InputBatch:
+def _packet(
+    frame: pd.DataFrame, *, primary_key=("collection_id", "document_id")
+) -> InputBatch:
     return InputBatch(
         source_label="source",
         artifact_id="art_documents",
@@ -108,7 +110,9 @@ def test_spacy_output_specs_form_exact_two_level_hierarchy() -> None:
     assert source_request.columns.data == "text"
 
 
-def test_spacy_translator_uses_pipe_and_emits_exact_normalized_rows(monkeypatch) -> None:
+def test_spacy_translator_uses_pipe_and_emits_exact_normalized_rows(
+    monkeypatch,
+) -> None:
     import text_analysis_lab.translators.spacy_translator as module
 
     doc = _annotated_doc()
@@ -156,7 +160,9 @@ def test_spacy_translator_uses_pipe_and_emits_exact_normalized_rows(monkeypatch)
         "sentence_id",
         "token_id",
     ]
-    assert tokens["keys"][["sentence_id", "token_id"]].to_records(index=False).tolist() == [
+    assert tokens["keys"][["sentence_id", "token_id"]].to_records(
+        index=False
+    ).tolist() == [
         (0, 0),
         (0, 1),
         (0, 2),
@@ -245,20 +251,24 @@ def test_spacy_translator_uses_pipe_and_emits_exact_normalized_rows(monkeypatch)
         assert row["is_sent_end"] is token.is_sent_end
 
 
-def test_spacy_head_ids_are_sentence_local_and_roots_self_reference(monkeypatch) -> None:
+def test_spacy_head_ids_are_sentence_local_and_roots_self_reference(
+    monkeypatch,
+) -> None:
     import text_analysis_lab.translators.spacy_translator as module
 
     doc = _annotated_doc()
     fake_nlp = _PipeOnlyNLP({doc.text: doc})
     monkeypatch.setattr(module, "_load_spacy_pipeline", lambda model, disable: fake_nlp)
-    frame = pd.DataFrame(
-        {"collection_id": [1], "document_id": [1], "text": [doc.text]}
+    frame = pd.DataFrame({"collection_id": [1], "document_id": [1], "text": [doc.text]})
+    output = (
+        SpacyTranslator(model="fake")
+        .translate_batch(
+            {"source": _packet(frame)},
+            mode="translate",
+            request=TranslationRequest(),
+        )
+        .outputs[TOKENS_LABEL]
     )
-    output = SpacyTranslator(model="fake").translate_batch(
-        {"source": _packet(frame)},
-        mode="translate",
-        request=TranslationRequest(),
-    ).outputs[TOKENS_LABEL]
     joined = pd.concat([output["keys"], output["data"]], axis=1)
 
     for _, sentence in joined.groupby(["collection_id", "document_id", "sentence_id"]):
@@ -269,7 +279,9 @@ def test_spacy_head_ids_are_sentence_local_and_roots_self_reference(monkeypatch)
         assert int(roots.iloc[0]["token_id"]) == int(roots.iloc[0]["head_token_id"])
 
 
-def test_spacy_translator_rejects_pipeline_without_sentence_boundaries(monkeypatch) -> None:
+def test_spacy_translator_rejects_pipeline_without_sentence_boundaries(
+    monkeypatch,
+) -> None:
     spacy = pytest.importorskip("spacy")
     import text_analysis_lab.translators.spacy_translator as module
 
@@ -277,9 +289,7 @@ def test_spacy_translator_rejects_pipeline_without_sentence_boundaries(monkeypat
     doc = nlp.make_doc("No sentence annotations here.")
     fake_nlp = _PipeOnlyNLP({doc.text: doc})
     monkeypatch.setattr(module, "_load_spacy_pipeline", lambda model, disable: fake_nlp)
-    frame = pd.DataFrame(
-        {"collection_id": [1], "document_id": [1], "text": [doc.text]}
-    )
+    frame = pd.DataFrame({"collection_id": [1], "document_id": [1], "text": [doc.text]})
     with pytest.raises(ArtifactError, match="sentence boundaries"):
         SpacyTranslator(model="fake").translate_batch(
             {"source": _packet(frame)},
@@ -334,9 +344,7 @@ def test_installed_en_core_web_sm_matches_direct_spacy_output() -> None:
 
     text = "Barack Obama visited New York in 2015. He later returned to Washington."
     reference_doc = reference_nlp(text)
-    frame = pd.DataFrame(
-        {"collection_id": [9], "document_id": [3], "text": [text]}
-    )
+    frame = pd.DataFrame({"collection_id": [9], "document_id": [3], "text": [text]})
     output = SpacyTranslator(
         model="en_core_web_sm", spacy_batch_size=8
     ).translate_batch(
@@ -347,15 +355,23 @@ def test_installed_en_core_web_sm_matches_direct_spacy_output() -> None:
     emitted_sentences = output.outputs[SENTENCES_LABEL]["data"]
     emitted_tokens = output.outputs[TOKENS_LABEL]["data"]
 
-    assert emitted_sentences["text"].tolist() == [span.text for span in reference_doc.sents]
+    assert emitted_sentences["text"].tolist() == [
+        span.text for span in reference_doc.sents
+    ]
     expected_tokens = list(reference_doc)
     assert emitted_tokens["text"].tolist() == [token.text for token in expected_tokens]
-    assert emitted_tokens["lemma"].tolist() == [token.lemma_ for token in expected_tokens]
+    assert emitted_tokens["lemma"].tolist() == [
+        token.lemma_ for token in expected_tokens
+    ]
     assert emitted_tokens["pos"].tolist() == [token.pos_ for token in expected_tokens]
     assert emitted_tokens["tag"].tolist() == [token.tag_ for token in expected_tokens]
     assert emitted_tokens["dep"].tolist() == [token.dep_ for token in expected_tokens]
-    assert emitted_tokens["ent_iob"].tolist() == [token.ent_iob_ for token in expected_tokens]
-    assert emitted_tokens["ent_type"].tolist() == [token.ent_type_ for token in expected_tokens]
+    assert emitted_tokens["ent_iob"].tolist() == [
+        token.ent_iob_ for token in expected_tokens
+    ]
+    assert emitted_tokens["ent_type"].tolist() == [
+        token.ent_type_ for token in expected_tokens
+    ]
     assert any(emitted_tokens["dep"].astype(str).ne(""))
     assert any(emitted_tokens["pos"].astype(str).ne(""))
     assert any(emitted_tokens["lemma"].astype(str).ne(""))
@@ -375,9 +391,7 @@ def test_real_saved_spacy_pipeline_loads_and_processes_batch(tmp_path: Path) -> 
             "text": ["First sentence. Second sentence.", "Another document."],
         }
     )
-    output = SpacyTranslator(
-        model=str(model_dir), spacy_batch_size=2
-    ).translate_batch(
+    output = SpacyTranslator(model=str(model_dir), spacy_batch_size=2).translate_batch(
         {"source": _packet(frame)},
         mode="translate",
         request=TranslationRequest(),
@@ -389,10 +403,17 @@ def test_real_saved_spacy_pipeline_loads_and_processes_batch(tmp_path: Path) -> 
         {"collection_id": 1, "document_id": 10, "sentence_id": 1},
         {"collection_id": 1, "document_id": 11, "sentence_id": 0},
     ]
-    assert token_keys.groupby(["collection_id", "document_id", "sentence_id"])["token_id"].min().eq(0).all()
+    assert (
+        token_keys.groupby(["collection_id", "document_id", "sentence_id"])["token_id"]
+        .min()
+        .eq(0)
+        .all()
+    )
 
 
-def test_spacy_pipeline_cache_reuses_loaded_pipeline_within_process(tmp_path: Path) -> None:
+def test_spacy_pipeline_cache_reuses_loaded_pipeline_within_process(
+    tmp_path: Path,
+) -> None:
     spacy = pytest.importorskip("spacy")
     import text_analysis_lab.translators.spacy_translator as module
 

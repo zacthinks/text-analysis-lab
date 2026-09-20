@@ -25,7 +25,7 @@ class GlossPayload(FrozenRecord):
     language: str = "en"
 
     @model_validator(mode="after")
-    def validate_definition(self) -> "GlossPayload":
+    def validate_definition(self) -> GlossPayload:
         if not self.definition.strip():
             raise ValueError("gloss definitions cannot be empty")
         return self
@@ -95,7 +95,7 @@ class WSDTarget(FrozenRecord):
         return self.surface_form or self.lemma
 
     @model_validator(mode="after")
-    def validate_target_span(self) -> "WSDTarget":
+    def validate_target_span(self) -> WSDTarget:
         if self.target_end <= self.target_start:
             raise ValueError("target_end must be greater than target_start")
         if self.target_end > len(self.tokens):
@@ -197,7 +197,7 @@ class ExperimentSummary(FrozenRecord):
         unresolved_targets: Sequence[UnresolvedWSDTarget],
         cache: CacheStats,
         rows: list[ScoredSenseCandidate],
-    ) -> "ExperimentSummary":
+    ) -> ExperimentSummary:
         compact_rows = [
             {
                 "target_id": row.target_id,

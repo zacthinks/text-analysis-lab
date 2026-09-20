@@ -15,8 +15,11 @@ from text_analysis_lab.linguistics.wsd.mwe import (
     lexical_components,
     load_or_build_multiword_lemma_index,
 )
-from text_analysis_lab.linguistics.wsd.types import GlossPayload, SenseCandidate, WSDTarget
-
+from text_analysis_lab.linguistics.wsd.types import (
+    GlossPayload,
+    SenseCandidate,
+    WSDTarget,
+)
 
 POS_MAP = {
     "NOUN": "n",
@@ -95,7 +98,9 @@ class OpenEnglishWordNetProvider:
             if share_runtime:
                 _WN_RUNTIME_CACHE[runtime_key] = runtime
         self.wordnet, self.morphy = runtime
-        self._lemma_cache: dict[tuple[str, str], tuple[tuple[str, tuple[str, ...]], ...]] = {}
+        self._lemma_cache: dict[
+            tuple[str, str], tuple[tuple[str, tuple[str, ...]], ...]
+        ] = {}
         self._direct_candidate_cache: dict[
             tuple[str, str], tuple[SenseCandidate, ...]
         ] = {}
@@ -410,9 +415,7 @@ class OpenEnglishWordNetProvider:
         exact = [
             word
             for word in words
-            if " ".join(
-                str(_call_or_value(word, "lemma")).replace("_", " ").split()
-            )
+            if " ".join(str(_call_or_value(word, "lemma")).replace("_", " ").split())
             == lemma
         ]
         if exact:
@@ -506,7 +509,9 @@ class OpenEnglishWordNetProvider:
                         "mwe_word_id": entry.word_id,
                         "mwe_components": entry.components,
                         "mwe_trigger_lemmas": trigger_lemmas,
-                        "mwe_component_token_indices": tuple(component_token_indices or ()),
+                        "mwe_component_token_indices": tuple(
+                            component_token_indices or ()
+                        ),
                         "mwe_component_token_matches": (
                             ()
                             if component_token_indices is None
@@ -561,8 +566,6 @@ class OpenEnglishWordNetProvider:
                 "sense_order_source": "exact_lexical_entry",
             },
         )
-
-
 
 
 def _mwe_entry_token_assignment(
@@ -638,12 +641,15 @@ def _mwe_entry_is_licensed(
 ) -> bool:
     """Compatibility Boolean wrapper around deterministic assignment."""
 
-    return _mwe_entry_token_assignment(
-        entry,
-        trigger_lemmas=trigger_lemmas,
-        target=target,
-        token_forms=token_forms,
-    ) is not None
+    return (
+        _mwe_entry_token_assignment(
+            entry,
+            trigger_lemmas=trigger_lemmas,
+            target=target,
+            token_forms=token_forms,
+        )
+        is not None
+    )
 
 
 def _assign_distinct_component_tokens(
@@ -671,6 +677,7 @@ def _assign_distinct_component_tokens(
         assignment[component_index] = None
         used.remove(token_index)
     return False
+
 
 def _merge_synset_candidates(
     first: SenseCandidate, second: SenseCandidate
@@ -701,9 +708,7 @@ def _merge_synset_candidates(
             )
         )
     )
-    metadata["candidate_kinds"] = tuple(
-        dict.fromkeys((first_kind, second_kind))
-    )
+    metadata["candidate_kinds"] = tuple(dict.fromkeys((first_kind, second_kind)))
     mwe_lemmas = tuple(
         dict.fromkeys(
             str(value)
@@ -737,7 +742,11 @@ def _merge_synset_candidates(
                     (
                         *primary.aliases,
                         *other.aliases,
-                        *(() if primary.sense_label is None else (primary.sense_label,)),
+                        *(
+                            ()
+                            if primary.sense_label is None
+                            else (primary.sense_label,)
+                        ),
                         *(() if other.sense_label is None else (other.sense_label,)),
                     )
                 )
@@ -763,5 +772,3 @@ def _ili_string(synset: Any) -> str | None:
 def _sense_alias(lemma: str, pos: str, rank: int) -> str:
     normalized = "_".join(lemma.split())
     return f"{normalized}.{pos}.{rank:02d}"
-
-

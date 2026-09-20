@@ -93,7 +93,12 @@ def test_real_word2vec_named_rows_lookup_pool_and_reopen(tmp_path: Path) -> None
         assert word_vectors.has_row_names
         assert word_vectors.row_name == "word"
         assert word_vectors.get_row_names() == [
-            "cat", "dog", "king", "queen", "pet", "royal"
+            "cat",
+            "dog",
+            "king",
+            "queen",
+            "pet",
+            "royal",
         ]
         assert word_vectors.get_row_by_name("king").shape == (1, 12)
         assert word_vectors.position_by_row_name("king") == 2
@@ -119,9 +124,7 @@ def test_real_word2vec_named_rows_lookup_pool_and_reopen(tmp_path: Path) -> None
         assert np.array_equal(matrix[1], np.zeros(12, dtype=np.float32))
 
         sentence_vectors = project.translate(
-            MatrixRowAggregator(
-                group_by=["doc_id", "sentence_id"], pooling="mean"
-            ),
+            MatrixRowAggregator(group_by=["doc_id", "sentence_id"], pooling="mean"),
             token_vectors,
         )["output"]
         assert sentence_vectors.primary_key == ["doc_id", "sentence_id"]

@@ -63,9 +63,7 @@ def _build_disjoint_extracted_branches(project: teal.Project):
                 "extension": [".pdf", ".txt", ".pdf", ".txt", ".pdf", ".txt"],
             }
         ),
-        metadata=pd.DataFrame(
-            {"speaker": ["a", "b", "c", "d", "e", "f"]}
-        ),
+        metadata=pd.DataFrame({"speaker": ["a", "b", "c", "d", "e", "f"]}),
     )
     pdf = _register_table(
         project,
@@ -98,12 +96,16 @@ def _build_disjoint_extracted_branches(project: teal.Project):
     return root, pdf, txt
 
 
-def test_merge_is_keys_only_and_resolves_branch_data_and_metadata(tmp_path: Path) -> None:
+def test_merge_is_keys_only_and_resolves_branch_data_and_metadata(
+    tmp_path: Path,
+) -> None:
     project_path = tmp_path / "project"
     project = teal.Project.create(project_path, name="merge_test")
     try:
         _, pdf, txt = _build_disjoint_extracted_branches(project)
-        merged = project.merge([pdf, txt], batch_size=2, memo="recombine extracted files")
+        merged = project.merge(
+            [pdf, txt], batch_size=2, memo="recombine extracted files"
+        )
 
         assert merged.descriptor["lineage"] == {
             "lineage_mode": "merged_key",
@@ -247,7 +249,14 @@ def test_merge_is_keys_only_and_resolves_branch_data_and_metadata(tmp_path: Path
             form="table",
             order_by="_position",
         )
-        assert reopened_cleaned_frame["file_id"].astype(int).tolist() == [0, 2, 4, 1, 3, 5]
+        assert reopened_cleaned_frame["file_id"].astype(int).tolist() == [
+            0,
+            2,
+            4,
+            1,
+            3,
+            5,
+        ]
         assert reopened_cleaned_frame["clean_text"].tolist() == [
             "pdf 0",
             "pdf 2",
@@ -256,12 +265,21 @@ def test_merge_is_keys_only_and_resolves_branch_data_and_metadata(tmp_path: Path
             "txt 3",
             "txt 5",
         ]
-        assert reopened_cleaned_frame["speaker"].tolist() == ["a", "c", "e", "b", "d", "f"]
+        assert reopened_cleaned_frame["speaker"].tolist() == [
+            "a",
+            "c",
+            "e",
+            "b",
+            "d",
+            "f",
+        ]
     finally:
         reopened.close()
 
 
-def test_merge_rejects_overlapping_primary_keys_and_marks_output_failed(tmp_path: Path) -> None:
+def test_merge_rejects_overlapping_primary_keys_and_marks_output_failed(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="merge_collision_test")
     try:
         left = _register_table(
@@ -293,7 +311,9 @@ def test_merge_rejects_overlapping_primary_keys_and_marks_output_failed(tmp_path
         project.close()
 
 
-def test_merge_validates_public_api_compatibility_before_creating_operation(tmp_path: Path) -> None:
+def test_merge_validates_public_api_compatibility_before_creating_operation(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="merge_validation_test")
     try:
         left = _register_table(
@@ -333,9 +353,13 @@ def test_merge_validates_public_api_compatibility_before_creating_operation(tmp_
             project.merge([left])
         with pytest.raises(ArtifactError, match="same primary-key fields"):
             project.merge([left, different_key])
-        with pytest.raises(ArtifactError, match="compatible effective data/full-metadata schemas"):
+        with pytest.raises(
+            ArtifactError, match="compatible effective data/full-metadata schemas"
+        ):
             project.merge([left, different_data])
-        with pytest.raises(ArtifactError, match="compatible effective data/full-metadata schemas"):
+        with pytest.raises(
+            ArtifactError, match="compatible effective data/full-metadata schemas"
+        ):
             project.merge([left, different_metadata])
         with pytest.raises(ValueError, match="batch_size must be a positive integer"):
             project.merge([left, different_data], batch_size=0)
@@ -349,7 +373,9 @@ def test_merge_validates_public_api_compatibility_before_creating_operation(tmp_
         project.close()
 
 
-def test_merge_accepts_arbitrary_n_sources_in_one_flat_operation(tmp_path: Path) -> None:
+def test_merge_accepts_arbitrary_n_sources_in_one_flat_operation(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="merge_n_way_test")
     try:
         branches = []

@@ -19,16 +19,16 @@ if TYPE_CHECKING:
 
 
 def binary_code(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     *,
-    text_source: "BaseArtifact | str",
+    text_source: BaseArtifact | str,
     text_field: str,
     instructions: str,
     context_before: int = 2,
     context_after: int = 2,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Interactively code every source observation as 0 or 1.
 
     Progress is committed after each decision to a project-local SQLite file.
@@ -66,7 +66,9 @@ def binary_code(
     )
     if not isinstance(audit_keys, pd.DataFrame):
         raise ArtifactError("binary_code could not materialize audit keys.")
-    audit_keys = audit_keys.sort_values("_position", kind="stable").reset_index(drop=True)
+    audit_keys = audit_keys.sort_values("_position", kind="stable").reset_index(
+        drop=True
+    )
     audit_keys = audit_keys.loc[:, list(keys)]
     if audit_keys.empty:
         raise ArtifactError("binary_code source contains no observations.")
@@ -95,7 +97,9 @@ def binary_code(
     try:
         completed = _load_labels(con)
         total = len(audit_keys)
-        for ordinal, row in enumerate(audit_keys.itertuples(index=False, name=None), start=1):
+        for ordinal, row in enumerate(
+            audit_keys.itertuples(index=False, name=None), start=1
+        ):
             key_tuple = tuple(int(value) for value in row)
             encoded = json.dumps(key_tuple, separators=(",", ":"))
             if encoded in completed:
@@ -149,7 +153,7 @@ def binary_code(
 
 
 def _render_item(
-    text_artifact: "BaseArtifact",
+    text_artifact: BaseArtifact,
     *,
     key_tuple: tuple[int, ...],
     keys: tuple[str, ...],
@@ -197,7 +201,7 @@ def _prompt_binary() -> int:
 
 
 def _state_path(
-    project: "Project",
+    project: Project,
     *,
     audit_id: str,
     text_id: str,
@@ -241,7 +245,9 @@ def _open_state(path: Path, *, metadata: dict[str, Any]) -> sqlite3.Connection:
             """
         )
         encoded = json.dumps(metadata, sort_keys=True)
-        row = con.execute("SELECT payload FROM session_metadata WHERE id = 1").fetchone()
+        row = con.execute(
+            "SELECT payload FROM session_metadata WHERE id = 1"
+        ).fetchone()
         if row is None:
             con.execute(
                 "INSERT INTO session_metadata(id, payload) VALUES (1, ?)",
@@ -249,7 +255,9 @@ def _open_state(path: Path, *, metadata: dict[str, Any]) -> sqlite3.Connection:
             )
         elif str(row["payload"]) != encoded:
             con.close()
-            raise ArtifactError("Existing binary coding state does not match this coding request.")
+            raise ArtifactError(
+                "Existing binary coding state does not match this coding request."
+            )
     return con
 
 

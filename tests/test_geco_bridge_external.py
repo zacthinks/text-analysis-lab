@@ -21,13 +21,18 @@ from text_analysis_lab.integrations import (
     GeCoPredictorRef,
     TeALGeCoProvider,
 )
-from text_analysis_lab.translators import CountVectorizer, GeCoPredictor, SVD, TfidfTransformer
+from text_analysis_lab.translators import (
+    SVD,
+    CountVectorizer,
+    GeCoPredictor,
+    TfidfTransformer,
+)
 
 
 class _FakeGeometricCoder:
     """Minimal current GeCo public seam used to test TeAL's bridge contract."""
 
-    _registry: dict[str, "_FakeGeometricCoder"] = {}
+    _registry: dict[str, _FakeGeometricCoder] = {}
 
     def __init__(self, project_dir, data, keys, text, metadata, provider):
         self.project_dir = Path(project_dir)
@@ -134,7 +139,8 @@ class _FakeGeometricCoder:
         records = list(self._views.values())
         if geometry_id is not None:
             records = [
-                record for record in records
+                record
+                for record in records
                 if int(record["geometry_id"]) == int(geometry_id)
             ]
         return [dict(record) for record in records]
@@ -142,19 +148,25 @@ class _FakeGeometricCoder:
     def geometry_matrix(self, geometry):
         if isinstance(geometry, int):
             record = next(
-                record for record in self._geometries.values()
+                record
+                for record in self._geometries.values()
                 if int(record["geometry_id"]) == int(geometry)
             )
         else:
             record = self._geometries[str(geometry)]
-        return self.provider.geometry_matrix(record["external_ref"], self._ordered_keys())
+        return self.provider.geometry_matrix(
+            record["external_ref"], self._ordered_keys()
+        )
 
     def view_coordinates(self, view_id):
         record = next(
-            record for record in self._views.values()
+            record
+            for record in self._views.values()
             if int(record["view_id"]) == int(view_id)
         )
-        return self.provider.view_coordinates(record["external_ref"], self._ordered_keys())
+        return self.provider.view_coordinates(
+            record["external_ref"], self._ordered_keys()
+        )
 
     def export_codes(self, code):
         frame = self.data.loc[:3, self.keys].copy()
@@ -177,7 +189,9 @@ class _FakeGeometricCoder:
         assert int(ref.code_id) == 4
         assert ref.name == "room_temp_logistic"
         assert allow_stale is False
-        geometry = self._geometries.get("tfidf") or next(iter(self._geometries.values()))
+        geometry = self._geometries.get("tfidf") or next(
+            iter(self._geometries.values())
+        )
         X = np.array(
             [
                 [0.0, 0.0, 1.0],
@@ -278,7 +292,9 @@ def _seed_table(project: teal.Project):
     return project.get_artifact("art_docs")
 
 
-def _seed_matrix(project: teal.Project, artifact_id: str, label: str, values, *, columns):
+def _seed_matrix(
+    project: teal.Project, artifact_id: str, label: str, values, *, columns
+):
     is_sparse = sparse.issparse(values)
     writer = create_artifact_writer(
         artifact_type="sparse_matrix" if is_sparse else "dense_matrix",
@@ -329,7 +345,9 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
     try:
         F = _seed_table(project)
         geometry_values = sparse.csr_matrix(
-            np.array([[i % 2, (i // 2) % 2, (i // 3) % 2] for i in range(10)], dtype=float)
+            np.array(
+                [[i % 2, (i // 2) % 2, (i // 3) % 2] for i in range(10)], dtype=float
+            )
         )
         geometry = _seed_matrix(
             project,
@@ -347,7 +365,9 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
             columns=["x", "y"],
         )
 
-        split = project.probability_split(F, n=3, sample_label="audit", remainder_label="train", random_state=7)
+        split = project.probability_split(
+            F, n=3, sample_label="audit", remainder_label="train", random_state=7
+        )
         T = split["train"]
         t_keys = _frame(T)["row_id"].astype(int).tolist()
 
@@ -364,7 +384,9 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
         assert linked.name == "roomtemp"
         assert linked.coder.data["row_id"].astype(int).tolist() == t_keys
         assert linked.coder.data["text"].tolist() == [f"document {i}" for i in t_keys]
-        assert linked.coder.data["year"].astype(int).tolist() == [2020 + (i % 3) for i in t_keys]
+        assert linked.coder.data["year"].astype(int).tolist() == [
+            2020 + (i % 3) for i in t_keys
+        ]
         np.testing.assert_array_equal(
             linked.coder._geometries["tfidf"]["matrix"].toarray(),
             geometry_values[t_keys, :].toarray(),
@@ -399,7 +421,11 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
         assert labels["label"].astype(int).tolist() == [1, 0, 1, 0]
 
         refs = linked.predictors()
-        assert refs == [GeCoPredictorRef(kind="classifier", id=17, code_id=4, name="room_temp_logistic")]
+        assert refs == [
+            GeCoPredictorRef(
+                kind="classifier", id=17, code_id=4, name="room_temp_logistic"
+            )
+        ]
         predictor = linked.export_predictor(refs[0])
         assert isinstance(predictor, GeCoPredictor)
         L_F = project.translate(predictor, [geometry])["output"]
@@ -462,7 +488,9 @@ def test_three_record_linked_provider_is_thread_local_and_survives_project_close
         geometry = project.translate(
             CountVectorizer(text_field="text", min_df=1), documents
         )["output"]
-        view = project.translate(SVD(n_components=2, random_state=7), geometry)["output"]
+        view = project.translate(SVD(n_components=2, random_state=7), geometry)[
+            "output"
+        ]
 
         linked = project.geco.create(
             "tiny",
@@ -525,7 +553,9 @@ def test_three_record_linked_provider_is_thread_local_and_survives_project_close
 
     reopened = teal.Project.open(project_path)
     try:
-        monkeypatch.setattr(bridge, "_load_geometric_coder", lambda: _FakeGeometricCoder)
+        monkeypatch.setattr(
+            bridge, "_load_geometric_coder", lambda: _FakeGeometricCoder
+        )
         linked2 = reopened.geco.open("tiny")
         assert isinstance(linked2.external_provider, TeALGeCoProvider)
         diagnostics2 = linked2.resource_diagnostics()
@@ -555,23 +585,33 @@ def test_linked_geco_add_resources_use_geco_registry_without_mutating_descriptor
     project = teal.Project.create(tmp_path / "project", name="geco_registry")
     try:
         F = _seed_table(project)
-        geometry1 = project.translate(
-            CountVectorizer(text_field="text", min_df=1), F
-        )["output"]
+        geometry1 = project.translate(CountVectorizer(text_field="text", min_df=1), F)[
+            "output"
+        ]
         geometry2 = _seed_matrix(
             project, "g2", "g2", sparse.csr_matrix(np.ones((10, 2))), columns=["u", "v"]
         )
         view1 = _seed_matrix(
-            project, "v1", "v1", np.column_stack([np.arange(10), np.arange(10)]),
+            project,
+            "v1",
+            "v1",
+            np.column_stack([np.arange(10), np.arange(10)]),
             columns=["x", "y"],
         )
         view2 = _seed_matrix(
-            project, "v2", "v2", np.column_stack([np.arange(10), -np.arange(10)]),
+            project,
+            "v2",
+            "v2",
+            np.column_stack([np.arange(10), -np.arange(10)]),
             columns=["x", "y"],
         )
         linked = project.geco.create(
-            "registry", documents=F, text_field="text", geometry=geometry1,
-            geometry_name="first", projections={"first_view": view1},
+            "registry",
+            documents=F,
+            text_field="text",
+            geometry=geometry1,
+            geometry_name="first",
+            projections={"first_view": view1},
         )
         before = linked.manifest
         second_id = linked.add_geometry("second", geometry2)
@@ -579,7 +619,10 @@ def test_linked_geco_add_resources_use_geco_registry_without_mutating_descriptor
         assert second_id == 2
         assert second_view_id == 2
         assert linked.add_geometry("second", geometry2) == second_id
-        assert linked.add_projection("second_view", view2, geometry="second") == second_view_id
+        assert (
+            linked.add_projection("second_view", view2, geometry="second")
+            == second_view_id
+        )
         with pytest.raises(ValueError, match="Conflicting geometry registration"):
             linked.add_geometry("second", geometry1)
         with pytest.raises(ValueError, match="Conflicting view registration"):
@@ -588,14 +631,19 @@ def test_linked_geco_add_resources_use_geco_registry_without_mutating_descriptor
         geometry_records = linked.coder.geometries()
         assert [record["name"] for record in geometry_records] == ["first", "second"]
         assert [record["supports_text_transform"] for record in geometry_records] == [
-            True, False
+            True,
+            False,
         ]
         assert [record["name"] for record in linked.coder.views()] == [
-            "first_view", "second_view"
+            "first_view",
+            "second_view",
         ]
         diagnostics = linked.resource_diagnostics()
         assert diagnostics["name"].tolist() == [
-            "first", "second", "first_view", "second_view"
+            "first",
+            "second",
+            "first_view",
+            "second_view",
         ]
     finally:
         project.close()
@@ -623,15 +671,23 @@ def test_create_registration_failure_removes_new_workspace_and_link(
             project, "g", "g", sparse.eye(10, 3, format="csr"), columns=["a", "b", "c"]
         )
         view = _seed_matrix(
-            project, "v", "v", np.column_stack([np.arange(10), np.arange(10)]),
+            project,
+            "v",
+            "v",
+            np.column_stack([np.arange(10), np.arange(10)]),
             columns=["x", "y"],
         )
         with pytest.raises(RuntimeError, match="injected view registration failure"):
             project.geco.create(
-                "broken", documents=F, text_field="text", geometry=geometry,
+                "broken",
+                documents=F,
+                text_field="text",
+                geometry=geometry,
                 projections={"view": view},
             )
-        assert not (project.storage.teal_dir / "geco" / "links" / "broken.json").exists()
+        assert not (
+            project.storage.teal_dir / "geco" / "links" / "broken.json"
+        ).exists()
         assert not (
             project.storage.teal_dir / "geco" / "workspaces" / "broken.geco"
         ).exists()
@@ -658,7 +714,9 @@ def test_old_link_descriptor_is_rejected_without_migration(tmp_path: Path) -> No
         project.close()
 
 
-def test_linked_geco_rejects_query_support_for_nonreplayable_geometry(tmp_path: Path, monkeypatch):
+def test_linked_geco_rejects_query_support_for_nonreplayable_geometry(
+    tmp_path: Path, monkeypatch
+):
     import text_analysis_lab.integrations.geco as bridge
 
     _FakeGeometricCoder._registry.clear()
@@ -673,7 +731,9 @@ def test_linked_geco_rejects_query_support_for_nonreplayable_geometry(tmp_path: 
             sparse.eye(10, 3, format="csr"),
             columns=["a", "b", "c"],
         )
-        with pytest.raises(GeCoIntegrationError, match="cannot replay semantic queries"):
+        with pytest.raises(
+            GeCoIntegrationError, match="cannot replay semantic queries"
+        ):
             project.geco.create(
                 "roomtemp",
                 documents=F,
@@ -685,7 +745,9 @@ def test_linked_geco_rejects_query_support_for_nonreplayable_geometry(tmp_path: 
         project.close()
 
 
-def test_linked_geco_replayable_geometry_supports_query_and_text_transform(tmp_path: Path, monkeypatch):
+def test_linked_geco_replayable_geometry_supports_query_and_text_transform(
+    tmp_path: Path, monkeypatch
+):
     import text_analysis_lab.integrations.geco as bridge
 
     _FakeGeometricCoder._registry.clear()

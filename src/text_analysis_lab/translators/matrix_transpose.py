@@ -8,12 +8,11 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
-from scipy import sparse
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -71,7 +70,7 @@ class MatrixTranspose(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -90,7 +89,7 @@ class MatrixTranspose(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -104,7 +103,7 @@ class MatrixTranspose(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -160,9 +159,7 @@ class MatrixTranspose(BaseTranslator):
             raise OperatorError(f"Unsupported MatrixTranspose mode {mode!r}.")
 
         packet = single_input(inputs, name="MatrixTranspose")
-        info, matrix, key_columns = native_matrix_packet(
-            packet, name="MatrixTranspose"
-        )
+        info, matrix, key_columns = native_matrix_packet(packet, name="MatrixTranspose")
         source_features = self._require_source_features()
         feature_metadata = self._require_source_feature_metadata()
         if int(matrix.shape[1]) != len(source_features):
@@ -227,7 +224,7 @@ class MatrixTranspose(BaseTranslator):
         return {"key_name": self.key_name, "row_name": self.row_name}
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "MatrixTranspose":
+    def from_json_state(cls, state: Mapping[str, Any]) -> MatrixTranspose:
         return cls(
             key_name=str(state.get("key_name", "feature_id")),
             row_name=str(state.get("row_name", "feature")),
@@ -240,9 +237,7 @@ class MatrixTranspose(BaseTranslator):
 
     def _require_source_feature_metadata(self) -> pd.DataFrame:
         if self._source_feature_metadata is None:
-            raise OperatorError(
-                "MatrixTranspose has no bound source feature metadata."
-            )
+            raise OperatorError("MatrixTranspose has no bound source feature metadata.")
         return self._source_feature_metadata
 
     def _source_row_labels(
@@ -253,7 +248,9 @@ class MatrixTranspose(BaseTranslator):
     ) -> list[str]:
         if self._source_has_row_names and isinstance(packet.data, Mapping):
             raw_names = packet.data.get("row_names")
-            if isinstance(raw_names, Sequence) and not isinstance(raw_names, (str, bytes)):
+            if isinstance(raw_names, Sequence) and not isinstance(
+                raw_names, (str, bytes)
+            ):
                 names = [str(value) for value in raw_names]
                 if len(names) == len(info):
                     return names

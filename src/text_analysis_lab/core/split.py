@@ -17,8 +17,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError, QueryError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -35,8 +35,8 @@ if TYPE_CHECKING:
 
 
 def split(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     *,
     labels: Sequence[str] = ("explore", "confirm"),
     proportions: Sequence[float],
@@ -46,7 +46,7 @@ def split(
     memo: str | None = None,
     alias: Mapping[str, str] | None = None,
     overwrite: bool = False,
-) -> Mapping[str, "BaseArtifact"]:
+) -> Mapping[str, BaseArtifact]:
     """Split one source artifact into keys-only child artifacts.
 
     ``labels``, ``proportions``, and ``random_state`` configure the reusable
@@ -98,7 +98,7 @@ class RandomSplitTranslator(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> Mapping[str, OutputSpec]:
         _ = request
@@ -116,7 +116,7 @@ class RandomSplitTranslator(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = mode
@@ -133,7 +133,9 @@ class RandomSplitTranslator(BaseTranslator):
         requested = (
             None
             if raw_stratify is None
-            else list(_as_tuple(cast(str | Sequence[str], raw_stratify), name="stratify"))
+            else list(
+                _as_tuple(cast(str | Sequence[str], raw_stratify), name="stratify")
+            )
         )
         return {
             "stratify": requested,
@@ -148,7 +150,7 @@ class RandomSplitTranslator(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -238,7 +240,7 @@ class RandomSplitTranslator(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "RandomSplitTranslator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> RandomSplitTranslator:
         return cls(
             labels=cast(Sequence[str], state["labels"]),
             proportions=cast(Sequence[float], state["proportions"]),
@@ -251,7 +253,7 @@ class RandomSplitTranslator(BaseTranslator):
 # ---------------------------------------------------------------------------
 
 
-def _source_artifact(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
+def _source_artifact(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
         raise OperatorError(
             "RandomSplitTranslator requires exactly one source under "
@@ -262,7 +264,7 @@ def _source_artifact(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
 
 def _resolve_stratify_columns(
     *,
-    source: "BaseArtifact",
+    source: BaseArtifact,
     stratify: str | Sequence[str] | None,
 ) -> tuple[tuple[str, ...], ColumnRequest]:
     if stratify is None:
@@ -279,8 +281,7 @@ def _resolve_stratify_columns(
     output_names = set(info.get("output", ()))
     ambiguous = info.get("ambiguous", {})
     output_to_namespace = {
-        column["output_name"]: column["namespace"]
-        for column in info.get("columns", ())
+        column["output_name"]: column["namespace"] for column in info.get("columns", ())
     }
 
     stratify_columns: list[str] = []
@@ -385,7 +386,9 @@ def _groups_for_frame(
         )
 
     groups: dict[tuple[Any, ...], list[int]] = defaultdict(list)
-    for idx, row in enumerate(frame.loc[:, list(stratify_columns)].itertuples(index=False)):
+    for idx, row in enumerate(
+        frame.loc[:, list(stratify_columns)].itertuples(index=False)
+    ):
         groups[tuple(_stratum_value(value) for value in row)].append(idx)
     return dict(groups)
 
@@ -414,7 +417,9 @@ def _sort_by_position_if_present(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.sort_values("_position", kind="stable")
 
 
-def _extract_key_frame(frame: pd.DataFrame, *, primary_key: tuple[str, ...]) -> pd.DataFrame:
+def _extract_key_frame(
+    frame: pd.DataFrame, *, primary_key: tuple[str, ...]
+) -> pd.DataFrame:
     missing = [column for column in primary_key if column not in frame.columns]
     if missing:
         raise ArtifactError(

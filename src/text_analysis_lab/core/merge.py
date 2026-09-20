@@ -33,7 +33,7 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
     validate_output_label,
 )
-from text_analysis_lab.core.types import ArtifactType, DEFAULT_OUTPUT_LABEL
+from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, ArtifactType
 from text_analysis_lab.core.writer import create_artifact_writer
 
 if TYPE_CHECKING:
@@ -49,7 +49,7 @@ class MergeOperator(BaseOperator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> Mapping[str, OutputSpec]:
         _ = request
@@ -66,13 +66,13 @@ class MergeOperator(BaseOperator):
 
 
 def merge(
-    project: "Project",
-    sources: Sequence["BaseArtifact | str"],
+    project: Project,
+    sources: Sequence[BaseArtifact | str],
     *,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     batch_size: int = 10_000,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Merge compatible, disjoint table artifacts into a flat keys-only artifact.
 
     Any number of sources may be supplied. Native TeAL merge sources are
@@ -232,9 +232,9 @@ def merge(
 
 
 def _resolve_sources(
-    project: "Project",
-    sources: Sequence["BaseArtifact | str"],
-) -> list["BaseArtifact"]:
+    project: Project,
+    sources: Sequence[BaseArtifact | str],
+) -> list[BaseArtifact]:
     if isinstance(sources, (str, bytes)):
         raise ArtifactError("merge sources must be a sequence of artifact refs.")
     requested = [project.get_artifact(source) for source in sources]
@@ -256,11 +256,11 @@ def _resolve_sources(
 
 
 def _flatten_native_merge_source(
-    project: "Project",
-    source: "BaseArtifact",
+    project: Project,
+    source: BaseArtifact,
     *,
     seen: set[str],
-) -> list["BaseArtifact"]:
+) -> list[BaseArtifact]:
     """Return leaf branches for a native keys-only merge source.
 
     Only artifacts actually created by TeAL's native ``merge`` operation are
@@ -298,13 +298,11 @@ def _flatten_native_merge_source(
     flattened: list[BaseArtifact] = []
     for basis_id in basis_ids:
         basis = project.get_artifact(basis_id)
-        flattened.extend(
-            _flatten_native_merge_source(project, basis, seen=next_seen)
-        )
+        flattened.extend(_flatten_native_merge_source(project, basis, seen=next_seen))
     return flattened
 
 
-def _validate_sources(project: "Project", sources: Sequence["BaseArtifact"]) -> None:
+def _validate_sources(project: Project, sources: Sequence[BaseArtifact]) -> None:
     first = sources[0]
     first.require_complete()
 
@@ -349,7 +347,7 @@ def _validate_sources(project: "Project", sources: Sequence["BaseArtifact"]) -> 
 
 
 def _effective_schema(
-    project: "Project", artifact: "BaseArtifact"
+    project: Project, artifact: BaseArtifact
 ) -> tuple[tuple[str, str, str], ...]:
     columns = project.query.query_columns(artifact, metadata_mode="full")["columns"]
     # Metadata qualified names encode the concrete owning artifact ID. Disjoint

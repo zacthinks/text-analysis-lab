@@ -9,19 +9,17 @@ over keys and row alignment.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import cloudpickle
-import numpy as np
 import pandas as pd
-from scipy import sparse
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -83,7 +81,7 @@ class FunctionMapper(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -98,11 +96,13 @@ class FunctionMapper(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = mode
-        unknown = sorted(set(params) - {"data_columns", "metadata_columns", "metadata_mode"})
+        unknown = sorted(
+            set(params) - {"data_columns", "metadata_columns", "metadata_mode"}
+        )
         if unknown:
             raise OperatorError(f"Unknown FunctionMapper parameter(s): {unknown}.")
         source = _single_source(sources, name="FunctionMapper")
@@ -135,7 +135,7 @@ class FunctionMapper(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -220,9 +220,7 @@ class FunctionMapper(BaseTranslator):
             expected_rows=len(keys),
             primary_key=source_batch.primary_key,
         )
-        return BatchResult(
-            outputs={DEFAULT_OUTPUT_LABEL: {"keys": keys, **payload}}
-        )
+        return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: {"keys": keys, **payload}})
 
     def handle_batch_result(
         self,
@@ -249,11 +247,13 @@ class FunctionMapper(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "FunctionMapper":
+    ) -> FunctionMapper:
         _ = request
         if mode != "translate":
             raise OperatorError("FunctionMapper workers support translate mode only.")
-        worker = FunctionMapper(cloudpickle.loads(cloudpickle.dumps(self._require_function())))
+        worker = FunctionMapper(
+            cloudpickle.loads(cloudpickle.dumps(self._require_function()))
+        )
         worker._source_type = self._source_type
         worker._data_columns = self._data_columns
         worker._metadata_columns = self._metadata_columns
@@ -264,7 +264,7 @@ class FunctionMapper(BaseTranslator):
         return {}
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "FunctionMapper":
+    def from_json_state(cls, state: Mapping[str, Any]) -> FunctionMapper:
         _ = state
         return cls(None)
 
@@ -278,20 +278,26 @@ class FunctionMapper(BaseTranslator):
         # operator after freeze.
         function = cloudpickle.loads(payload)
         if not callable(function):  # pragma: no cover - cloudpickle contract guard
-            raise OperatorError("Frozen FunctionMapper callable did not deserialize to a callable.")
+            raise OperatorError(
+                "Frozen FunctionMapper callable did not deserialize to a callable."
+            )
         self.function = cast(MapperFunction, function)
         return {"function_file": path.name}
 
     def load_assets(self, assets_dir: Path, manifest: Mapping[str, Any]) -> None:
         filename = manifest.get("function_file")
         if not isinstance(filename, str) or not filename:
-            raise OperatorError("FunctionMapper operator is missing its callable asset.")
+            raise OperatorError(
+                "FunctionMapper operator is missing its callable asset."
+            )
         path = assets_dir / filename
         if not path.exists():
             raise OperatorError(f"Missing FunctionMapper callable asset: {path}.")
         function = cloudpickle.loads(path.read_bytes())
         if not callable(function):
-            raise OperatorError("FunctionMapper asset did not deserialize to a callable.")
+            raise OperatorError(
+                "FunctionMapper asset did not deserialize to a callable."
+            )
         self.function = cast(MapperFunction, function)
 
     def save_intermediate_state(
@@ -308,7 +314,9 @@ class FunctionMapper(BaseTranslator):
         state = {
             "operator_id": operator_id,
             "source_type": self._source_type,
-            "data_columns": None if self._data_columns is None else list(self._data_columns),
+            "data_columns": None
+            if self._data_columns is None
+            else list(self._data_columns),
             "metadata_columns": (
                 None if self._metadata_columns is None else list(self._metadata_columns)
             ),
@@ -327,21 +335,27 @@ class FunctionMapper(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "FunctionMapper":
+    ) -> FunctionMapper:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         obj = cls(None, operator_id=operator_id)
         raw_source_type = state.get("source_type")
         obj._source_type = None if raw_source_type is None else str(raw_source_type)
         raw_columns = state.get("data_columns")
-        if isinstance(raw_columns, Sequence) and not isinstance(raw_columns, (str, bytes)):
+        if isinstance(raw_columns, Sequence) and not isinstance(
+            raw_columns, (str, bytes)
+        ):
             obj._data_columns = tuple(str(value) for value in raw_columns)
         raw_metadata_columns = state.get("metadata_columns")
         if isinstance(raw_metadata_columns, Sequence) and not isinstance(
             raw_metadata_columns, (str, bytes)
         ):
             obj._metadata_columns = tuple(str(value) for value in raw_metadata_columns)
-        obj._metadata_mode = _normalize_metadata_mode(state.get("metadata_mode", "none"))
+        obj._metadata_mode = _normalize_metadata_mode(
+            state.get("metadata_mode", "none")
+        )
         assets = state.get("assets", {})
         if not isinstance(assets, Mapping):
             raise OperatorError("FunctionMapper intermediate assets must be a mapping.")
@@ -352,6 +366,7 @@ class FunctionMapper(BaseTranslator):
         if self.function is None:
             raise OperatorError("FunctionMapper callable is unavailable.")
         return self.function
+
 
 def _single_source(sources: Mapping[str, Any], *, name: str):
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
@@ -401,9 +416,7 @@ def _resolved_matrix_data_columns(
     if selection is True:
         return available
     requested = (
-        [selection]
-        if isinstance(selection, str)
-        else [str(v) for v in selection]
+        [selection] if isinstance(selection, str) else [str(v) for v in selection]
     )
     missing = [name for name in requested if name not in available]
     if missing:
@@ -433,7 +446,9 @@ def _resolved_namespace_columns(
         return []
     if selection is True:
         return [str(item["output_name"]) for item in columns]
-    requested = [selection] if isinstance(selection, str) else [str(v) for v in selection]
+    requested = (
+        [selection] if isinstance(selection, str) else [str(v) for v in selection]
+    )
     out: list[str] = []
     for name in requested:
         matches = [
@@ -487,13 +502,17 @@ def _mapper_input_packet(
     key_columns = [str(value) for value in packet.primary_key]
     missing_keys = [column for column in key_columns if column not in frame.columns]
     if missing_keys:
-        raise ArtifactError(f"FunctionMapper packet is missing key column(s) {missing_keys}.")
+        raise ArtifactError(
+            f"FunctionMapper packet is missing key column(s) {missing_keys}."
+        )
     keys = frame.loc[:, key_columns].copy().reset_index(drop=True)
     out: dict[str, pd.DataFrame] = {}
     if data_columns:
         missing = [column for column in data_columns if column not in frame.columns]
         if missing:
-            raise ArtifactError(f"FunctionMapper packet is missing data column(s) {missing}.")
+            raise ArtifactError(
+                f"FunctionMapper packet is missing data column(s) {missing}."
+            )
         out["data"] = frame.loc[:, list(data_columns)].copy().reset_index(drop=True)
     if metadata_columns:
         missing = [column for column in metadata_columns if column not in frame.columns]
@@ -501,7 +520,9 @@ def _mapper_input_packet(
             raise ArtifactError(
                 f"FunctionMapper packet is missing metadata column(s) {missing}."
             )
-        out["metadata"] = frame.loc[:, list(metadata_columns)].copy().reset_index(drop=True)
+        out["metadata"] = (
+            frame.loc[:, list(metadata_columns)].copy().reset_index(drop=True)
+        )
     return keys, out
 
 
@@ -560,7 +581,9 @@ def _validate_output_columns(
             f"FunctionMapper {component} output column names must be non-empty strings."
         )
     if len(set(columns)) != len(columns):
-        raise ArtifactError(f"FunctionMapper {component} output column names must be unique.")
+        raise ArtifactError(
+            f"FunctionMapper {component} output column names must be unique."
+        )
     reserved = set(primary_key).union({"_position", "_batch", "_row_offset"})
     overlap = sorted(set(columns).intersection(reserved))
     if overlap:
@@ -568,4 +591,3 @@ def _validate_output_columns(
             f"FunctionMapper output {component} columns collide with TeAL key/structural "
             f"columns: {overlap}."
         )
-

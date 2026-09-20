@@ -60,9 +60,12 @@ def test_delimiter_decomposer_empty_batch_emits_no_writer_payload() -> None:
         {"source": _packet(frame)}, mode="translate", request=TranslationRequest()
     )
     assert result.outputs == {}
-    assert translator.handle_batch_result(
-        result, batch_index=0, mode="translate", request=TranslationRequest()
-    ) is None
+    assert (
+        translator.handle_batch_result(
+            result, batch_index=0, mode="translate", request=TranslationRequest()
+        )
+        is None
+    )
 
 
 def test_regex_cleaner_vectorized_ordered_rules_nulls_and_flags() -> None:
@@ -89,7 +92,9 @@ def test_regex_cleaner_vectorized_ordered_rules_nulls_and_flags() -> None:
     assert payload["data"]["text"].tolist()[2] == "hi TeAL"
 
 
-def test_count_vectorizer_fit_translate_and_frozen_transform_match_sklearn_semantics() -> None:
+def test_count_vectorizer_fit_translate_and_frozen_transform_match_sklearn_semantics() -> (
+    None
+):
     frame = pd.DataFrame(
         {
             "doc_id": [1, 2, 3],
@@ -118,7 +123,9 @@ def test_count_vectorizer_fit_translate_and_frozen_transform_match_sklearn_seman
     assert "chase cats" in columns
     assert payload["keys"]["doc_id"].tolist() == [1, 2, 3]
 
-    frozen = CountVectorizer.from_json_state(translator.to_json_state(include_vocabulary=True))
+    frozen = CountVectorizer.from_json_state(
+        translator.to_json_state(include_vocabulary=True)
+    )
     transformed = frozen.translate_batch(
         {"source": _packet(frame.iloc[[2, 0]].reset_index(drop=True))},
         mode="translate",
@@ -184,9 +191,7 @@ def test_text_length_translator_emits_multiple_metadata_columns_without_data(
             "title": ["A title", "B", None],
         }
     )
-    translator = TextLength(
-        {"text": ["characters", "words"], "title": "words"}
-    )
+    translator = TextLength({"text": ["characters", "words"], "title": "words"})
     result = translator.translate_batch(
         {"source": _packet(frame)}, mode="translate", request=TranslationRequest()
     )
@@ -274,17 +279,21 @@ def test_translator_json_states_round_trip_without_rowwise_state() -> None:
     decomposer = DelimiterDecomposer(
         delimiter="\n\n", new_key="paragraph_id", output_text_field="paragraph_text"
     )
-    cleaner = RegexCleaner(
-        rules=[{"pattern": "foo", "replacement": "bar", "flags": 2}]
-    )
+    cleaner = RegexCleaner(rules=[{"pattern": "foo", "replacement": "bar", "flags": 2}])
     fitted = CountVectorizer(vocabulary={"alpha": 0, "beta": 1}, ngram_range=(1, 2))
 
-    assert DelimiterDecomposer.from_json_state(
-        json.loads(json.dumps(decomposer.to_json_state()))
-    ).to_json_state() == decomposer.to_json_state()
-    assert RegexCleaner.from_json_state(
-        json.loads(json.dumps(cleaner.to_json_state()))
-    ).to_json_state() == cleaner.to_json_state()
+    assert (
+        DelimiterDecomposer.from_json_state(
+            json.loads(json.dumps(decomposer.to_json_state()))
+        ).to_json_state()
+        == decomposer.to_json_state()
+    )
+    assert (
+        RegexCleaner.from_json_state(
+            json.loads(json.dumps(cleaner.to_json_state()))
+        ).to_json_state()
+        == cleaner.to_json_state()
+    )
     restored = CountVectorizer.from_json_state(
         json.loads(json.dumps(fitted.to_json_state(include_vocabulary=True)))
     )

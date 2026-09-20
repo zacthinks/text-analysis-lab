@@ -14,7 +14,6 @@ pytest.importorskip("duckdb")
 import text_analysis_lab as teal
 from text_analysis_lab.core.writer import create_artifact_writer
 
-
 _VALUES = np.array(
     [
         [1.0, 0.0, 2.0],
@@ -61,7 +60,9 @@ def _register_matrix(project: teal.Project, *, artifact_type: str):
 
 @pytest.mark.parametrize("artifact_type", ["sparse_matrix", "dense_matrix"])
 def test_real_matrix_analytics_round_trip(tmp_path: Path, artifact_type: str) -> None:
-    project = teal.Project.create(tmp_path / artifact_type, name=f"unit4_{artifact_type}")
+    project = teal.Project.create(
+        tmp_path / artifact_type, name=f"unit4_{artifact_type}"
+    )
     try:
         artifact = _register_matrix(project, artifact_type=artifact_type)
         before = len(project.list_artifacts())
@@ -130,8 +131,8 @@ def test_real_matrix_analytics_round_trip(tmp_path: Path, artifact_type: str) ->
     try:
         artifact = reopened.get_artifact(artifact_id)
         assert artifact.analysis.matrix_summary(batch_size=3).sum == pytest.approx(7.0)
-        assert artifact.analysis.cosine_similarity(position=0, other_position=2) == pytest.approx(
-            2.0 / math.sqrt(10.0)
-        )
+        assert artifact.analysis.cosine_similarity(
+            position=0, other_position=2
+        ) == pytest.approx(2.0 / math.sqrt(10.0))
     finally:
         reopened.close()

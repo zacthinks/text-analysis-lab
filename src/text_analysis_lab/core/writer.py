@@ -34,12 +34,11 @@ from text_analysis_lab.core.errors import (
 )
 from text_analysis_lab.core.storage import ArtifactStorage
 from text_analysis_lab.core.types import (
-    ArtifactType,
     ArtifactStatus,
+    ArtifactType,
     LineageMode,
     StructuralColumn,
 )
-
 
 STRUCTURAL_COLUMNS: frozenset[str] = frozenset(get_args(StructuralColumn))
 TABLE_TYPES = {ArtifactType.TABLE, ArtifactType.JSONL}
@@ -430,7 +429,9 @@ class ArtifactWriter:
         try:
             json.dumps(state)
         except (TypeError, ValueError) as exc:
-            raise ArtifactError("ArtifactWriter resume state must be JSON-serializable.") from exc
+            raise ArtifactError(
+                "ArtifactWriter resume state must be JSON-serializable."
+            ) from exc
         return state
 
     @classmethod
@@ -439,7 +440,7 @@ class ArtifactWriter:
         state: Mapping[str, Any] | str | Path,
         *,
         artifact_dir: str | Path | None = None,
-    ) -> "ArtifactWriter":
+    ) -> ArtifactWriter:
         """Rehydrate a writer from ``resume_state()`` output.
 
         ``artifact_dir`` may override the serialized path when a project has been
@@ -451,7 +452,9 @@ class ArtifactWriter:
         if not isinstance(state, Mapping):
             raise ArtifactError("ArtifactWriter.resume() requires a state mapping.")
         if int(state.get("schema_version", 0)) != 1:
-            raise ArtifactError("Unsupported ArtifactWriter resume state schema_version.")
+            raise ArtifactError(
+                "Unsupported ArtifactWriter resume state schema_version."
+            )
 
         writer = cls.__new__(cls)
         writer.artifact_dir = Path(
@@ -464,7 +467,9 @@ class ArtifactWriter:
             raise ArtifactError("Artifact label must be a non-empty string.")
         writer.lineage = dict(state.get("lineage") or {})
         raw_operation_id = state.get("operation_id")
-        writer.operation_id = None if raw_operation_id is None else str(raw_operation_id)
+        writer.operation_id = (
+            None if raw_operation_id is None else str(raw_operation_id)
+        )
 
         if writer.artifact_type == ArtifactType.OTHER:
             writer.data_serializer_ref = cast(
@@ -472,7 +477,9 @@ class ArtifactWriter:
                 state.get("data_serializer_ref"),
             )
             if writer.data_serializer_ref is None:
-                raise ArtifactError("ArtifactType.OTHER requires data_serializer_ref on resume.")
+                raise ArtifactError(
+                    "ArtifactType.OTHER requires data_serializer_ref on resume."
+                )
             writer.data_serializer = _resolve_callable_ref(writer.data_serializer_ref)
         else:
             writer.data_serializer_ref = None
@@ -510,9 +517,7 @@ class ArtifactWriter:
             None if raw_has_row_names is None else bool(raw_has_row_names)
         )
         raw_row_name = state.get("matrix_row_name")
-        writer._matrix_row_name = (
-            None if raw_row_name is None else str(raw_row_name)
-        )
+        writer._matrix_row_name = None if raw_row_name is None else str(raw_row_name)
         return writer
 
     # ------------------------------------------------------------------
@@ -636,7 +641,9 @@ class ArtifactWriter:
             con = sqlite3.connect(validation_db)
             try:
                 key_columns = [f"k{index}" for index in range(len(self._primary_key))]
-                column_sql = ", ".join(f'"{column}" INTEGER NOT NULL' for column in key_columns)
+                column_sql = ", ".join(
+                    f'"{column}" INTEGER NOT NULL' for column in key_columns
+                )
                 pk_sql = ", ".join(f'"{column}"' for column in key_columns)
                 con.execute(
                     f"CREATE TABLE seen_keys ({column_sql}, PRIMARY KEY ({pk_sql})) WITHOUT ROWID"
@@ -669,7 +676,9 @@ class ArtifactWriter:
                         raise ArtifactError(
                             f"Key positions are not contiguous in part {part_index}."
                         )
-                    if not np.all(frame["_batch"].to_numpy(dtype="int64") == part_index):
+                    if not np.all(
+                        frame["_batch"].to_numpy(dtype="int64") == part_index
+                    ):
                         raise ArtifactError(
                             f"Key batch markers are invalid in part {part_index}."
                         )
@@ -723,7 +732,9 @@ class ArtifactWriter:
                 f"Missing matrix row_names part(s) during finalization: {missing}."
             )
 
-        with tempfile.TemporaryDirectory(prefix="teal-row-name-validation-") as temp_dir:
+        with tempfile.TemporaryDirectory(
+            prefix="teal-row-name-validation-"
+        ) as temp_dir:
             con = sqlite3.connect(Path(temp_dir) / "row_names.sqlite")
             try:
                 con.execute(
@@ -994,11 +1005,7 @@ class ArtifactWriter:
             ),
             self.data_dir,
             values_dir,
-            *(
-                (self.storage.data_row_names_dir,)
-                if row_names is not None
-                else ()
-            ),
+            *((self.storage.data_row_names_dir,) if row_names is not None else ()),
             on_init=lambda: self._write_matrix_columns(labels),
         )
         if row_names is not None:
@@ -1043,11 +1050,7 @@ class ArtifactWriter:
             ),
             self.data_dir,
             values_dir,
-            *(
-                (self.storage.data_row_names_dir,)
-                if row_names is not None
-                else ()
-            ),
+            *((self.storage.data_row_names_dir,) if row_names is not None else ()),
             on_init=lambda: self._write_matrix_columns(labels),
         )
         if row_names is not None:
@@ -1159,7 +1162,9 @@ class ArtifactWriter:
         if not isinstance(axis_name, str) or not axis_name:
             raise ArtifactError("Matrix row_name must be a non-empty string.")
         if axis_name in STRUCTURAL_COLUMNS or axis_name.startswith("_"):
-            raise ArtifactError("Matrix row_name may not be a reserved structural name.")
+            raise ArtifactError(
+                "Matrix row_name may not be a reserved structural name."
+            )
         if self._matrix_row_name is None:
             self._matrix_row_name = axis_name
         elif self._matrix_row_name != axis_name:
@@ -1204,9 +1209,7 @@ class ArtifactWriter:
                 ),
             }
         )
-        frame.to_parquet(
-            self.storage.data_row_names_part_path(part_index), index=False
-        )
+        frame.to_parquet(self.storage.data_row_names_part_path(part_index), index=False)
 
     def _descriptor(self) -> dict[str, Any]:
         return {
@@ -1276,5 +1279,7 @@ def create_artifact_writer(
         lineage=resolved_lineage,
         operation_id=operation_id,
         data_serializer=(data_serializer if kind == ArtifactType.OTHER else None),
-        data_serializer_ref=(data_serializer_ref if kind == ArtifactType.OTHER else None),
+        data_serializer_ref=(
+            data_serializer_ref if kind == ArtifactType.OTHER else None
+        ),
     )

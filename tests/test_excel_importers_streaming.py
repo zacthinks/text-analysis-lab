@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-import text_analysis_lab.core.importers as importers
+from text_analysis_lab.core import importers
 
 openpyxl = pytest.importorskip("openpyxl")
 
@@ -54,7 +54,9 @@ def test_read_excel_streams_selected_sheets_to_writer_shaped_batches(
     assert len(payloads) == 2
     keys = pd.concat([payload["keys"] for payload in payloads], ignore_index=True)
     data = pd.concat([payload["data"] for payload in payloads], ignore_index=True)
-    metadata = pd.concat([payload["metadata"] for payload in payloads], ignore_index=True)
+    metadata = pd.concat(
+        [payload["metadata"] for payload in payloads], ignore_index=True
+    )
     assert keys["row_id"].tolist() == [0, 1, 2]
     assert data["content"].tolist() == ["one", "two", "three"]
     assert metadata["source_sheet"].tolist() == ["First", "First", "Hidden"]

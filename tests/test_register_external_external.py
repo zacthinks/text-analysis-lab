@@ -85,7 +85,9 @@ def test_register_external_new_key_data_metadata_and_batching(tmp_path: Path) ->
         operation = project.catalog.get_operation(artifact.operation_id)
         assert operation["operation_type"] == "register"
         descriptor = json.loads(
-            (project.storage.operation_dir(artifact.operation_id) / "operation.json").read_text()
+            (
+                project.storage.operation_dir(artifact.operation_id) / "operation.json"
+            ).read_text()
         )
         assert descriptor["replayable"] is False
         assert descriptor["sources"] == {}
@@ -99,7 +101,9 @@ def test_register_external_new_key_data_metadata_and_batching(tmp_path: Path) ->
         project.close()
 
 
-def test_register_external_span_lineage_and_provenance_sources_are_independent(tmp_path: Path) -> None:
+def test_register_external_span_lineage_and_provenance_sources_are_independent(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="register_span")
     try:
         turns = _register_table(
@@ -166,7 +170,10 @@ def test_register_external_span_lineage_and_provenance_sources_are_independent(t
             "basis_artifact_ids": [turns.artifact_id],
         }
         descriptor = json.loads(
-            (project.storage.operation_dir(registered.operation_id) / "operation.json").read_text()
+            (
+                project.storage.operation_dir(registered.operation_id)
+                / "operation.json"
+            ).read_text()
         )
         assert descriptor["sources"] == {
             "turns": turns.artifact_id,
@@ -189,7 +196,9 @@ def test_register_external_span_lineage_and_provenance_sources_are_independent(t
             metadata_columns=False,
             form="single",
         )
-        context = registered.get_context(focal, context_artifact=turns, before=0, after=0)
+        context = registered.get_context(
+            focal, context_artifact=turns, before=0, after=0
+        )
         assert context["turn_id"].astype(int).tolist() == [0, 1]
     finally:
         project.close()
@@ -293,7 +302,9 @@ def test_register_external_empty_keys_only_and_reopen(tmp_path: Path) -> None:
         reopened.close()
 
 
-def test_register_external_parquet_file_and_dataset_folder_stream_in_batches(tmp_path: Path) -> None:
+def test_register_external_parquet_file_and_dataset_folder_stream_in_batches(
+    tmp_path: Path,
+) -> None:
     frame = pd.DataFrame(
         {
             "pair_id": [0, 1, 2, 3, 4],
@@ -329,7 +340,10 @@ def test_register_external_parquet_file_and_dataset_folder_stream_in_batches(tmp
             assert out["pair_id"].astype(int).tolist() == [0, 1, 2, 3, 4]
             assert out["score"].tolist() == pytest.approx(frame["score"].tolist())
             descriptor = json.loads(
-                (project.storage.operation_dir(artifact.operation_id) / "operation.json").read_text()
+                (
+                    project.storage.operation_dir(artifact.operation_id)
+                    / "operation.json"
+                ).read_text()
             )
             assert descriptor["registered_rows"] == 5
             assert descriptor["registered_batches"] == 3
@@ -358,7 +372,9 @@ def test_register_external_preserves_caller_payload_batches(tmp_path: Path) -> N
             batch_size=1,
         )
         descriptor = json.loads(
-            (project.storage.operation_dir(artifact.operation_id) / "operation.json").read_text()
+            (
+                project.storage.operation_dir(artifact.operation_id) / "operation.json"
+            ).read_text()
         )
         assert descriptor["registered_batches"] == 2
         assert descriptor["registered_rows"] == 3

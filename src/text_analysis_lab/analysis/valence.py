@@ -23,7 +23,7 @@ ValenceScorer = Callable[..., Any]
 
 
 def valence(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     zero_division: float = 0.0,
     custom: Mapping[str, ValenceScorer] | None = None,
@@ -48,7 +48,9 @@ def valence(
     if values.size and not np.all(np.isfinite(values)):
         raise ValueError("valence() requires finite numeric value columns.")
     if values.size and np.any(np.diff(values) < 0):
-        raise ValueError("valence() expects dictionary value columns in ascending order.")
+        raise ValueError(
+            "valence() expects dictionary value columns in ascending order."
+        )
 
     custom = {} if custom is None else dict(custom)
     standard = {
@@ -73,7 +75,9 @@ def valence(
     custom_columns = [str(name) for name in custom]
     conflicts = [name for name in custom_columns if not name or name in protected]
     if conflicts:
-        raise ValueError(f"Invalid/conflicting custom valence formula names: {conflicts}.")
+        raise ValueError(
+            f"Invalid/conflicting custom valence formula names: {conflicts}."
+        )
     for name, scorer in custom.items():
         if not callable(scorer):
             raise TypeError(f"Custom valence formula {name!r} must be callable.")
@@ -115,7 +119,9 @@ def valence(
         if info.empty:
             continue
         matrix = batch["matrix"]
-        counts = matrix.tocsr() if sparse.issparse(matrix) else sparse.csr_matrix(matrix)
+        counts = (
+            matrix.tocsr() if sparse.issparse(matrix) else sparse.csr_matrix(matrix)
+        )
         counts = counts.astype(float, copy=False)
         counts.sort_indices()
         matched, unmatched, total = validate_batch_counts(counts, info)
@@ -131,7 +137,9 @@ def valence(
         neutral = _column_mass(counts, values == 0)
         positive = _column_mass(counts, values > 0)
         min_matched = _observed_extreme(counts, values, first=True, empty=zero_division)
-        max_matched = _observed_extreme(counts, values, first=False, empty=zero_division)
+        max_matched = _observed_extreme(
+            counts, values, first=False, empty=zero_division
+        )
         q25 = _expanded_quantile(counts, values, 0.25, empty=zero_division)
         median = _expanded_quantile(counts, values, 0.50, empty=zero_division)
         q75 = _expanded_quantile(counts, values, 0.75, empty=zero_division)
@@ -179,7 +187,9 @@ def valence(
             result[name] = context[name]
         for raw_name, scorer in custom.items():
             name = str(raw_name)
-            raw = _call_custom_scorer(scorer, context=context, extra_kwargs=custom_kwargs)
+            raw = _call_custom_scorer(
+                scorer, context=context, extra_kwargs=custom_kwargs
+            )
             score = np.asarray(raw, dtype=float).reshape(-1)
             if len(score) != len(info):
                 raise ValueError(
@@ -267,12 +277,17 @@ def _call_custom_scorer(
     except (TypeError, ValueError):
         return scorer(context["counts"], context["values"], **dict(extra_kwargs))
     available: dict[str, Any] = {**context, **dict(extra_kwargs)}
-    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()):
+    if any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
+    ):
         return scorer(**available)
     args: list[Any] = []
     kwargs: dict[str, Any] = {}
     for parameter in signature.parameters.values():
-        if parameter.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}:
+        if parameter.kind in {
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        }:
             continue
         if parameter.name in available:
             value = available[parameter.name]

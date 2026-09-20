@@ -30,7 +30,9 @@ def _build_sentence_project(tmp_path):
             "group": ["A", "B", "A"],
         }
     ).to_csv(csv_path, index=False)
-    project = Project.create(tmp_path / "project", name="restrict_aggregate", delete_existing=True)
+    project = Project.create(
+        tmp_path / "project", name="restrict_aggregate", delete_existing=True
+    )
     docs = project.read_csv(
         csv_path,
         text_fields="text",
@@ -47,7 +49,9 @@ def test_restrict_uses_compatible_key_prefix_and_preserves_source_grain(tmp_path
     project, docs, sentences = _build_sentence_project(tmp_path)
     try:
         train = project.select_keys(docs, [0, 2], output_label="train")
-        restricted = project.restrict(sentences, to=train, output_label="train_sentences")
+        restricted = project.restrict(
+            sentences, to=train, output_label="train_sentences"
+        )
 
         frame = _table(restricted)
         assert list(restricted.primary_key) == ["row_id", "sentence_id"]
@@ -59,7 +63,9 @@ def test_restrict_uses_compatible_key_prefix_and_preserves_source_grain(tmp_path
         ]
         assert frame["text"].tolist() == ["alpha", "beta", "delta", "epsilon"]
         assert restricted.descriptor["lineage"]["lineage_mode"] == "preserved_key"
-        assert restricted.descriptor["lineage"]["basis_artifact_ids"] == [sentences.artifact_id]
+        assert restricted.descriptor["lineage"]["basis_artifact_ids"] == [
+            sentences.artifact_id
+        ]
 
         sources = {
             row["source_label"]: row["source_artifact_id"]
@@ -75,11 +81,15 @@ def test_restrict_allows_domain_rows_with_no_finer_source_rows(tmp_path):
     try:
         # Build a legitimate extended-key source in which document 1 has no children.
         only_outer_docs = project.select_keys(docs, [0, 2], output_label="outer_docs")
-        sparse_sentences = project.restrict(sentences, to=only_outer_docs, output_label="sparse_sentences")
+        sparse_sentences = project.restrict(
+            sentences, to=only_outer_docs, output_label="sparse_sentences"
+        )
 
         # Restricting that source to the full document domain is valid. Document 1
         # simply contributes zero child rows; restrict is a semijoin, not a coverage assertion.
-        restored_domain = project.restrict(sparse_sentences, to=docs, output_label="full_domain_sparse")
+        restored_domain = project.restrict(
+            sparse_sentences, to=docs, output_label="full_domain_sparse"
+        )
         frame = _table(restored_domain)
         assert set(frame["row_id"].astype(int)) == {0, 2}
     finally:
@@ -133,7 +143,9 @@ def test_aggregate_reduces_key_by_named_level_and_sums_sentence_scores(tmp_path)
         assert frame["evidence"].tolist() == pytest.approx([1.7, 0.2, 1.3])
         assert frame["n_rows"].astype(int).tolist() == [2, 1, 2]
         assert document_scores.descriptor["lineage"]["lineage_mode"] == "reduced_key"
-        assert document_scores.descriptor["lineage"]["basis_artifact_ids"] == [sentence_scores.artifact_id]
+        assert document_scores.descriptor["lineage"]["basis_artifact_ids"] == [
+            sentence_scores.artifact_id
+        ]
         # Once the key returns to document grain, coarser source metadata is visible again.
         assert frame["group"].tolist() == ["A", "B", "A"]
     finally:
@@ -156,7 +168,9 @@ def test_aggregate_to_key_is_last_retained_key_and_must_reduce(tmp_path):
         with pytest.raises(ArtifactError, match="not in source primary key"):
             project.aggregate(source, to_key="missing", aggregations={"score": "sum"})
         with pytest.raises(ArtifactError, match="proper prefix"):
-            project.aggregate(source, to_key="sentence_id", aggregations={"score": "sum"})
+            project.aggregate(
+                source, to_key="sentence_id", aggregations={"score": "sum"}
+            )
     finally:
         project.close()
 
@@ -214,7 +228,9 @@ def test_aggregate_new_output_centric_data_and_metadata_api(tmp_path):
         assert frame["n_rows"].astype(int).tolist() == [2, 1, 2]
         assert reduced.descriptor["lineage"]["lineage_mode"] == "reduced_key"
 
-        operation = project.storage.operation_dir(reduced.operation_id) / "operation.json"
+        operation = (
+            project.storage.operation_dir(reduced.operation_id) / "operation.json"
+        )
         request = __import__("json").loads(operation.read_text())["request"]
         assert request["batch_unit"] == "retained_key_groups"
     finally:
@@ -290,7 +306,9 @@ def test_matrix_aggregate_sums_all_features_and_aggregates_metadata(tmp_path):
         assert rows["group_first"].tolist() == ["A", "B", "A"]
         assert rows["course_number"].astype(int).tolist() == [12, 12, 12]
 
-        by_term = {term: matrix[:, index].tolist() for index, term in enumerate(columns)}
+        by_term = {
+            term: matrix[:, index].tolist() for index, term in enumerate(columns)
+        }
         assert by_term["alpha"] == pytest.approx([1, 0, 0])
         assert by_term["beta"] == pytest.approx([1, 0, 0])
         assert by_term["gamma"] == pytest.approx([0, 1, 0])

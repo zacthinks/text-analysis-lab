@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 import pytest
 
@@ -11,11 +9,15 @@ pytest.importorskip("pyarrow")
 import text_analysis_lab as teal
 
 
-def test_read_csv_alias_makes_import_idempotent_and_ignores_changed_source_file(tmp_path, capsys):
+def test_read_csv_alias_makes_import_idempotent_and_ignores_changed_source_file(
+    tmp_path, capsys
+):
     first_path = tmp_path / "first.csv"
     second_path = tmp_path / "second.csv"
     pd.DataFrame({"text": ["a", "b"]}).to_csv(first_path, index=False)
-    pd.DataFrame({"text": ["CHANGED", "SOURCE", "ROWS"]}).to_csv(second_path, index=False)
+    pd.DataFrame({"text": ["CHANGED", "SOURCE", "ROWS"]}).to_csv(
+        second_path, index=False
+    )
 
     project = teal.Project.create(tmp_path / "project", name="import_alias")
     try:

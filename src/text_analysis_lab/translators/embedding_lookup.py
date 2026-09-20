@@ -10,8 +10,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -60,7 +60,7 @@ class EmbeddingLookup(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -76,7 +76,7 @@ class EmbeddingLookup(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -89,7 +89,7 @@ class EmbeddingLookup(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> Mapping[str, SourceRequest]:
@@ -222,7 +222,7 @@ class EmbeddingLookup(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "EmbeddingLookup":
+    def from_json_state(cls, state: Mapping[str, Any]) -> EmbeddingLookup:
         return cls(
             field=str(state["field"]),
             oov_policy=cast(OovPolicy, state.get("oov_policy", "zero")),
@@ -257,8 +257,8 @@ def _lookup_rows(matrix: Any, positions: np.ndarray, valid: np.ndarray) -> Any:
 
 
 def _validate_sources(
-    sources: Mapping[str, "BaseArtifact"],
-) -> tuple["BaseArtifact", "BaseArtifact"]:
+    sources: Mapping[str, BaseArtifact],
+) -> tuple[BaseArtifact, BaseArtifact]:
     if set(sources) != {TOKEN_SOURCE, EMBEDDING_SOURCE}:
         raise OperatorError(
             f"EmbeddingLookup expects source labels {TOKEN_SOURCE!r} and "
@@ -269,7 +269,9 @@ def _validate_sources(
     if tokens.artifact_type.value != "table":
         raise OperatorError("EmbeddingLookup tokens source must be a table artifact.")
     if embeddings.artifact_type.value not in {"dense_matrix", "sparse_matrix"}:
-        raise OperatorError("EmbeddingLookup embeddings source must be a matrix artifact.")
+        raise OperatorError(
+            "EmbeddingLookup embeddings source must be a matrix artifact."
+        )
     if not getattr(embeddings, "has_row_names", False):
         raise OperatorError("EmbeddingLookup embeddings source must define named rows.")
     return tokens, embeddings

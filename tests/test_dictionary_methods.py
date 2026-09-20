@@ -13,7 +13,6 @@ from text_analysis_lab.core.operator import InputBatch, TranslationRequest
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.translators import DictionaryTranslator
 
-
 _VALUES = np.array(
     [
         [2.0, 1.0, 0.0, 0.0, 3.0, 0.0, 4.0],
@@ -144,7 +143,9 @@ def _content_dictionary(*, valuetype: str = "glob") -> dictionaries.Dictionary:
 def _run_translator(translator: DictionaryTranslator, values=_VALUES):
     source = _SourceFixture()
     request = TranslationRequest(batch_size=10)
-    translator.input_request(sources={"source": source}, mode="translate", request=request)
+    translator.input_request(
+        sources={"source": source}, mode="translate", request=request
+    )
     packet = InputBatch(
         source_label="source",
         artifact_id="source",
@@ -309,7 +310,9 @@ def test_valence_histogram_preserves_six_minus_ones_vs_one_minus_six() -> None:
         dictionaries.ValenceDictionary({"mildly_bad": -1.0, "extremely_bad": -6.0})
     )
     request = TranslationRequest()
-    translator.input_request(sources={"source": source}, mode="translate", request=request)
+    translator.input_request(
+        sources={"source": source}, mode="translate", request=request
+    )
     packet = InputBatch(
         source_label="source",
         artifact_id="source",

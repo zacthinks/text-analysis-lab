@@ -12,8 +12,8 @@ import inspect
 import json
 import re
 import shutil
-from contextlib import contextmanager
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -23,7 +23,7 @@ import pandas as pd
 from scipy import sparse
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
-from text_analysis_lab.core.errors import ArtifactError, ArtifactNotFoundError
+from text_analysis_lab.core.errors import ArtifactNotFoundError
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.core.utils import utc_now_iso
 from text_analysis_lab.translators.geco_predictor import GeCoPredictor
@@ -61,7 +61,7 @@ class TeALGeCoProvider:
     connection crosses a server-thread boundary.
     """
 
-    def __init__(self, project: "Project") -> None:
+    def __init__(self, project: Project) -> None:
         self.project = project
         project_path = getattr(project, "path", None)
         self._project_path = Path(project_path) if project_path is not None else None
@@ -136,7 +136,7 @@ class TeALGeCoProvider:
 
     def _matrix_artifact(
         self,
-        project: "Project",
+        project: Project,
         external_ref: Any,
         *,
         purpose: str,
@@ -159,7 +159,7 @@ class TeALGeCoProvider:
 
     def _positions_for_keys(
         self,
-        project: "Project",
+        project: Project,
         artifact: BaseArtifact,
         ordered_user_keys: Sequence[Mapping[str, Any]],
     ) -> list[int]:
@@ -172,7 +172,6 @@ class TeALGeCoProvider:
                 "key requested by the linked GeCo workspace. Geometry/view artifacts "
                 "may contain extra rows, but every GeCo document key must be present."
             ) from exc
-
 
     def transform_texts(self, external_ref: Any, texts: list[str]) -> Any:
         """Replay one registered geometry's frozen TeAL lineage on new text."""
@@ -192,7 +191,9 @@ class TeALGeCoProvider:
         with self._project_session() as project:
             artifact = self._matrix_artifact(project, external_ref, purpose="geometry")
             try:
-                values = project.transform_texts_like(artifact, [str(query)], query=True)
+                values = project.transform_texts_like(
+                    artifact, [str(query)], query=True
+                )
             except Exception as exc:
                 raise GeCoIntegrationError(
                     f"Could not transform semantic query through TeAL geometry "
@@ -206,7 +207,7 @@ class LinkedGeCoWorkspace:
 
     def __init__(
         self,
-        manager: "GeCoManager",
+        manager: GeCoManager,
         manifest: Mapping[str, Any],
         coder: Any,
         provider: TeALGeCoProvider | None,
@@ -330,10 +331,18 @@ class LinkedGeCoWorkspace:
             raise GeCoIntegrationError("Focus-coder manifest contains no codes.")
         requested = dict(fields or {})
         keys = list(self.documents.primary_key)
-        base = self.documents.query(
-            key_columns=True, data_columns=False, metadata_columns=False,
-            order_by="_position", include_position=True, form="table",
-        ).sort_values("_position", kind="stable").drop(columns=["_position"])
+        base = (
+            self.documents.query(
+                key_columns=True,
+                data_columns=False,
+                metadata_columns=False,
+                order_by="_position",
+                include_position=True,
+                form="table",
+            )
+            .sort_values("_position", kind="stable")
+            .drop(columns=["_position"])
+        )
         output = base.reset_index(drop=True)
         data_fields: list[str] = []
         for row in code_rows:
@@ -349,7 +358,9 @@ class LinkedGeCoWorkspace:
             if not isinstance(exported, pd.DataFrame):
                 exported = pd.DataFrame(exported)
             required = [*keys, "label"]
-            missing_columns = [column for column in required if column not in exported.columns]
+            missing_columns = [
+                column for column in required if column not in exported.columns
+            ]
             if missing_columns:
                 raise GeCoIntegrationError(
                     f"GeCo export for focus code {code_name!r} omitted {missing_columns!r}."
@@ -382,8 +393,14 @@ class LinkedGeCoWorkspace:
         if memo:
             provenance = f"{provenance}\n\n{memo}"
         return self._project.from_keyed_frame(
-            self.documents, output, data_fields=data_fields, require_complete=True,
-            output_label=output_label, memo=provenance, alias=alias, overwrite=overwrite,
+            self.documents,
+            output,
+            data_fields=data_fields,
+            require_complete=True,
+            output_label=output_label,
+            memo=provenance,
+            alias=alias,
+            overwrite=overwrite,
         )
 
     def resource_diagnostics(self) -> pd.DataFrame:
@@ -397,7 +414,9 @@ class LinkedGeCoWorkspace:
                 {
                     "resource_type": "geometry",
                     "name": str(record["name"]),
-                    "artifact_id": _artifact_id_from_external_ref(record["external_ref"]),
+                    "artifact_id": _artifact_id_from_external_ref(
+                        record["external_ref"]
+                    ),
                     "rows": shape[0],
                     "columns": shape[1],
                     "finite": _matrix_is_finite(values),
@@ -415,7 +434,9 @@ class LinkedGeCoWorkspace:
                 {
                     "resource_type": "view",
                     "name": str(record["name"]),
-                    "artifact_id": _artifact_id_from_external_ref(record["external_ref"]),
+                    "artifact_id": _artifact_id_from_external_ref(
+                        record["external_ref"]
+                    ),
                     "rows": shape[0],
                     "columns": shape[1],
                     "finite": bool(np.isfinite(values).all()),
@@ -555,7 +576,8 @@ class LinkedGeCoWorkspace:
     ) -> GeCoPredictor:
         """Compatibility wrapper for the pre-``export_predictor`` classifier API."""
         matches = [
-            ref for ref in self.predictors()
+            ref
+            for ref in self.predictors()
             if ref.kind == "classifier" and ref.name == str(name)
         ]
         if len(matches) != 1:
@@ -582,7 +604,8 @@ class LinkedGeCoWorkspace:
                 "Installed GeCo does not expose the legacy classifier export contract."
             )
         rows = [
-            dict(row) for row in classifier_specs()
+            dict(row)
+            for row in classifier_specs()
             if int(row.get("classifier_spec_id", -1)) == int(ref.id)
         ]
         if len(rows) != 1:
@@ -611,7 +634,9 @@ class LinkedGeCoWorkspace:
             estimator,
             geometry_id=spec.get("geometry_id"),
             geometry_name=(
-                None if spec.get("geometry_name") is None else str(spec.get("geometry_name"))
+                None
+                if spec.get("geometry_name") is None
+                else str(spec.get("geometry_name"))
             ),
             positive_class=1,
             threshold=0.5,
@@ -632,7 +657,9 @@ class LinkedGeCoWorkspace:
             artifact, self.documents, purpose=f"geometry {geometry_name!r}"
         )
         if self._provider is None:
-            raise GeCoIntegrationError("This GeCo workspace has no external TeAL provider.")
+            raise GeCoIntegrationError(
+                "This GeCo workspace has no external TeAL provider."
+            )
         keys = self._manager._document_keys(self.documents)
         self._provider.geometry_matrix(_external_ref(geometry), keys)
         text_replay = self._project.can_transform_texts_like(geometry, query=False)
@@ -668,7 +695,9 @@ class LinkedGeCoWorkspace:
             artifact, self.documents, purpose=f"projection {view_name!r}"
         )
         if self._provider is None:
-            raise GeCoIntegrationError("This GeCo workspace has no external TeAL provider.")
+            raise GeCoIntegrationError(
+                "This GeCo workspace has no external TeAL provider."
+            )
         keys = self._manager._document_keys(self.documents)
         self._provider.view_coordinates(_external_ref(view), keys)
         return int(
@@ -721,7 +750,7 @@ class LinkedGeCoWorkspace:
         self._closed = True
         self._manager._forget_handle(self.name, self)
 
-    def __enter__(self) -> "LinkedGeCoWorkspace":
+    def __enter__(self) -> LinkedGeCoWorkspace:
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
@@ -731,7 +760,7 @@ class LinkedGeCoWorkspace:
 class GeCoManager:
     """Create, reopen, list, and manage TeAL-linked GeCo workspaces."""
 
-    def __init__(self, project: "Project") -> None:
+    def __init__(self, project: Project) -> None:
         self.project = project
         self.root = project.storage.teal_dir / "geco"
         self.links_dir = self.root / "links"
@@ -759,9 +788,13 @@ class GeCoManager:
         metadata = _normalize_metadata_fields(metadata_fields)
         documents_artifact = self.project.get_artifact(documents)
         if not documents_artifact.primary_key:
-            raise GeCoIntegrationError("GeCo documents artifact must have a primary key.")
+            raise GeCoIntegrationError(
+                "GeCo documents artifact must have a primary key."
+            )
         if not documents_artifact.n_rows:
-            raise GeCoIntegrationError("GeCo documents artifact must contain at least one row.")
+            raise GeCoIntegrationError(
+                "GeCo documents artifact must contain at least one row."
+            )
 
         geometry_artifact = self._validate_numerical_resource(
             geometry, documents_artifact, purpose="geometry"
@@ -799,10 +832,16 @@ class GeCoManager:
             metadata_fields=metadata,
         )
         ordered_keys = _key_records(document_frame, documents_artifact.primary_key)
-        text_replay = self.project.can_transform_texts_like(geometry_artifact, query=False)
-        query_replay = self.project.can_transform_texts_like(geometry_artifact, query=True)
+        text_replay = self.project.can_transform_texts_like(
+            geometry_artifact, query=False
+        )
+        query_replay = self.project.can_transform_texts_like(
+            geometry_artifact, query=True
+        )
         provider = TeALGeCoProvider(self.project)
-        resolved_supports_query = query_replay if supports_query is None else bool(supports_query)
+        resolved_supports_query = (
+            query_replay if supports_query is None else bool(supports_query)
+        )
         if resolved_supports_query and not query_replay:
             raise GeCoIntegrationError(
                 f"TeAL geometry {geometry_artifact.artifact_id!r} cannot replay semantic "
@@ -810,7 +849,9 @@ class GeCoManager:
             )
 
         # Preflight the exact stable-key order before creating any mutable GeCo state.
-        matrix = provider.geometry_matrix(_external_ref(geometry_artifact), ordered_keys)
+        matrix = provider.geometry_matrix(
+            _external_ref(geometry_artifact), ordered_keys
+        )
         _validate_matrix_rows(
             matrix, expected_rows=len(document_frame), purpose="geometry"
         )
@@ -901,7 +942,9 @@ class GeCoManager:
         metadata = _normalize_metadata_fields(metadata_fields)
         documents_artifact = self.project.get_artifact(documents)
         source_artifact = (
-            documents_artifact if text_source is None else self.project.get_artifact(text_source)
+            documents_artifact
+            if text_source is None
+            else self.project.get_artifact(text_source)
         )
         if not documents_artifact.primary_key or not documents_artifact.n_rows:
             raise GeCoIntegrationError(
@@ -928,7 +971,10 @@ class GeCoManager:
                 shutil.rmtree(workspace_path)
 
         document_frame = self._focus_document_frame(
-            documents_artifact, source_artifact, text_field=text_field, metadata_fields=metadata
+            documents_artifact,
+            source_artifact,
+            text_field=text_field,
+            metadata_fields=metadata,
         )
         GeometricCoder = _load_geometric_coder()
         coder = None
@@ -954,10 +1000,9 @@ class GeCoManager:
             focus_session_id: int | None = None
             configure_focus = getattr(coder, "configure_focus", None)
             if callable(configure_focus):
-                ordered_user_keys = (
-                    document_frame.loc[:, list(documents_artifact.primary_key)]
-                    .to_dict(orient="records")
-                )
+                ordered_user_keys = document_frame.loc[
+                    :, list(documents_artifact.primary_key)
+                ].to_dict(orient="records")
                 focus_session_id = int(
                     configure_focus(
                         codes=[int(row["code_id"]) for row in persisted_codes],
@@ -1097,18 +1142,25 @@ class GeCoManager:
                 "Focus coder text/metadata fields may not collide with primary-key columns."
             )
         target = documents.query(
-            key_columns=True, data_columns=False, metadata_columns=False,
-            order_by="_position", include_position=True, form="table",
+            key_columns=True,
+            data_columns=False,
+            metadata_columns=False,
+            order_by="_position",
+            include_position=True,
+            form="table",
         ).sort_values("_position", kind="stable")
         target = target.loc[:, [*key_columns, "_position"]].rename(
             columns={"_position": "_focus_position"}
         )
         try:
             source_frame = source.query(
-                key_columns=True, data_columns=[text_field],
+                key_columns=True,
+                data_columns=[text_field],
                 metadata_columns=list(metadata_fields) if metadata_fields else False,
                 metadata_mode="full" if metadata_fields else "none",
-                order_by="_position", include_position=False, form="table",
+                order_by="_position",
+                include_position=False,
+                form="table",
             )
         except Exception as exc:
             raise GeCoIntegrationError(
@@ -1122,9 +1174,14 @@ class GeCoManager:
                 f"Focus coder source is missing requested column(s) {missing!r}."
             )
         if source_frame.duplicated(subset=key_columns).any():
-            raise GeCoIntegrationError("Focus coder text_source contains duplicate stable keys.")
+            raise GeCoIntegrationError(
+                "Focus coder text_source contains duplicate stable keys."
+            )
         merged = target.merge(
-            source_frame.loc[:, expected], on=key_columns, how="left", validate="one_to_one"
+            source_frame.loc[:, expected],
+            on=key_columns,
+            how="left",
+            validate="one_to_one",
         ).sort_values("_focus_position", kind="stable")
         if merged[text_field].isna().any():
             missing_keys = int(merged[text_field].isna().sum())
@@ -1132,7 +1189,11 @@ class GeCoManager:
                 f"Focus coder text_source does not cover {missing_keys} document key(s)."
             )
         merged[text_field] = merged[text_field].astype(str)
-        return merged.drop(columns=["_focus_position"]).loc[:, expected].reset_index(drop=True)
+        return (
+            merged.drop(columns=["_focus_position"])
+            .loc[:, expected]
+            .reset_index(drop=True)
+        )
 
     def _document_frame(
         self,
@@ -1143,7 +1204,9 @@ class GeCoManager:
     ) -> pd.DataFrame:
         key_columns = list(documents.primary_key)
         if text_field in key_columns:
-            raise GeCoIntegrationError("text_field cannot also be a primary-key column.")
+            raise GeCoIntegrationError(
+                "text_field cannot also be a primary-key column."
+            )
         overlap = sorted(set(metadata_fields).intersection([*key_columns, text_field]))
         if overlap:
             raise GeCoIntegrationError(
@@ -1165,8 +1228,12 @@ class GeCoManager:
                 f"documents artifact {documents.artifact_id!r}."
             ) from exc
         if "_position" not in frame.columns:
-            raise GeCoIntegrationError("TeAL document query did not expose canonical _position.")
-        frame = frame.sort_values("_position", kind="stable").drop(columns=["_position"])
+            raise GeCoIntegrationError(
+                "TeAL document query did not expose canonical _position."
+            )
+        frame = frame.sort_values("_position", kind="stable").drop(
+            columns=["_position"]
+        )
         expected = [*key_columns, text_field, *metadata_fields]
         missing = [column for column in expected if column not in frame.columns]
         if missing:
@@ -1179,7 +1246,9 @@ class GeCoManager:
             raise GeCoIntegrationError("GeCo text_field contains null values.")
         frame[text_field] = frame[text_field].astype(str)
         if frame.duplicated(subset=key_columns).any():
-            raise GeCoIntegrationError("GeCo documents frame contains duplicate stable keys.")
+            raise GeCoIntegrationError(
+                "GeCo documents frame contains duplicate stable keys."
+            )
         return frame
 
     def _document_keys(self, documents: BaseArtifact) -> list[dict[str, Any]]:
@@ -1223,17 +1292,23 @@ class GeCoManager:
     def _workspace_path_from_manifest(self, manifest: Mapping[str, Any]) -> Path:
         relative = Path(str(manifest["workspace_path"]))
         if relative.is_absolute() or ".." in relative.parts:
-            raise GeCoIntegrationError("Linked GeCo manifest has an unsafe workspace path.")
+            raise GeCoIntegrationError(
+                "Linked GeCo manifest has an unsafe workspace path."
+            )
         path = (self.root / relative).resolve()
         root = self.root.resolve()
         if path != root and root not in path.parents:
-            raise GeCoIntegrationError("Linked GeCo manifest workspace escapes .teal/geco.")
+            raise GeCoIntegrationError(
+                "Linked GeCo manifest workspace escapes .teal/geco."
+            )
         return path
 
     def _read_manifest(self, name: str) -> dict[str, Any]:
         path = self._manifest_path(name)
         if not path.exists():
-            raise GeCoIntegrationError(f"No linked GeCo workspace named {name!r} exists.")
+            raise GeCoIntegrationError(
+                f"No linked GeCo workspace named {name!r} exists."
+            )
         manifest = _read_json(path)
         if int(manifest.get("schema_version", -1)) != _LINK_SCHEMA_VERSION:
             raise GeCoIntegrationError(
@@ -1274,11 +1349,15 @@ def _normalize_predictor_ref(record: Any) -> GeCoPredictorRef:
         code_id = getattr(record, "code_id", None)
         name = getattr(record, "name", None)
     if not isinstance(kind, str) or not kind.strip():
-        raise GeCoIntegrationError("GeCo predictor registry row is missing a non-empty kind.")
+        raise GeCoIntegrationError(
+            "GeCo predictor registry row is missing a non-empty kind."
+        )
     if predictor_id is None:
         raise GeCoIntegrationError("GeCo predictor registry row is missing an id.")
     if not isinstance(name, str) or not name.strip():
-        raise GeCoIntegrationError("GeCo predictor registry row is missing a non-empty name.")
+        raise GeCoIntegrationError(
+            "GeCo predictor registry row is missing a non-empty name."
+        )
     return GeCoPredictorRef(
         kind=kind.strip(),
         id=int(predictor_id),
@@ -1365,7 +1444,9 @@ def _geco_predictor_from_export(frozen: Any) -> GeCoPredictor:
     )
     raw_members = _export_value(frozen, "members", None)
     if not isinstance(raw_sources, Sequence) or isinstance(raw_sources, (str, bytes)):
-        raise GeCoIntegrationError("GeCo frozen predictor export must provide source_specs.")
+        raise GeCoIntegrationError(
+            "GeCo frozen predictor export must provide source_specs."
+        )
     if not isinstance(raw_members, Sequence) or isinstance(raw_members, (str, bytes)):
         raise GeCoIntegrationError("GeCo frozen predictor export must provide members.")
 
@@ -1376,7 +1457,9 @@ def _geco_predictor_from_export(frozen: Any) -> GeCoPredictor:
         member = _object_mapping(raw_member)
         estimator = member.pop("estimator", member.pop("model", None))
         if estimator is None:
-            estimator = getattr(raw_member, "estimator", getattr(raw_member, "model", None))
+            estimator = getattr(
+                raw_member, "estimator", getattr(raw_member, "model", None)
+            )
         if estimator is None:
             raise GeCoIntegrationError(
                 f"GeCo frozen predictor member {index} is missing its fitted estimator."
@@ -1407,9 +1490,15 @@ def _geco_predictor_from_export(frozen: Any) -> GeCoPredictor:
         frozen, "stacker_positive_class", _export_value(frozen, "positive_class", 1)
     )
     threshold = float(_export_value(frozen, "threshold", 0.5))
-    output_fields = _export_value(frozen, "output_fields", ("prediction", "probability"))
-    if not isinstance(output_fields, Sequence) or isinstance(output_fields, (str, bytes)):
-        raise GeCoIntegrationError("GeCo frozen predictor output_fields must be a sequence.")
+    output_fields = _export_value(
+        frozen, "output_fields", ("prediction", "probability")
+    )
+    if not isinstance(output_fields, Sequence) or isinstance(
+        output_fields, (str, bytes)
+    ):
+        raise GeCoIntegrationError(
+            "GeCo frozen predictor output_fields must be a sequence."
+        )
     output_semantics = {
         "kind": "binary_classification",
         "output_fields": [str(value) for value in output_fields],
@@ -1418,9 +1507,13 @@ def _geco_predictor_from_export(frozen: Any) -> GeCoPredictor:
     stale_at_export = bool(_export_value(frozen, "stale_at_export", False))
 
     if not isinstance(output_semantics, Mapping):
-        raise GeCoIntegrationError("GeCo frozen predictor output_semantics must be a mapping.")
+        raise GeCoIntegrationError(
+            "GeCo frozen predictor output_semantics must be a mapping."
+        )
     if not isinstance(provenance, Mapping):
-        raise GeCoIntegrationError("GeCo frozen predictor provenance must be a mapping.")
+        raise GeCoIntegrationError(
+            "GeCo frozen predictor provenance must be a mapping."
+        )
 
     return GeCoPredictor(
         member_models,
@@ -1477,15 +1570,21 @@ def _object_mapping(obj: Any) -> dict[str, Any]:
 def _plain_mapping(obj: Any, *, name: str) -> dict[str, Any]:
     value = _object_mapping(obj)
     if not value:
-        raise GeCoIntegrationError(f"GeCo frozen predictor {name} must be mapping-like.")
+        raise GeCoIntegrationError(
+            f"GeCo frozen predictor {name} must be mapping-like."
+        )
     return value
+
 
 def _normalize_focus_codes(
     codes: Mapping[str, str] | Sequence[Mapping[str, str]],
 ) -> list[dict[str, str]]:
     """Normalize ordered focus-code names/descriptions without inventing labels."""
     if isinstance(codes, Mapping):
-        rows = [{"name": str(name), "description": str(description)} for name, description in codes.items()]
+        rows = [
+            {"name": str(name), "description": str(description)}
+            for name, description in codes.items()
+        ]
     else:
         rows = []
         for raw in codes:
@@ -1493,10 +1592,14 @@ def _normalize_focus_codes(
                 raise GeCoIntegrationError(
                     "Each focus code must provide at least a name and optional description."
                 )
-            rows.append({
-                "name": str(raw["name"]),
-                "description": str(raw.get("description", raw.get("definition", ""))),
-            })
+            rows.append(
+                {
+                    "name": str(raw["name"]),
+                    "description": str(
+                        raw.get("description", raw.get("definition", ""))
+                    ),
+                }
+            )
     if not rows:
         raise GeCoIntegrationError("Focus coder requires at least one code.")
     seen: set[str] = set()
@@ -1566,7 +1669,6 @@ def _matrix_is_finite(values: Any) -> bool:
         return False
 
 
-
 def _artifact_id_from_external_ref(external_ref: Any) -> str:
     if not isinstance(external_ref, Mapping):
         raise GeCoIntegrationError(
@@ -1611,7 +1713,9 @@ def _normalize_ordered_keys(
     return keys
 
 
-def _key_records(frame: pd.DataFrame, primary_key: Sequence[str]) -> list[dict[str, Any]]:
+def _key_records(
+    frame: pd.DataFrame, primary_key: Sequence[str]
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for values in frame.loc[:, list(primary_key)].itertuples(index=False, name=None):
         record: dict[str, Any] = {}

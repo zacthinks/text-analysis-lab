@@ -10,7 +10,6 @@ from text_analysis_lab.core.operator import InputBatch, TranslationRequest
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.translators import DictionaryTranslator
 
-
 _FEATURES = [
     "survey",
     "surveys",
@@ -51,7 +50,11 @@ class _IdentityMatrixFixture:
 
     def iter_batches(self, *, batch_size, key_columns, include_position, **kwargs):
         _ = kwargs, batch_size
-        info = pd.DataFrame({"row_id": list(range(self.n_rows))}) if key_columns else pd.DataFrame(index=range(self.n_rows))
+        info = (
+            pd.DataFrame({"row_id": list(range(self.n_rows))})
+            if key_columns
+            else pd.DataFrame(index=range(self.n_rows))
+        )
         if include_position:
             info["_position"] = list(range(self.n_rows))
         yield {"info": info, "matrix": self.matrix}
@@ -137,9 +140,7 @@ def test_non_whitespace_glob_question_mark_does_not_match_space() -> None:
 
     features = ["axb", "a b"]
     ordinary = dictionaries.Dictionary({"x": ["a?b"]}, valuetype="glob")
-    bounded = dictionaries.Dictionary(
-        {"x": ["a?b"]}, valuetype="non_whitespace_glob"
-    )
+    bounded = dictionaries.Dictionary({"x": ["a?b"]}, valuetype="non_whitespace_glob")
     _, ordinary_membership = category_membership(features, ordinary)
     _, bounded_membership = category_membership(features, bounded)
     assert ordinary_membership.toarray().reshape(-1).tolist() == [1.0, 1.0]
@@ -188,14 +189,17 @@ def test_non_whitespace_glob_survives_selection_frames_and_operator_state() -> N
     assert restored_from_frame.valuetype == "non_whitespace_glob"
 
     translator = DictionaryTranslator(dictionary)
-    restored_translator = DictionaryTranslator.from_json_state(translator.to_json_state())
+    restored_translator = DictionaryTranslator.from_json_state(
+        translator.to_json_state()
+    )
     assert restored_translator.dictionary is not None
     assert restored_translator.dictionary.valuetype == "non_whitespace_glob"
 
 
-
 def test_round27_4_serialized_state_migrates_to_new_valuetype() -> None:
-    from text_analysis_lab.translators.dictionary_translator import _deserialize_dictionary
+    from text_analysis_lab.translators.dictionary_translator import (
+        _deserialize_dictionary,
+    )
 
     restored = _deserialize_dictionary(
         {
@@ -211,6 +215,7 @@ def test_round27_4_serialized_state_migrates_to_new_valuetype() -> None:
     )
     assert isinstance(restored, dictionaries.Dictionary)
     assert restored.valuetype == "non_whitespace_glob"
+
 
 def test_valence_glob_uses_same_non_whitespace_matching_engine() -> None:
     from text_analysis_lab.dictionaries.matching import valence_vectors

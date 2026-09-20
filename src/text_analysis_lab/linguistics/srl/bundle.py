@@ -65,11 +65,15 @@ def find_member(archive: tarfile.TarFile, names: set[str]) -> tarfile.TarInfo:
     ]
     if not matches:
         raise RuntimeError(f"Archive does not contain any of: {sorted(names)}")
-    matches.sort(key=lambda member: (len(PurePosixPath(member.name).parts), member.name))
+    matches.sort(
+        key=lambda member: (len(PurePosixPath(member.name).parts), member.name)
+    )
     return matches[0]
 
 
-def read_json_member(archive: tarfile.TarFile, member: tarfile.TarInfo) -> dict[str, Any]:
+def read_json_member(
+    archive: tarfile.TarFile, member: tarfile.TarInfo
+) -> dict[str, Any]:
     handle = archive.extractfile(member)
     if handle is None:
         raise RuntimeError(f"Could not read {member.name}")
@@ -86,7 +90,9 @@ def read_labels(archive: tarfile.TarFile) -> list[str]:
     ]
     if not candidates:
         raise RuntimeError("Archive does not contain vocabulary/labels.txt")
-    candidates.sort(key=lambda member: (len(PurePosixPath(member.name).parts), member.name))
+    candidates.sort(
+        key=lambda member: (len(PurePosixPath(member.name).parts), member.name)
+    )
     handle = archive.extractfile(candidates[0])
     if handle is None:
         raise RuntimeError(f"Could not read {candidates[0].name}")
@@ -116,15 +122,18 @@ def discard_legacy_bert_buffers(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalize_state_dict(state: Any) -> dict[str, Any]:
-    if isinstance(state, dict) and "state_dict" in state and isinstance(state["state_dict"], dict):
+    if (
+        isinstance(state, dict)
+        and "state_dict" in state
+        and isinstance(state["state_dict"], dict)
+    ):
         state = state["state_dict"]
     if not isinstance(state, dict):
         raise RuntimeError("weights.th did not contain a state dictionary")
     normalized: dict[str, Any] = {}
     for key, tensor in state.items():
         new_key = str(key)
-        if new_key.startswith("module."):
-            new_key = new_key[len("module.") :]
+        new_key = new_key.removeprefix("module.")
         if new_key in LEGACY_NONPERSISTENT_BERT_BUFFERS:
             continue
         normalized[new_key] = tensor.detach().cpu().contiguous()
@@ -135,11 +144,15 @@ def normalize_state_dict(state: Any) -> dict[str, Any]:
     }
     missing = sorted(required - normalized.keys())
     if missing:
-        raise RuntimeError(f"Archive weights are missing expected SRL parameters: {missing}")
+        raise RuntimeError(
+            f"Archive weights are missing expected SRL parameters: {missing}"
+        )
     return normalized
 
 
-def _bert_config(tokenizer_name: str, configured: Any, BertConfig: Any) -> dict[str, Any]:
+def _bert_config(
+    tokenizer_name: str, configured: Any, BertConfig: Any
+) -> dict[str, Any]:
     if isinstance(configured, dict):
         return configured
     if tokenizer_name == "bert-base-uncased":
@@ -288,7 +301,9 @@ def convert_archive(
         },
         "bert_config": bert_config,
         "labels": labels,
-        "embedding_dropout": float(nested_get(config, ("model", "embedding_dropout")) or 0.0),
+        "embedding_dropout": float(
+            nested_get(config, ("model", "embedding_dropout")) or 0.0
+        ),
         "source_config": {
             "model_type": nested_get(config, ("model", "type")),
             "dataset_reader_type": nested_get(config, ("dataset_reader", "type")),
@@ -307,8 +322,12 @@ def convert_archive(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("archive", type=Path, help="Local AllenNLP SRL model.tar.gz archive")
-    parser.add_argument("output_dir", type=Path, help="Directory for the converted bundle")
+    parser.add_argument(
+        "archive", type=Path, help="Local AllenNLP SRL model.tar.gz archive"
+    )
+    parser.add_argument(
+        "output_dir", type=Path, help="Directory for the converted bundle"
+    )
     parser.add_argument(
         "--tokenizer-name",
         help="Override the tokenizer recorded in the AllenNLP configuration",

@@ -12,8 +12,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -138,7 +138,7 @@ class Word2Vec(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -153,7 +153,7 @@ class Word2Vec(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -166,13 +166,15 @@ class Word2Vec(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
         _ = request
         if mode != "translate":
-            raise OperatorError("Word2Vec is a one-shot translate operator, not fitted state.")
+            raise OperatorError(
+                "Word2Vec is a one-shot translate operator, not fitted state."
+            )
         source = _single_source(sources)
         if source.artifact_type.value != "table":
             raise OperatorError("Word2Vec requires a table artifact source.")
@@ -200,7 +202,9 @@ class Word2Vec(BaseTranslator):
         packet = _single_input(inputs)
         frame = _require_frame(packet.data)
         source_key = tuple(str(name) for name in packet.primary_key)
-        missing = [name for name in [*source_key, self.field] if name not in frame.columns]
+        missing = [
+            name for name in [*source_key, self.field] if name not in frame.columns
+        ]
         if missing:
             raise ArtifactError(f"Word2Vec source is missing columns {missing}.")
 
@@ -279,7 +283,7 @@ class Word2Vec(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "Word2Vec":
+    def from_json_state(cls, state: Mapping[str, Any]) -> Word2Vec:
         obj = cls(
             field=str(state.get("field", "text")),
             sequence_by=cast(Sequence[str] | None, state.get("sequence_by")),
@@ -358,7 +362,9 @@ class Word2Vec(BaseTranslator):
                 "Word2Vec needs at least two vocabulary words after min_count filtering."
             )
         retained = set(model.wv.key_to_index)
-        if not any(sum(word in retained for word in sequence) >= 2 for sequence in sequences):
+        if not any(
+            sum(word in retained for word in sequence) >= 2 for sequence in sequences
+        ):
             raise ArtifactError(
                 "Word2Vec found no sequence containing at least two retained vocabulary words."
             )
@@ -399,7 +405,9 @@ class Word2Vec(BaseTranslator):
                 "be assigned to sequences."
             )
         sequence_by = source_key[:-1] if self.sequence_by is None else self.sequence_by
-        if not _is_prefix(sequence_by, source_key) or len(sequence_by) >= len(source_key):
+        if not _is_prefix(sequence_by, source_key) or len(sequence_by) >= len(
+            source_key
+        ):
             raise OperatorError(
                 "sequence_by must be a non-empty proper prefix of the source primary "
                 f"key {list(source_key)}; got {list(sequence_by)}."
@@ -458,7 +466,9 @@ def _prepare_sequences(
         if len(group) >= 2
     ]
     if not sequences:
-        raise ArtifactError("Word2Vec found no sequence containing at least two tokens.")
+        raise ArtifactError(
+            "Word2Vec found no sequence containing at least two tokens."
+        )
     return sequences
 
 
@@ -481,7 +491,9 @@ def _version_tuple(value: str) -> tuple[int, ...]:
 
 def _normalize_key_columns(value: str | Sequence[str], *, name: str) -> tuple[str, ...]:
     columns = (value,) if isinstance(value, str) else tuple(value)
-    if not columns or any(not isinstance(column, str) or not column for column in columns):
+    if not columns or any(
+        not isinstance(column, str) or not column for column in columns
+    ):
         raise ValueError(f"{name} must contain non-empty string column names.")
     if len(set(columns)) != len(columns):
         raise ValueError(f"{name} cannot contain duplicate columns.")
@@ -498,7 +510,7 @@ def _dimension_columns(vector_size: int) -> list[str]:
     return [f"dimension_{index}" for index in range(vector_size)]
 
 
-def _single_source(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
+def _single_source(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
         raise OperatorError(
             f"Word2Vec expects exactly source label {DEFAULT_SOURCE_LABEL!r}; "

@@ -15,10 +15,11 @@ standard error.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from statistics import NormalDist
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -54,7 +55,9 @@ class GeneralizedDifferenceResult:
     def estimated_prevalence(self) -> float:
         """Return the corrected mean when the audited gold values are binary."""
         if not self.gold_is_binary:
-            raise ValueError("estimated_prevalence is only defined for binary 0/1 gold values.")
+            raise ValueError(
+                "estimated_prevalence is only defined for binary 0/1 gold values."
+            )
         return self.estimated_mean
 
     def confidence_interval(
@@ -127,7 +130,6 @@ class GeneralizedDifferenceResult:
         if self.gold_is_binary:
             row["estimated_prevalence"] = self.estimated_mean
         return pd.DataFrame([row])
-
 
 
 @dataclass(frozen=True)
@@ -245,8 +247,14 @@ class GeneralizedDifferenceGroupedResult:
         if not frames:
             return pd.DataFrame(
                 columns=[
-                    "first", "second", "first_estimate", "second_estimate",
-                    "difference", "standard_error", "p_value", "variance_design",
+                    "first",
+                    "second",
+                    "first_estimate",
+                    "second_estimate",
+                    "difference",
+                    "standard_error",
+                    "p_value",
+                    "variance_design",
                 ]
             )
         return pd.concat(frames, ignore_index=True)
@@ -262,19 +270,25 @@ class GeneralizedDifferenceGroupedResult:
         if not frames:
             return pd.DataFrame(
                 columns=[
-                    "first", "second", "first_estimate", "second_estimate",
-                    "difference", "standard_error", "p_value", "variance_design",
+                    "first",
+                    "second",
+                    "first_estimate",
+                    "second_estimate",
+                    "difference",
+                    "standard_error",
+                    "p_value",
+                    "variance_design",
                 ]
             )
         return pd.concat(frames, ignore_index=True)
 
 
 def generalized_difference_by(
-    surrogate: "BaseArtifact",
+    surrogate: BaseArtifact,
     *,
-    gold: "BaseArtifact | str",
-    pi: "BaseArtifact | str",
-    group: "BaseArtifact | str | None" = None,
+    gold: BaseArtifact | str,
+    pi: BaseArtifact | str,
+    group: BaseArtifact | str | None = None,
     group_field: str,
     surrogate_field: str = "prediction",
     gold_field: str = "label",
@@ -294,7 +308,11 @@ def generalized_difference_by(
     keys = tuple(str(value) for value in surrogate.primary_key)
     if not keys:
         raise ArtifactError("Surrogate artifact has no primary key.")
-    for role, artifact in (("gold", gold_artifact), ("pi", pi_artifact), ("group", group_artifact)):
+    for role, artifact in (
+        ("gold", gold_artifact),
+        ("pi", pi_artifact),
+        ("group", group_artifact),
+    ):
         if tuple(str(value) for value in artifact.primary_key) != keys:
             raise ArtifactError(
                 f"Surrogate and {role} artifacts must use the same primary-key columns."
@@ -307,26 +325,44 @@ def generalized_difference_by(
     audit = _frame(gold_artifact, gold_field)
     pi_frame = _frame(pi_artifact, pi_field)
     group_frame = _field_frame(group_artifact, group_field, role="group")
-    for role, frame in (("surrogate", population), ("gold", audit), ("pi", pi_frame), ("group", group_frame)):
+    for role, frame in (
+        ("surrogate", population),
+        ("gold", audit),
+        ("pi", pi_frame),
+        ("group", group_frame),
+    ):
         _validate_unique(frame, keys, role=role)
     population_keys = set(_key_tuples(population, keys))
     if set(_key_tuples(group_frame, keys)) != population_keys:
-        raise ArtifactError("group key set must exactly equal the surrogate population key set.")
+        raise ArtifactError(
+            "group key set must exactly equal the surrogate population key set."
+        )
     audit_keys = set(_key_tuples(audit, keys))
     if set(_key_tuples(pi_frame, keys)) != audit_keys:
         raise ArtifactError("pi key set must exactly equal the gold/audit key set.")
     if not audit_keys.issubset(population_keys):
-        raise ArtifactError("gold/audit contains keys outside the surrogate population.")
+        raise ArtifactError(
+            "gold/audit contains keys outside the surrogate population."
+        )
 
-    pop = population.merge(group_frame, on=list(keys), validate="one_to_one", sort=False)
-    merged = audit.merge(
-        population.loc[:, [*keys, surrogate_field]], on=list(keys), validate="one_to_one", sort=False
-    ).merge(pi_frame, on=list(keys), validate="one_to_one", sort=False).merge(
+    pop = population.merge(
         group_frame, on=list(keys), validate="one_to_one", sort=False
+    )
+    merged = (
+        audit.merge(
+            population.loc[:, [*keys, surrogate_field]],
+            on=list(keys),
+            validate="one_to_one",
+            sort=False,
+        )
+        .merge(pi_frame, on=list(keys), validate="one_to_one", sort=False)
+        .merge(group_frame, on=list(keys), validate="one_to_one", sort=False)
     )
     q_all = _numeric(pop[surrogate_field], name=f"surrogate field {surrogate_field!r}")
     y = _numeric(merged[gold_field], name=f"gold field {gold_field!r}")
-    q_audit = _numeric(merged[surrogate_field], name=f"surrogate field {surrogate_field!r}")
+    q_audit = _numeric(
+        merged[surrogate_field], name=f"surrogate field {surrogate_field!r}"
+    )
     inclusion = _numeric(merged[pi_field], name=f"pi field {pi_field!r}")
     if np.any(inclusion <= 0.0) or np.any(inclusion > 1.0):
         raise ArtifactError("pi values must satisfy 0 < pi <= 1.")
@@ -344,7 +380,9 @@ def generalized_difference_by(
         N_g = int(np.sum(pop_mask))
         n_g = int(np.sum(audit_mask))
         surrogate_total = float(np.sum(q_all[pop_mask]))
-        correction_total = float(np.sum((residual * audit_mask.astype(float)) / inclusion))
+        correction_total = float(
+            np.sum((residual * audit_mask.astype(float)) / inclusion)
+        )
         estimated_total = surrogate_total + correction_total
         transformed = residual * audit_mask.astype(float) / float(N_g)
         variance_mean, design, note = _design_variance_from_pi_provenance(
@@ -355,7 +393,9 @@ def generalized_difference_by(
             population_keys=population_keys,
             primary_key=keys,
         )
-        se_mean = None if variance_mean is None else float(math.sqrt(max(variance_mean, 0.0)))
+        se_mean = (
+            None if variance_mean is None else float(math.sqrt(max(variance_mean, 0.0)))
+        )
         rows.append(
             {
                 "group": value,
@@ -388,11 +428,12 @@ def generalized_difference_by(
         },
     )
 
+
 def generalized_difference(
-    surrogate: "BaseArtifact",
+    surrogate: BaseArtifact,
     *,
-    gold: "BaseArtifact | str",
-    pi: "BaseArtifact | str",
+    gold: BaseArtifact | str,
+    pi: BaseArtifact | str,
     surrogate_field: str = "prediction",
     gold_field: str = "label",
     pi_field: str = "pi",
@@ -437,9 +478,13 @@ def generalized_difference(
     _validate_unique(audit, keys, role="gold")
     _validate_unique(pi_frame, keys, role="pi")
     if len(population) == 0:
-        raise ArtifactError("Generalized-difference estimation requires a non-empty population.")
+        raise ArtifactError(
+            "Generalized-difference estimation requires a non-empty population."
+        )
     if len(audit) == 0:
-        raise ArtifactError("Generalized-difference estimation requires a non-empty audit.")
+        raise ArtifactError(
+            "Generalized-difference estimation requires a non-empty audit."
+        )
 
     audit_keys = set(_key_tuples(audit, keys))
     pi_keys = set(_key_tuples(pi_frame, keys))
@@ -450,7 +495,9 @@ def generalized_difference(
         missing = len(audit_keys - population_keys)
         raise ArtifactError(f"Surrogate is missing {missing} gold/audit key(s).")
 
-    q_all = _numeric(population[surrogate_field], name=f"surrogate field {surrogate_field!r}")
+    q_all = _numeric(
+        population[surrogate_field], name=f"surrogate field {surrogate_field!r}"
+    )
     merged = audit.merge(
         population.loc[:, [*keys, surrogate_field]],
         on=list(keys),
@@ -465,7 +512,9 @@ def generalized_difference(
         sort=False,
     )
     y = _numeric(merged[gold_field], name=f"gold field {gold_field!r}")
-    q_audit = _numeric(merged[surrogate_field], name=f"surrogate field {surrogate_field!r}")
+    q_audit = _numeric(
+        merged[surrogate_field], name=f"surrogate field {surrogate_field!r}"
+    )
     inclusion = _numeric(merged[pi_field], name=f"pi field {pi_field!r}")
     if np.any(inclusion <= 0.0) or np.any(inclusion > 1.0):
         raise ArtifactError("pi values must satisfy 0 < pi <= 1.")
@@ -484,7 +533,9 @@ def generalized_difference(
         population_keys=population_keys,
         primary_key=keys,
     )
-    se_total = None if variance_total is None else float(math.sqrt(max(variance_total, 0.0)))
+    se_total = (
+        None if variance_total is None else float(math.sqrt(max(variance_total, 0.0)))
+    )
     se_mean = None if se_total is None else float(se_total / N)
 
     return GeneralizedDifferenceResult(
@@ -509,8 +560,8 @@ def generalized_difference(
 
 def _design_variance_from_pi_provenance(
     *,
-    surrogate: "BaseArtifact",
-    pi_artifact: "BaseArtifact",
+    surrogate: BaseArtifact,
+    pi_artifact: BaseArtifact,
     audit_frame: pd.DataFrame,
     residual: np.ndarray,
     population_keys: set[tuple[int, ...]],
@@ -524,7 +575,12 @@ def _design_variance_from_pi_provenance(
             "probabilities alone do not identify fixed-size without-replacement variance."
         )
     project = surrogate.project
-    required = ("get_operation", "operation_sources", "operation_outputs", "get_operator")
+    required = (
+        "get_operation",
+        "operation_sources",
+        "operation_outputs",
+        "get_operator",
+    )
     if any(not hasattr(project, name) for name in required):
         return _variance_unavailable(
             "the project interface cannot recover probability_split sampling provenance."
@@ -535,33 +591,45 @@ def _design_variance_from_pi_provenance(
         sources = project.operation_sources(str(operation_id))
         operator = project.get_operator(str(operation["operator_id"]))
     except Exception as exc:  # Point estimation must not fail solely because variance provenance is absent.
-        return _variance_unavailable(f"sampling provenance could not be recovered ({exc}).")
+        return _variance_unavailable(
+            f"sampling provenance could not be recovered ({exc})."
+        )
 
     try:
         from text_analysis_lab.core.probability_split import ProbabilitySplitTranslator
     except Exception as exc:  # pragma: no cover - import should always work in an installed TeAL package.
-        return _variance_unavailable(f"probability_split implementation could not be loaded ({exc}).")
+        return _variance_unavailable(
+            f"probability_split implementation could not be loaded ({exc})."
+        )
     if not isinstance(operator, ProbabilitySplitTranslator):
         return _variance_unavailable(
             "pi was not created by TeAL's ProbabilitySplitTranslator."
         )
-    pi_outputs = [
-        row for row in outputs if str(row.get("output_label")) == "pi"
-    ]
-    if len(pi_outputs) != 1 or str(pi_outputs[0].get("artifact_id")) != str(pi_artifact.artifact_id):
+    pi_outputs = [row for row in outputs if str(row.get("output_label")) == "pi"]
+    if len(pi_outputs) != 1 or str(pi_outputs[0].get("artifact_id")) != str(
+        pi_artifact.artifact_id
+    ):
         return _variance_unavailable(
             "pi is not the recorded 'pi' output of its probability_split operation."
         )
-    source_by_label = {str(row["source_label"]): str(row["source_artifact_id"]) for row in sources}
+    source_by_label = {
+        str(row["source_label"]): str(row["source_artifact_id"]) for row in sources
+    }
     documents_id = source_by_label.get("documents")
     if documents_id is None:
-        return _variance_unavailable("probability_split provenance is missing its documents source.")
+        return _variance_unavailable(
+            "probability_split provenance is missing its documents source."
+        )
     try:
         documents = project.get_artifact(documents_id)
         document_keys_frame = _key_only_frame(documents)
     except Exception as exc:
-        return _variance_unavailable(f"probability_split documents source could not be read ({exc}).")
-    _validate_unique(document_keys_frame, primary_key, role="probability_split documents")
+        return _variance_unavailable(
+            f"probability_split documents source could not be read ({exc})."
+        )
+    _validate_unique(
+        document_keys_frame, primary_key, role="probability_split documents"
+    )
     design_population_keys = set(_key_tuples(document_keys_frame, primary_key))
     if design_population_keys != population_keys:
         return _variance_unavailable(
@@ -597,7 +665,9 @@ def _design_variance_from_pi_provenance(
         strata_frame = _frame(strata_artifact, strata_field)
         _validate_unique(strata_frame, primary_key, role="probability_split strata")
     except Exception as exc:
-        return _variance_unavailable(f"probability_split strata source could not be read ({exc}).")
+        return _variance_unavailable(
+            f"probability_split strata source could not be read ({exc})."
+        )
 
     if set(_key_tuples(strata_frame, primary_key)) != design_population_keys:
         return _variance_unavailable(
@@ -642,9 +712,13 @@ def _stratified_srswor_variance(
         sort=False,
     )
     if merged[stratum_field].isna().any():
-        return _variance_unavailable("some audited keys are missing a sampling stratum.")
+        return _variance_unavailable(
+            "some audited keys are missing a sampling stratum."
+        )
 
-    population_counts = strata_frame.groupby(stratum_field, dropna=False).size().to_dict()
+    population_counts = (
+        strata_frame.groupby(stratum_field, dropna=False).size().to_dict()
+    )
     audit_counts = merged.groupby(stratum_field, dropna=False).size().to_dict()
     variance = 0.0
     for stratum, N_h_value in population_counts.items():
@@ -666,7 +740,9 @@ def _stratified_srswor_variance(
                 f"sampling stratum {stratum!r} has only n_h={n_h} audited observation; at least "
                 "two are needed to estimate its within-stratum residual variance."
             )
-        values = merged.loc[merged[stratum_field] == stratum, "__residual__"].to_numpy(dtype=float)
+        values = merged.loc[merged[stratum_field] == stratum, "__residual__"].to_numpy(
+            dtype=float
+        )
         s2_h = float(np.var(values, ddof=1))
         f_h = float(n_h) / float(N_h)
         variance += float((N_h**2) * (1.0 - f_h) * s2_h / n_h)
@@ -677,7 +753,7 @@ def _variance_unavailable(note: str) -> tuple[None, None, str]:
     return None, None, str(note)
 
 
-def _frame(artifact: "BaseArtifact", field: str) -> pd.DataFrame:
+def _frame(artifact: BaseArtifact, field: str) -> pd.DataFrame:
     value = artifact.query(
         key_columns=True,
         data_columns=[field],
@@ -690,8 +766,7 @@ def _frame(artifact: "BaseArtifact", field: str) -> pd.DataFrame:
     return value.reset_index(drop=True)
 
 
-
-def _field_frame(artifact: "BaseArtifact", field: str, *, role: str) -> pd.DataFrame:
+def _field_frame(artifact: BaseArtifact, field: str, *, role: str) -> pd.DataFrame:
     data_columns = [str(value) for value in artifact.get_data_columns()]
     if field in data_columns:
         return _frame(artifact, field)
@@ -713,7 +788,8 @@ def _field_frame(artifact: "BaseArtifact", field: str, *, role: str) -> pd.DataF
         raise ArtifactError(f"Could not materialize {role} field {field!r} as a table.")
     return value.loc[:, [*artifact.primary_key, field]].reset_index(drop=True)
 
-def _key_only_frame(artifact: "BaseArtifact") -> pd.DataFrame:
+
+def _key_only_frame(artifact: BaseArtifact) -> pd.DataFrame:
     value = artifact.query(
         key_columns=True,
         data_columns=False,
@@ -727,7 +803,7 @@ def _key_only_frame(artifact: "BaseArtifact") -> pd.DataFrame:
     return value.loc[:, keys].reset_index(drop=True)
 
 
-def _require_field(artifact: "BaseArtifact", field: str, *, role: str) -> None:
+def _require_field(artifact: BaseArtifact, field: str, *, role: str) -> None:
     columns = [str(value) for value in artifact.get_data_columns()]
     if field not in columns:
         raise ArtifactError(

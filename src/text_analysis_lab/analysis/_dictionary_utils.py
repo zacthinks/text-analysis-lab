@@ -19,16 +19,16 @@ if TYPE_CHECKING:
 
 __all__ = [
     "category_membership",
-    "valence_vectors",
-    "matrix_features",
     "category_scores",
-    "weighted_scores",
-    "row_sums",
     "matched_sums",
+    "matrix_features",
+    "row_sums",
+    "valence_vectors",
+    "weighted_scores",
 ]
 
 
-def matrix_features(artifact: "BaseArtifact", method: str) -> list[str]:
+def matrix_features(artifact: BaseArtifact, method: str) -> list[str]:
     require_matrix_artifact(artifact, method)
     return [str(value) for value in artifact.get_data_columns()]
 

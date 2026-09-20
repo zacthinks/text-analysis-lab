@@ -12,9 +12,9 @@ from __future__ import annotations
 import importlib
 import json
 import os
-import tempfile
 import shutil
 import sqlite3
+import tempfile
 import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -24,9 +24,17 @@ from typing import TYPE_CHECKING, Any, cast, get_args
 
 from text_analysis_lab.core.errors import OperatorError, OperatorNotFoundError
 from text_analysis_lab.core.idempotence import (
-    AliasPlan, AliasSpec, finalize_alias_plan, prepare_alias_plan, reused_outputs,
+    AliasPlan,
+    AliasSpec,
+    finalize_alias_plan,
+    prepare_alias_plan,
+    reused_outputs,
 )
 from text_analysis_lab.core.ids import next_id
+from text_analysis_lab.core.lineage import (
+    validate_lineage_mode,
+    validate_primary_key_relationship,
+)
 from text_analysis_lab.core.operator import (
     BatchResult,
     ColumnRequest,
@@ -47,16 +55,11 @@ from text_analysis_lab.core.types import (
     QueryForm,
 )
 from text_analysis_lab.core.writer import ArtifactWriter, create_artifact_writer
-from text_analysis_lab.core.lineage import (
-    validate_lineage_mode,
-    validate_primary_key_relationship,
-)
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
     from text_analysis_lab.core.operator import BaseTranslator, OutputSpec
     from text_analysis_lab.core.project import Project
-
 
 
 TRANSLATION_MODES = get_args(TranslationMode)
@@ -116,7 +119,7 @@ class _Runtime:
     operator_id: str
     mode: TranslationMode
     route: RunRoute
-    output_specs: Mapping[str, "OutputSpec"]
+    output_specs: Mapping[str, OutputSpec]
     output_artifact_ids: Mapping[str, str]
     output_labels: tuple[str, ...]
     writers: Mapping[str, ArtifactWriter]
@@ -270,7 +273,9 @@ class _ExecutionPlan:
                 source_batch_index=int(row["source_batch_index"]),
                 source_batch_count=int(row["source_batch_count"]),
                 start_position=(
-                    None if row["start_position"] is None else int(row["start_position"])
+                    None
+                    if row["start_position"] is None
+                    else int(row["start_position"])
                 ),
                 stop_position=(
                     None if row["stop_position"] is None else int(row["stop_position"])
@@ -325,9 +330,12 @@ class _ExecutionPlan:
 
 
 def translate(
-    project: "Project",
-    translator: "BaseTranslator",
-    sources: "BaseArtifact | str | Sequence[BaseArtifact | str] | Mapping[str, BaseArtifact | str]",
+    project: Project,
+    translator: BaseTranslator,
+    sources: BaseArtifact
+    | str
+    | Sequence[BaseArtifact | str]
+    | Mapping[str, BaseArtifact | str],
     *,
     workers: int = 1,
     batch_size: int | None = None,
@@ -336,7 +344,7 @@ def translate(
     alias: AliasSpec = None,
     overwrite: bool = False,
     **params: Any,
-) -> Mapping[str, "BaseArtifact"]:
+) -> Mapping[str, BaseArtifact]:
     """Run a new TeAL translation operation and return output artifacts by label."""
     source_bindings = _resolve_sources(project, sources)
     mode = _select_mode(translator)
@@ -472,9 +480,9 @@ def translate(
 
 
 def resume_translate(
-    project: "Project",
+    project: Project,
     operation_id: str,
-) -> Mapping[str, "BaseArtifact"]:
+) -> Mapping[str, BaseArtifact]:
     """Resume an incomplete translation operation from its durable plan.
 
     Resume restores the canonical translator from operation-local intermediate
@@ -500,9 +508,7 @@ def resume_translate(
         raise OperatorError("Operation metadata request.params must be a mapping.")
     restored_params = translator.deserialize_operation_params(params)
     if not isinstance(restored_params, Mapping):
-        raise OperatorError(
-            "deserialize_operation_params() must return a mapping."
-        )
+        raise OperatorError("deserialize_operation_params() must return a mapping.")
 
     request = _validate_translation_request(
         TranslationRequest(
@@ -583,7 +589,7 @@ def resume_translate(
 # ---------------------------------------------------------------------------
 
 
-def _select_mode(translator: "BaseTranslator") -> TranslationMode:
+def _select_mode(translator: BaseTranslator) -> TranslationMode:
     if not translator.requires_fit or translator.is_fitted:
         return "translate"
     if translator.supports_fit_translate:
@@ -671,7 +677,7 @@ def _warn_batch_size_adjustments(
 
 
 def _select_route(
-    translator: "BaseTranslator",
+    translator: BaseTranslator,
     *,
     mode: TranslationMode,
     request: TranslationRequest,
@@ -708,13 +714,17 @@ def _select_route(
 # ---------------------------------------------------------------------------
 
 
-def _normalize_input_request(request: SourceRequest | Mapping[str, SourceRequest]) -> dict[str, SourceRequest]:
+def _normalize_input_request(
+    request: SourceRequest | Mapping[str, SourceRequest],
+) -> dict[str, SourceRequest]:
     if isinstance(request, SourceRequest):
         request = {DEFAULT_SOURCE_LABEL: request}
     elif isinstance(request, Mapping):
         request = dict(request)
     else:
-        raise OperatorError("input_request() must return SourceRequest or label mapping.")
+        raise OperatorError(
+            "input_request() must return SourceRequest or label mapping."
+        )
 
     if not request:
         raise OperatorError("input_request() must request at least one source.")
@@ -733,18 +743,20 @@ def _normalize_input_request(request: SourceRequest | Mapping[str, SourceRequest
 def _validate_source_request(label: str, request: SourceRequest) -> None:
     _accepted_artifact_types(label, request)
     if request.mode not in SOURCE_MODES:
-        raise OperatorError(f"Input source {label!r} has invalid mode {request.mode!r}.")
+        raise OperatorError(
+            f"Input source {label!r} has invalid mode {request.mode!r}."
+        )
     if request.form not in QUERY_FORMS:
-        raise OperatorError(f"Input source {label!r} has invalid form {request.form!r}.")
+        raise OperatorError(
+            f"Input source {label!r} has invalid form {request.form!r}."
+        )
     if request.metadata_mode not in METADATA_MODES:
         raise OperatorError(
             f"Input source {label!r} has invalid metadata_mode "
             f"{request.metadata_mode!r}."
         )
     if not isinstance(request.columns, ColumnRequest):
-        raise OperatorError(
-            f"Input source {label!r} columns must be a ColumnRequest."
-        )
+        raise OperatorError(f"Input source {label!r} columns must be a ColumnRequest.")
     _validate_column_select(label, "key", request.columns.keys)
     _validate_column_select(label, "data", request.columns.data)
     _validate_column_select(label, "metadata", request.columns.metadata)
@@ -753,15 +765,15 @@ def _validate_source_request(label: str, request: SourceRequest) -> None:
             f"Input source {label!r} include_position must be a boolean."
         )
     if request.mode == "batches":
-        if isinstance(request.batch_size, bool) or not isinstance(request.batch_size, int):
+        if isinstance(request.batch_size, bool) or not isinstance(
+            request.batch_size, int
+        ):
             raise OperatorError(
                 f"Input source {label!r} batch_size must be a positive integer "
                 "when mode='batches'."
             )
         if request.batch_size <= 0:
-            raise OperatorError(
-                f"Input source {label!r} batch_size must be positive."
-            )
+            raise OperatorError(f"Input source {label!r} batch_size must be positive.")
     else:
         if request.batch_size is not None:
             raise OperatorError(
@@ -785,7 +797,9 @@ def _validate_column_select(label: str, namespace: str, value: Any) -> None:
     )
 
 
-def _accepted_artifact_types(label: str, request: SourceRequest) -> tuple[ArtifactType, ...]:
+def _accepted_artifact_types(
+    label: str, request: SourceRequest
+) -> tuple[ArtifactType, ...]:
     raw = request.artifact_type
     if isinstance(raw, (str, ArtifactType)):
         values = (raw,)
@@ -793,7 +807,9 @@ def _accepted_artifact_types(label: str, request: SourceRequest) -> tuple[Artifa
         values = tuple(raw)
 
     if not values:
-        raise OperatorError(f"Input source {label!r} must accept at least one artifact type.")
+        raise OperatorError(
+            f"Input source {label!r} must accept at least one artifact type."
+        )
 
     try:
         return tuple(ArtifactType(value) for value in values)
@@ -806,7 +822,7 @@ def _accepted_artifact_types(label: str, request: SourceRequest) -> tuple[Artifa
 def _validate_source_artifact(
     *,
     label: str,
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     request: SourceRequest,
 ) -> None:
     artifact.require_complete()
@@ -821,9 +837,12 @@ def _validate_source_artifact(
 
 
 def _resolve_sources(
-    project: "Project",
-    sources: "BaseArtifact | str | Sequence[BaseArtifact | str] | Mapping[str, BaseArtifact | str]",
-) -> dict[str, "BaseArtifact"]:
+    project: Project,
+    sources: BaseArtifact
+    | str
+    | Sequence[BaseArtifact | str]
+    | Mapping[str, BaseArtifact | str],
+) -> dict[str, BaseArtifact]:
     if isinstance(sources, Mapping):
         if not sources:
             raise OperatorError("Translation requires at least one source artifact.")
@@ -833,7 +852,9 @@ def _resolve_sources(
                 raise OperatorError("Source labels must be non-empty strings.")
             resolved[label] = project.get_artifact(source)
         return resolved
-    if isinstance(sources, Sequence) and not isinstance(sources, (str, bytes, bytearray)):
+    if isinstance(sources, Sequence) and not isinstance(
+        sources, (str, bytes, bytearray)
+    ):
         if not sources:
             raise OperatorError("Translation requires at least one source artifact.")
         return {
@@ -844,7 +865,7 @@ def _resolve_sources(
 
 
 def _validate_source_bindings(
-    sources: Mapping[str, "BaseArtifact"],
+    sources: Mapping[str, BaseArtifact],
     request: InputRequest,
 ) -> None:
     missing = [label for label in request if label not in sources]
@@ -855,12 +876,14 @@ def _validate_source_bindings(
             f"Missing: {missing}; extra: {extra}."
         )
     for label, artifact in sources.items():
-        _validate_source_artifact(label=label, artifact=artifact, request=request[label])
+        _validate_source_artifact(
+            label=label, artifact=artifact, request=request[label]
+        )
 
 
 def _validate_operation_label_namespace(
     input_request: InputRequest,
-    output_specs: Mapping[str, "OutputSpec"],
+    output_specs: Mapping[str, OutputSpec],
 ) -> None:
     source_labels = set(input_request)
     output_labels = set(output_specs)
@@ -874,7 +897,7 @@ def _validate_operation_label_namespace(
 
 def _validate_output_basis_labels(
     input_request: InputRequest,
-    output_specs: Mapping[str, "OutputSpec"],
+    output_specs: Mapping[str, OutputSpec],
 ) -> None:
     known_labels = set(input_request) | set(output_specs)
     for label, spec in output_specs.items():
@@ -895,7 +918,7 @@ def _validate_output_basis_labels(
 def _create_execution_plan(
     *,
     runtime: _Runtime,
-    sources: Mapping[str, "BaseArtifact"],
+    sources: Mapping[str, BaseArtifact],
     input_request: InputRequest,
 ) -> _ExecutionPlan:
     plan = _ExecutionPlan(runtime.operation_dir)
@@ -905,7 +928,7 @@ def _create_execution_plan(
 
 
 def _build_plan_units(
-    sources: Mapping[str, "BaseArtifact"], input_request: InputRequest
+    sources: Mapping[str, BaseArtifact], input_request: InputRequest
 ) -> Iterable[_PlanUnit]:
     planned_sources: dict[str, list[_SourcePlan]] = {}
 
@@ -978,7 +1001,7 @@ def _position_slices_for_source(
 def _materialize_plan_unit(
     unit: _PlanUnit,
     *,
-    sources: Mapping[str, "BaseArtifact"],
+    sources: Mapping[str, BaseArtifact],
     input_request: InputRequest,
 ) -> Mapping[str, InputBatch]:
     return {
@@ -994,14 +1017,16 @@ def _materialize_plan_unit(
 def _materialize_source_plan(
     source_plan: _SourcePlan,
     *,
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     request: SourceRequest,
 ) -> InputBatch:
     if source_plan.mode == "full_artifact":
         data = _query_source(artifact, request, where=None)
     else:
         if source_plan.start_position is None or source_plan.stop_position is None:
-            raise OperatorError(f"Malformed plan source for {source_plan.source_label!r}.")
+            raise OperatorError(
+                f"Malformed plan source for {source_plan.source_label!r}."
+            )
         data = _query_source(
             artifact,
             request,
@@ -1035,7 +1060,7 @@ def _position_range_where(*, start: int, stop: int) -> str:
 
 
 def _query_source(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     request: SourceRequest,
     *,
     where: str | None,
@@ -1059,12 +1084,12 @@ def _query_source(
 
 def _prepare_runtime(
     *,
-    project: "Project",
-    translator: "BaseTranslator",
-    sources: Mapping[str, "BaseArtifact"],
+    project: Project,
+    translator: BaseTranslator,
+    sources: Mapping[str, BaseArtifact],
     mode: TranslationMode,
     route: RunRoute,
-    output_specs: Mapping[str, "OutputSpec"],
+    output_specs: Mapping[str, OutputSpec],
 ) -> _Runtime:
     prepared_operator = _prepare_operator_snapshot(
         project=project,
@@ -1168,13 +1193,13 @@ def _prepare_runtime(
 
 
 def _runtime_from_metadata(
-    project: "Project",
-    translator: "BaseTranslator",
+    project: Project,
+    translator: BaseTranslator,
     metadata: Mapping[str, Any],
     *,
     mode: TranslationMode,
     route: RunRoute,
-    output_specs: Mapping[str, "OutputSpec"],
+    output_specs: Mapping[str, OutputSpec],
 ) -> _Runtime:
     operation_id = str(metadata["operation_id"])
     operation_dir = project.storage.operation_dir(operation_id)
@@ -1205,16 +1230,16 @@ def _runtime_from_metadata(
         writers_temp_dir=writers_temp_dir,
         resumable=bool(metadata.get("resumable", True)),
         operator_snapshot_pending=(
-            project.catalog.operator_snapshot_status(str(metadata["operator_id"])) == "pending"
+            project.catalog.operator_snapshot_status(str(metadata["operator_id"]))
+            == "pending"
         ),
     )
 
 
-
 def _prepare_operator_snapshot(
     *,
-    project: "Project",
-    translator: "BaseTranslator",
+    project: Project,
+    translator: BaseTranslator,
     mode: TranslationMode,
 ) -> _PreparedOperator:
     """Prepare the operator catalog row and snapshot timing for this operation."""
@@ -1282,7 +1307,7 @@ def _prepare_operator_snapshot(
     return _PreparedOperator(operator_id=operator_id, snapshot_pending=False)
 
 
-def _pending_operator_resume_hint(project: "Project", operator_id: str) -> str:
+def _pending_operator_resume_hint(project: Project, operator_id: str) -> str:
     rows = project.catalog.operations_using_operator(operator_id)
 
     if not rows:
@@ -1328,10 +1353,10 @@ def _pending_operator_resume_hint(project: "Project", operator_id: str) -> str:
 
 
 def _load_translator_for_resume(
-    project: "Project",
+    project: Project,
     operation_id: str,
     metadata: Mapping[str, Any],
-) -> "BaseTranslator":
+) -> BaseTranslator:
     operator_id = str(metadata["operator_id"])
     snapshot_status = project.catalog.operator_snapshot_status(operator_id)
     if snapshot_status not in {"serialized", "pending"}:
@@ -1369,10 +1394,14 @@ def _load_translator_for_resume(
     return loaded
 
 
-def _translator_class_from_metadata(metadata: Mapping[str, Any]) -> type["BaseTranslator"]:
+def _translator_class_from_metadata(
+    metadata: Mapping[str, Any],
+) -> type[BaseTranslator]:
     class_info = metadata.get("translator_class")
     if not isinstance(class_info, Mapping):
-        raise OperatorError("Operation descriptor is missing translator_class metadata.")
+        raise OperatorError(
+            "Operation descriptor is missing translator_class metadata."
+        )
     module_name = class_info.get("module")
     qualname = class_info.get("qualname")
     if not isinstance(module_name, str) or not isinstance(qualname, str):
@@ -1395,8 +1424,8 @@ def _translator_class_from_metadata(metadata: Mapping[str, Any]) -> type["BaseTr
 
 
 def _serialize_pending_operator_snapshot(
-    project: "Project",
-    translator: "BaseTranslator",
+    project: Project,
+    translator: BaseTranslator,
     runtime: _Runtime,
 ) -> None:
     if not runtime.operator_snapshot_pending:
@@ -1406,15 +1435,16 @@ def _serialize_pending_operator_snapshot(
     runtime.operator_snapshot_pending = False
 
 
-
 def _save_operator(
-    project: "Project", translator: "BaseTranslator", operator_id: str
+    project: Project, translator: BaseTranslator, operator_id: str
 ) -> None:
-    translator.save_to_dir(project.storage.operator_dir(operator_id), operator_id=operator_id)
+    translator.save_to_dir(
+        project.storage.operator_dir(operator_id), operator_id=operator_id
+    )
 
 
 def _basis_ids(
-    spec: "OutputSpec",
+    spec: OutputSpec,
     *,
     source_artifact_ids: Mapping[str, str],
     output_artifact_ids: Mapping[str, str],
@@ -1434,10 +1464,10 @@ def _basis_ids(
 
 def _run_plan(
     *,
-    translator: "BaseTranslator",
+    translator: BaseTranslator,
     runtime: _Runtime,
     plan: _ExecutionPlan,
-    sources: Mapping[str, "BaseArtifact"],
+    sources: Mapping[str, BaseArtifact],
     input_request: InputRequest,
     mode: TranslationMode,
     route: RunRoute,
@@ -1471,10 +1501,10 @@ def _run_plan(
 
 def _run_sequential(
     *,
-    translator: "BaseTranslator",
+    translator: BaseTranslator,
     runtime: _Runtime,
     plan: _ExecutionPlan,
-    sources: Mapping[str, "BaseArtifact"],
+    sources: Mapping[str, BaseArtifact],
     input_request: InputRequest,
     mode: TranslationMode,
     route: RunRoute,
@@ -1510,7 +1540,7 @@ def _run_sequential(
 
 
 def _translate_batch_worker(
-    translator: "BaseTranslator",
+    translator: BaseTranslator,
     inputs: Mapping[str, InputBatch],
     mode: TranslationMode,
     request: TranslationRequest,
@@ -1539,10 +1569,10 @@ def _open_dask_client(*, workers: int) -> tuple[Any, Any, Any]:
 
 def _run_parallel(
     *,
-    translator: "BaseTranslator",
+    translator: BaseTranslator,
     runtime: _Runtime,
     plan: _ExecutionPlan,
-    sources: Mapping[str, "BaseArtifact"],
+    sources: Mapping[str, BaseArtifact],
     input_request: InputRequest,
     mode: TranslationMode,
     route: RunRoute,
@@ -1574,9 +1604,9 @@ def _run_parallel(
 
 def _parallel_results(
     *,
-    translate_worker: "BaseTranslator",
+    translate_worker: BaseTranslator,
     plan: _ExecutionPlan,
-    sources: Mapping[str, "BaseArtifact"],
+    sources: Mapping[str, BaseArtifact],
     input_request: InputRequest,
     mode: TranslationMode,
     request: TranslationRequest,
@@ -1657,9 +1687,10 @@ def _parallel_results(
             client.close()
             cluster.close()
 
+
 def _handle_and_commit_unit(
     *,
-    translator: "BaseTranslator",
+    translator: BaseTranslator,
     runtime: _Runtime,
     plan: _ExecutionPlan,
     unit_index: int,
@@ -1714,7 +1745,7 @@ def _commit_final_outputs(runtime: _Runtime, outputs: OutputMap | None) -> None:
 
 def _save_intermediate_state(
     *,
-    translator: "BaseTranslator",
+    translator: BaseTranslator,
     runtime: _Runtime,
     mode: TranslationMode,
     route: RunRoute,
@@ -1754,10 +1785,14 @@ def _write_writer_checkpoints(writers_dir: Path, runtime: _Runtime) -> None:
 def _load_writer_checkpoint(writers_dir: Path, label: str) -> Mapping[str, Any]:
     path = _writer_checkpoint_path(writers_dir, label)
     if not path.exists():
-        raise OperatorError(f"Missing writer checkpoint for output label {label!r}: {path}.")
+        raise OperatorError(
+            f"Missing writer checkpoint for output label {label!r}: {path}."
+        )
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, Mapping):
-        raise OperatorError(f"Writer checkpoint for output label {label!r} must contain a JSON object.")
+        raise OperatorError(
+            f"Writer checkpoint for output label {label!r} must contain a JSON object."
+        )
     return payload
 
 
@@ -1884,7 +1919,7 @@ def _validate_output_labels(runtime: _Runtime, outputs: Mapping[str, Any]) -> No
 
 
 def _validate_runtime_output_lineage(
-    project: "Project", runtime: _Runtime, label: str
+    project: Project, runtime: _Runtime, label: str
 ) -> None:
     """Validate one finalized output's key schema against its declared basis."""
     artifact_id = runtime.output_artifact_ids[label]
@@ -1901,7 +1936,7 @@ def _validate_runtime_output_lineage(
     )
 
 
-def _complete_runtime(project: "Project", runtime: _Runtime) -> None:
+def _complete_runtime(project: Project, runtime: _Runtime) -> None:
     # Writers perform artifact-wide storage/key validation first.  Lineage is a
     # project-level integrity check, so reuse the existing lineage validator here
     # before the catalog grants any output its authoritative complete status.
@@ -1915,7 +1950,7 @@ def _complete_runtime(project: "Project", runtime: _Runtime) -> None:
     project.catalog.mark_operation_complete(runtime.operation_id)
 
 
-def _fail_runtime(project: "Project", runtime: _Runtime, error: Exception) -> None:
+def _fail_runtime(project: Project, runtime: _Runtime, error: Exception) -> None:
     for label, writer in runtime.writers.items():
         try:
             writer.mark_failed(error)
@@ -1927,7 +1962,9 @@ def _fail_runtime(project: "Project", runtime: _Runtime, error: Exception) -> No
     _update_operation_metadata_status(runtime, "failed", error=error)
 
 
-def _load_output_artifacts(project: "Project", runtime: _Runtime) -> Mapping[str, "BaseArtifact"]:
+def _load_output_artifacts(
+    project: Project, runtime: _Runtime
+) -> Mapping[str, BaseArtifact]:
     return {
         label: project.get_artifact(artifact_id)
         for label, artifact_id in runtime.output_artifact_ids.items()
@@ -1935,7 +1972,7 @@ def _load_output_artifacts(project: "Project", runtime: _Runtime) -> Mapping[str
 
 
 def _open_writers_for_resume(
-    project: "Project",
+    project: Project,
     output_artifact_ids: Mapping[str, str],
     *,
     writers_temp_dir: Path,
@@ -1974,15 +2011,15 @@ def _update_operation_metadata_status(
 def _save_operation_metadata(
     *,
     runtime: _Runtime,
-    translator: "BaseTranslator",
+    translator: BaseTranslator,
     mode: TranslationMode,
     route: RunRoute,
     effective_workers: int,
     request: TranslationRequest,
     serialized_operation_params: Mapping[str, Any],
     input_request: InputRequest,
-    sources: Mapping[str, "BaseArtifact"],
-    output_specs: Mapping[str, "OutputSpec"],
+    sources: Mapping[str, BaseArtifact],
+    output_specs: Mapping[str, OutputSpec],
     output_artifact_ids: Mapping[str, str],
     alias_plan: AliasPlan | None,
 ) -> None:
@@ -2016,7 +2053,7 @@ def _save_operation_metadata(
     _write_json(runtime.operation_dir / "operation.json", payload)
 
 
-def _load_operation_metadata(project: "Project", operation_id: str) -> Mapping[str, Any]:
+def _load_operation_metadata(project: Project, operation_id: str) -> Mapping[str, Any]:
     path = project.storage.operation_descriptor_path(str(operation_id))
     if not path.exists():
         raise OperatorError(f"Operation {operation_id} has no operation descriptor.")
@@ -2024,14 +2061,12 @@ def _load_operation_metadata(project: "Project", operation_id: str) -> Mapping[s
 
 
 def _serialize_operation_params(
-    translator: "BaseTranslator",
+    translator: BaseTranslator,
     params: Mapping[str, Any],
 ) -> dict[str, Any]:
     serialized = translator.serialize_operation_params(params)
     if not isinstance(serialized, Mapping):
-        raise OperatorError(
-            "serialize_operation_params() must return a mapping."
-        )
+        raise OperatorError("serialize_operation_params() must return a mapping.")
     payload = dict(serialized)
     try:
         json.dumps(payload)
@@ -2043,28 +2078,31 @@ def _serialize_operation_params(
 
 
 def _input_request_to_dict(input_request: InputRequest) -> dict[str, Any]:
-    return {label: _source_request_to_dict(request) for label, request in input_request.items()}
+    return {
+        label: _source_request_to_dict(request)
+        for label, request in input_request.items()
+    }
 
 
 def _input_request_from_dict(data: Mapping[str, Any]) -> dict[str, SourceRequest]:
-    return {str(label): _source_request_from_dict(value) for label, value in data.items()}
+    return {
+        str(label): _source_request_from_dict(value) for label, value in data.items()
+    }
 
 
 def _output_specs_to_dict(
-    output_specs: Mapping[str, "OutputSpec"],
+    output_specs: Mapping[str, OutputSpec],
 ) -> dict[str, Any]:
     return {label: spec.to_dict() for label, spec in output_specs.items()}
 
 
-def _output_specs_from_dict(data: Mapping[str, Any]) -> dict[str, "OutputSpec"]:
+def _output_specs_from_dict(data: Mapping[str, Any]) -> dict[str, OutputSpec]:
     from text_analysis_lab.core.operator import OutputSpec
 
     specs: dict[str, OutputSpec] = {}
     for label, raw in data.items():
         if not isinstance(raw, Mapping):
-            raise OperatorError(
-                f"Stored output spec {label!r} must be a mapping."
-            )
+            raise OperatorError(f"Stored output spec {label!r} must be a mapping.")
         serializer_ref = raw.get("data_serializer")
         if serializer_ref is not None and not isinstance(serializer_ref, Mapping):
             raise OperatorError(

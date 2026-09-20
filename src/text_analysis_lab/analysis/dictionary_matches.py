@@ -6,7 +6,10 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from text_analysis_lab.analysis._dictionary_utils import category_membership, matrix_features
+from text_analysis_lab.analysis._dictionary_utils import (
+    category_membership,
+    matrix_features,
+)
 from text_analysis_lab.dictionaries import Dictionary
 
 if TYPE_CHECKING:
@@ -14,7 +17,7 @@ if TYPE_CHECKING:
 
 
 def dictionary_matches(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     dictionary: Dictionary,
 ) -> pd.DataFrame:
     """Return one row for each matrix-feature/dictionary-key match."""

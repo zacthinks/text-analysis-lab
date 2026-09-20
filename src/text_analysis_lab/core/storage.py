@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
-import shutil
 
 from text_analysis_lab.core.utils import utc_now_iso
 
@@ -108,7 +108,7 @@ class ProjectStorage:
         name: str,
         *,
         delete_existing: bool = False,
-    ) -> "ProjectStorage":
+    ) -> ProjectStorage:
         project_path = Path(path)
         teal_dir = ensure_project_dir(
             project_path,
@@ -118,7 +118,7 @@ class ProjectStorage:
         return cls(project_path=project_path, teal_dir=teal_dir)
 
     @classmethod
-    def open(cls, path: str | Path) -> "ProjectStorage":
+    def open(cls, path: str | Path) -> ProjectStorage:
         project_path = Path(path)
         teal_dir = project_path / ".teal"
         if not teal_dir.exists():
@@ -138,7 +138,7 @@ class ProjectStorage:
     @property
     def operators_dir(self) -> Path:
         return self.teal_dir / "operators"
-    
+
     @property
     def operations_dir(self) -> Path:
         return self.teal_dir / "operations"
@@ -174,13 +174,13 @@ class ProjectStorage:
 
     def operation_plan_path(self, operation_id: str) -> Path:
         return self.operation_dir(operation_id) / "plan.sqlite"
-    
+
     def operation_temp_dir(self, operation_id: str) -> Path:
         return self.operation_dir(operation_id) / "temp"
-    
+
     def operation_temp_dir_for_operator(self, operation_id: str) -> Path:
         return self.operation_temp_dir(operation_id) / "operator"
-    
+
     def operation_temp_dir_for_writers(self, operation_id: str) -> Path:
         return self.operation_temp_dir(operation_id) / "writers"
 
@@ -199,7 +199,7 @@ class ArtifactStorage:
     artifact_dir: Path
 
     @classmethod
-    def open(cls, artifact_dir: str | Path) -> "ArtifactStorage":
+    def open(cls, artifact_dir: str | Path) -> ArtifactStorage:
         return cls(artifact_dir=Path(artifact_dir))
 
     @property
@@ -249,9 +249,7 @@ class ArtifactStorage:
     def data_value_part_path(self, index: int, suffix: str) -> Path:
         return self.data_values_dir / self.part_name(index, suffix)
 
-    def data_row_names_part_path(
-        self, index: int, suffix: str = "parquet"
-    ) -> Path:
+    def data_row_names_part_path(self, index: int, suffix: str = "parquet") -> Path:
         return self.data_row_names_dir / self.part_name(index, suffix)
 
     def ensure_artifact_dir(self) -> Path:

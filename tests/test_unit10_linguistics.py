@@ -10,10 +10,14 @@ import pytest
 from text_analysis_lab.core.operator import InputBatch, TranslationRequest
 from text_analysis_lab.translators.coreference_resolver import CoreferenceResolver
 from text_analysis_lab.translators.semantic_role_labeler import SemanticRoleLabeler
-from text_analysis_lab.translators.word_sense_disambiguator import WordSenseDisambiguator
+from text_analysis_lab.translators.word_sense_disambiguator import (
+    WordSenseDisambiguator,
+)
 
 
-def _packet(label: str, primary_key: tuple[str, ...], frame: pd.DataFrame) -> InputBatch:
+def _packet(
+    label: str, primary_key: tuple[str, ...], frame: pd.DataFrame
+) -> InputBatch:
     return InputBatch(
         source_label=label,
         artifact_id=f"artifact_{label}",
@@ -115,14 +119,24 @@ def test_semantic_role_labeler_emits_predicates_roles_and_heads(monkeypatch):
                     tags=("B-ARG0", "B-V", "B-ARGM-MNR", "O"),
                     bio_repairs=(),
                     word_scores=(0.9, 0.95, 0.8, 0.99),
-                    spans=(BioSpan("ARG0", 0, 1), BioSpan("V", 1, 2), BioSpan("ARGM-MNR", 2, 3)),
+                    spans=(
+                        BioSpan("ARG0", 0, 1),
+                        BioSpan("V", 1, 2),
+                        BioSpan("ARGM-MNR", 2, 3),
+                    ),
                     description="",
                 ),
             )
 
     monkeypatch.setattr(module, "_make_runtime", lambda **kwargs: FakeRuntime())
     sentences = pd.DataFrame(
-        {"row_id": [2], "sentence_id": [0], "text": ["Alice runs quickly."], "char_start": [0], "char_end": [19]}
+        {
+            "row_id": [2],
+            "sentence_id": [0],
+            "text": ["Alice runs quickly."],
+            "char_start": [0],
+            "char_end": [19],
+        }
     )
     tokens = pd.DataFrame(
         {
@@ -167,7 +181,9 @@ class _CachePaths:
     wordnet_mwe_indices: Path
 
 
-def test_word_sense_disambiguator_targets_all_wordnet_eligible_tokens(monkeypatch, tmp_path):
+def test_word_sense_disambiguator_targets_all_wordnet_eligible_tokens(
+    monkeypatch, tmp_path
+):
     import text_analysis_lab.translators.word_sense_disambiguator as module
     from text_analysis_lab._linguistics.wsd.types import GlossPayload, SenseCandidate
 
@@ -217,7 +233,10 @@ def test_word_sense_disambiguator_targets_all_wordnet_eligible_tokens(monkeypatc
             return {"type": "fake"}
 
         def score_target(self, target, candidate_texts):
-            return {text: (0.8 if index == 0 else 0.2) for index, text in enumerate(candidate_texts)}
+            return {
+                text: (0.8 if index == 0 else 0.2)
+                for index, text in enumerate(candidate_texts)
+            }
 
     monkeypatch.setattr(module, "_make_ontology", lambda **kwargs: FakeOntology())
     monkeypatch.setattr(module, "_make_backend", lambda **kwargs: FakeBackend())
@@ -250,8 +269,9 @@ def test_word_sense_disambiguator_targets_all_wordnet_eligible_tokens(monkeypatc
     assert result.outputs["unresolved"]["data"].empty
 
 
-
-def test_word_sense_disambiguator_excludes_space_tokens_from_wsl_reader_context(monkeypatch, tmp_path):
+def test_word_sense_disambiguator_excludes_space_tokens_from_wsl_reader_context(
+    monkeypatch, tmp_path
+):
     import text_analysis_lab.translators.word_sense_disambiguator as module
     from text_analysis_lab._linguistics.wsd.types import GlossPayload, SenseCandidate
 
@@ -293,7 +313,14 @@ def test_word_sense_disambiguator_excludes_space_tokens_from_wsl_reader_context(
             return {"type": "fake"}
 
         def score_target(self, target, candidate_texts):
-            seen.append((target.surface_form, target.tokens, target.target_start, target.target_end))
+            seen.append(
+                (
+                    target.surface_form,
+                    target.tokens,
+                    target.target_start,
+                    target.target_end,
+                )
+            )
             return {text: 1.0 for text in candidate_texts}
 
     monkeypatch.setattr(module, "_make_ontology", lambda **kwargs: FakeOntology())
@@ -322,6 +349,7 @@ def test_word_sense_disambiguator_excludes_space_tokens_from_wsl_reader_context(
     ]
     assert result.outputs["senses"]["keys"]["token_id"].tolist() == [0, 2]
     assert result.outputs["unresolved"]["keys"].empty
+
 
 def test_word_sense_disambiguator_binds_request_to_tokens_source():
     translator = WordSenseDisambiguator(acknowledge_noncommercial_license=True)

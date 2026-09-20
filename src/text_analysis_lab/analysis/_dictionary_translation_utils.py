@@ -16,7 +16,7 @@ REQUIRED_COUNT_METADATA = ("matched", "unmatched", "total")
 
 
 def require_dictionary_count_artifact(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     method: str,
 ) -> list[str]:
@@ -37,19 +37,27 @@ def row_sums_int(matrix: Any) -> np.ndarray:
     return np.asarray(matrix).sum(axis=1).astype(np.int64, copy=False)
 
 
-def validate_batch_counts(matrix: Any, info: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def validate_batch_counts(
+    matrix: Any, info: Any
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     for name in REQUIRED_COUNT_METADATA:
         if name not in info.columns:
-            raise ValueError(f"Dictionary-translated artifact batch is missing {name!r} metadata.")
+            raise ValueError(
+                f"Dictionary-translated artifact batch is missing {name!r} metadata."
+            )
     matched = np.asarray(info["matched"], dtype=np.int64)
     unmatched = np.asarray(info["unmatched"], dtype=np.int64)
     total = np.asarray(info["total"], dtype=np.int64)
     if np.any(matched < 0) or np.any(unmatched < 0) or np.any(total < 0):
         raise ValueError("Dictionary count metadata must be non-negative.")
     if not np.array_equal(matched + unmatched, total):
-        raise ValueError("Dictionary count metadata invariant failed: matched + unmatched != total.")
+        raise ValueError(
+            "Dictionary count metadata invariant failed: matched + unmatched != total."
+        )
     if not np.array_equal(row_sums_int(matrix), matched):
-        raise ValueError("Dictionary count matrix invariant failed: row sum != matched.")
+        raise ValueError(
+            "Dictionary count matrix invariant failed: row sum != matched."
+        )
     return matched, unmatched, total
 
 

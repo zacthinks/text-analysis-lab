@@ -14,8 +14,12 @@ from text_analysis_lab.core.errors import AliasBundleError, ArtifactNotFoundErro
 
 def _source(project: teal.Project, tmp_path: Path, n: int = 10):
     path = tmp_path / "docs.csv"
-    pd.DataFrame({"text": [f"document {i}" for i in range(n)]}).to_csv(path, index=False)
-    return project.read_csv(path, text_fields="text", metadata_fields=None, alias="docs")
+    pd.DataFrame({"text": [f"document {i}" for i in range(n)]}).to_csv(
+        path, index=False
+    )
+    return project.read_csv(
+        path, text_fields="text", metadata_fields=None, alias="docs"
+    )
 
 
 def test_multioutput_split_reuses_complete_alias_bundle(tmp_path, capsys):
@@ -75,7 +79,9 @@ def test_partial_existing_multioutput_bundle_fails_without_new_operation(tmp_pat
     project = teal.Project.create(tmp_path / "project", name="split_partial")
     try:
         source = _source(project, tmp_path)
-        raw = project.split(source, labels=("learn", "audit"), proportions=(0.7, 0.3), random_state=3)
+        raw = project.split(
+            source, labels=("learn", "audit"), proportions=(0.7, 0.3), random_state=3
+        )
         raw["learn"].add_alias("learn_docs")
         before = len(project.list_operations())
         with pytest.raises(AliasBundleError, match="partially present"):

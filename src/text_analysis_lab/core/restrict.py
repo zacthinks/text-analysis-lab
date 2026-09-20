@@ -10,9 +10,14 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError
 from text_analysis_lab.core.ids import next_id
-from text_analysis_lab.core.operator import BaseOperator, OutputSpec, TranslationRequest, validate_output_label
+from text_analysis_lab.core.operator import (
+    BaseOperator,
+    OutputSpec,
+    TranslationRequest,
+    validate_output_label,
+)
 from text_analysis_lab.core.query import _parquet_dataset_expr, quote_identifier
-from text_analysis_lab.core.types import ArtifactType, DEFAULT_OUTPUT_LABEL
+from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, ArtifactType
 from text_analysis_lab.core.writer import create_artifact_writer
 
 if TYPE_CHECKING:
@@ -47,7 +52,7 @@ class RestrictOperator(BaseOperator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -65,22 +70,26 @@ class RestrictOperator(BaseOperator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "RestrictOperator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> RestrictOperator:
         return cls(
-            source_primary_key=tuple(str(value) for value in state.get("source_primary_key", ())),
-            domain_primary_key=tuple(str(value) for value in state.get("domain_primary_key", ())),
+            source_primary_key=tuple(
+                str(value) for value in state.get("source_primary_key", ())
+            ),
+            domain_primary_key=tuple(
+                str(value) for value in state.get("domain_primary_key", ())
+            ),
         )
 
 
 def restrict(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     *,
-    to: "BaseArtifact | str",
+    to: BaseArtifact | str,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     batch_size: int = 10_000,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Restrict ``source`` to the key domain represented by ``to``.
 
     ``to`` must use a non-empty primary-key prefix of ``source``.  The result
@@ -98,7 +107,9 @@ def restrict(
     source_pk = tuple(str(value) for value in source_artifact.primary_key)
     domain_pk = tuple(str(value) for value in domain_artifact.primary_key)
     if not source_pk or not domain_pk:
-        raise ArtifactError("restrict requires both artifacts to have non-empty primary keys.")
+        raise ArtifactError(
+            "restrict requires both artifacts to have non-empty primary keys."
+        )
     if len(domain_pk) > len(source_pk) or source_pk[: len(domain_pk)] != domain_pk:
         raise ArtifactError(
             "restrict(to=...) requires the domain primary key to be a prefix of the "
@@ -127,7 +138,9 @@ def restrict(
         snapshot_status="pending",
     )
     try:
-        operator.save_to_dir(project.storage.operator_dir(operator_id), operator_id=operator_id)
+        operator.save_to_dir(
+            project.storage.operator_dir(operator_id), operator_id=operator_id
+        )
         project.catalog.mark_operator_serialized(operator_id)
     except Exception:
         project.catalog.mark_operator_snapshot_failed(operator_id)
@@ -142,8 +155,12 @@ def restrict(
         operator_id=operator_id,
         status="incomplete",
     )
-    project.catalog.add_operation_source(operation_id, "source", source_artifact.artifact_id)
-    project.catalog.add_operation_source(operation_id, "domain", domain_artifact.artifact_id)
+    project.catalog.add_operation_source(
+        operation_id, "source", source_artifact.artifact_id
+    )
+    project.catalog.add_operation_source(
+        operation_id, "domain", domain_artifact.artifact_id
+    )
 
     artifact_id = next_id(project.storage.manifest_path, "artifact")
     project.catalog.register_artifact(
@@ -188,12 +205,15 @@ def restrict(
 
     try:
         if memo is not None:
-            project.catalog.add_memo(target_type="operation", target_id=operation_id, body=memo)
+            project.catalog.add_memo(
+                target_type="operation", target_id=operation_id, body=memo
+            )
 
         source_keys = _parquet_dataset_expr(source_artifact.keys_dir)
         domain_keys = _parquet_dataset_expr(domain_artifact.keys_dir)
         predicates = " AND ".join(
-            f"s.{quote_identifier(col)} = d.{quote_identifier(col)}" for col in domain_pk
+            f"s.{quote_identifier(col)} = d.{quote_identifier(col)}"
+            for col in domain_pk
         )
         selected = ", ".join(
             f"s.{quote_identifier(col)} AS {quote_identifier(col)}" for col in source_pk

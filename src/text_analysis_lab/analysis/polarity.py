@@ -37,7 +37,7 @@ _REQUIRED_COLUMNS = ("positive", "negative", "neutral")
 
 
 def polarity(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     smoothing: float = 0.5,
     zero_division: float = 0.0,
@@ -77,7 +77,9 @@ def polarity(
     }
     conflicts = [name for name in custom_columns if not name or name in protected]
     if conflicts:
-        raise ValueError(f"Invalid/conflicting custom polarity formula names: {conflicts}.")
+        raise ValueError(
+            f"Invalid/conflicting custom polarity formula names: {conflicts}."
+        )
     for name, scorer in custom.items():
         if not callable(scorer):
             raise TypeError(f"Custom polarity formula {name!r} must be callable.")
@@ -131,9 +133,7 @@ def polarity(
             "coverage": coverage,
             "total": total.astype(float),
             "difference": polarity_difference(positive, negative),
-            "log_ratio": polarity_log_ratio(
-                positive, negative, smoothing=smoothing
-            ),
+            "log_ratio": polarity_log_ratio(positive, negative, smoothing=smoothing),
             "matched_difference": polarity_matched_difference(
                 positive, negative, matched, zero_division=zero_division
             ),
@@ -159,7 +159,9 @@ def polarity(
             result[name] = context[name]
         for raw_name, scorer in custom.items():
             name = str(raw_name)
-            raw = _call_custom_scorer(scorer, context=context, extra_kwargs=custom_kwargs)
+            raw = _call_custom_scorer(
+                scorer, context=context, extra_kwargs=custom_kwargs
+            )
             score = np.asarray(raw, dtype=float).reshape(-1)
             if len(score) != len(info):
                 raise ValueError(
@@ -182,14 +184,24 @@ def _call_custom_scorer(
     try:
         signature = inspect.signature(scorer)
     except (TypeError, ValueError):
-        return scorer(context["positive"], context["negative"], context["total"], **dict(extra_kwargs))
+        return scorer(
+            context["positive"],
+            context["negative"],
+            context["total"],
+            **dict(extra_kwargs),
+        )
     available: dict[str, Any] = {**context, **dict(extra_kwargs)}
-    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()):
+    if any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
+    ):
         return scorer(**available)
     args: list[Any] = []
     kwargs: dict[str, Any] = {}
     for parameter in signature.parameters.values():
-        if parameter.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}:
+        if parameter.kind in {
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        }:
             continue
         if parameter.name in available:
             value = available[parameter.name]

@@ -7,81 +7,109 @@ facades over operation-specific modules.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-import json
 from typing import Any
 
+from text_analysis_lab.core.aggregate import (
+    AggregateField,
+    ConcatReducer,
+    FieldAggregationSpec,
+    LiteralValue,
+)
+from text_analysis_lab.core.aggregate import (
+    aggregate as _aggregate,
+)
 from text_analysis_lab.core.artifact_base import BaseArtifact
 from text_analysis_lab.core.artifact_subclasses import load_artifact
+from text_analysis_lab.core.binary_code import binary_code as _binary_code
 from text_analysis_lab.core.catalog import ProjectCatalog
+from text_analysis_lab.core.collapse_runs import collapse_runs as _collapse_runs
 from text_analysis_lab.core.errors import (
     ArtifactError,
     ArtifactNotFoundError,
     OperatorError,
     OperatorNotFoundError,
 )
-from text_analysis_lab.core.operator import BaseOperator, BaseTranslator
+from text_analysis_lab.core.feature_subset import (
+    FeatureSubsetFunction,
+)
+from text_analysis_lab.core.feature_subset import (
+    feature_subset as _feature_subset,
+)
 from text_analysis_lab.core.idempotence import (
-    AliasSpec, finalize_alias_plan, prepare_alias_plan, reused_outputs,
+    AliasSpec,
+    finalize_alias_plan,
+    prepare_alias_plan,
+    reused_outputs,
+)
+from text_analysis_lab.core.importers import (
+    folder_inventory as _folder_inventory,
+)
+from text_analysis_lab.core.importers import (
+    read_csv as _read_csv,
+)
+from text_analysis_lab.core.importers import (
+    read_csv_folder as _read_csv_folder,
+)
+from text_analysis_lab.core.importers import (
+    read_excel as _read_excel,
+)
+from text_analysis_lab.core.importers import (
+    read_excel_folder as _read_excel_folder,
+)
+from text_analysis_lab.core.importers import (
+    read_jsonl as _read_jsonl,
+)
+from text_analysis_lab.core.importers import (
+    read_parquet as _read_parquet,
+)
+from text_analysis_lab.core.join import join as _join
+from text_analysis_lab.core.keyed_frame import from_keyed_frame as _from_keyed_frame
+from text_analysis_lab.core.keyed_metadata import attach_metadata as _attach_metadata
+from text_analysis_lab.core.merge import merge as _merge
+from text_analysis_lab.core.operator import BaseOperator, BaseTranslator
+from text_analysis_lab.core.probability_split import (
+    probability_split as _probability_split,
 )
 from text_analysis_lab.core.query import QueryEngine
+from text_analysis_lab.core.register_external import (
+    register_external as _register_external,
+)
+from text_analysis_lab.core.restrict import restrict as _restrict
+from text_analysis_lab.core.sample import sample as _sample
+from text_analysis_lab.core.select_keys import select_keys as _select_keys
+from text_analysis_lab.core.set_primary_keys import (
+    set_primary_keys as _set_primary_keys,
+)
+from text_analysis_lab.core.split import split as _split
 from text_analysis_lab.core.storage import ProjectStorage
+from text_analysis_lab.core.subset import FunctionSpec
+from text_analysis_lab.core.subset import subset as _subset
+from text_analysis_lab.core.transform_like import (
+    can_transform_texts_like as _can_transform_texts_like,
+)
+from text_analysis_lab.core.transform_like import (
+    transform_texts_like as _transform_texts_like,
+)
 from text_analysis_lab.core.translate import (
     resume_translate as _resume_translate,
+)
+from text_analysis_lab.core.translate import (
     translate as _translate,
 )
 from text_analysis_lab.core.types import (
+    DEFAULT_OUTPUT_LABEL,
     ArtifactStatus,
     ArtifactType,
+    ColumnSelect,
     LineageMode,
-    MemoTargetType,
+    MetadataMode,
     OperationStatus,
     OperationType,
     OperatorSnapshotStatus,
-    ColumnSelect, 
-    MetadataMode, 
-    StreamingMode,
     QueryForm,
-    DEFAULT_OUTPUT_LABEL,
-)
-from text_analysis_lab.core.subset import FunctionSpec, subset as _subset
-from text_analysis_lab.core.select_keys import select_keys as _select_keys
-from text_analysis_lab.core.set_primary_keys import set_primary_keys as _set_primary_keys
-from text_analysis_lab.core.collapse_runs import collapse_runs as _collapse_runs
-from text_analysis_lab.core.feature_subset import (
-    FeatureSubsetFunction,
-    feature_subset as _feature_subset,
-)
-from text_analysis_lab.core.sample import sample as _sample
-from text_analysis_lab.core.restrict import restrict as _restrict
-from text_analysis_lab.core.aggregate import (
-    AggregateField,
-    ConcatReducer,
-    LiteralValue,
-    FieldAggregationSpec,
-    aggregate as _aggregate,
-)
-from text_analysis_lab.core.split import split as _split
-from text_analysis_lab.core.probability_split import probability_split as _probability_split
-from text_analysis_lab.core.keyed_frame import from_keyed_frame as _from_keyed_frame
-from text_analysis_lab.core.register_external import register_external as _register_external
-from text_analysis_lab.core.keyed_metadata import attach_metadata as _attach_metadata
-from text_analysis_lab.core.binary_code import binary_code as _binary_code
-from text_analysis_lab.core.transform_like import (
-    can_transform_texts_like as _can_transform_texts_like,
-    transform_texts_like as _transform_texts_like,
-)
-from text_analysis_lab.core.merge import merge as _merge
-from text_analysis_lab.core.join import join as _join
-from text_analysis_lab.core.importers import (
-    read_csv as _read_csv,
-    read_csv_folder as _read_csv_folder,
-    read_excel as _read_excel,
-    read_excel_folder as _read_excel_folder,
-    read_jsonl as _read_jsonl,
-    read_parquet as _read_parquet,
-    folder_inventory as _folder_inventory,
 )
 
 
@@ -99,7 +127,7 @@ class Project:
         name: str,
         *,
         delete_existing: bool = False,
-    ) -> "Project":
+    ) -> Project:
         """Create or reopen a named project directory.
 
         ``delete_existing=True`` removes only TeAL-owned state under
@@ -115,7 +143,7 @@ class Project:
         )
 
     @classmethod
-    def open(cls, path: str | Path) -> "Project":
+    def open(cls, path: str | Path) -> Project:
         """Open an existing TeAL project directory."""
         return cls(ProjectStorage.open(path))
 
@@ -126,7 +154,7 @@ class Project:
         self._geco_manager = None
         self._closed = False
 
-    def __enter__(self) -> "Project":
+    def __enter__(self) -> Project:
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
@@ -152,10 +180,10 @@ class Project:
 
     def __repr__(self) -> str:
         artifact_count = len(self.list_artifacts()) if not self._closed else None
-        count_text = "closed" if artifact_count is None else f"artifacts={artifact_count:,}"
-        return (
-            f"Project(name={self.name!r}, path={str(self.path)!r}, {count_text})"
+        count_text = (
+            "closed" if artifact_count is None else f"artifacts={artifact_count:,}"
         )
+        return f"Project(name={self.name!r}, path={str(self.path)!r}, {count_text})"
 
     def _repr_html_(self) -> str:
         from html import escape
@@ -470,7 +498,6 @@ class Project:
             body=body,
         )
 
-
     def get_project_memo(self) -> str | None:
         """Return the latest project memo body, if one exists."""
         row = self.catalog.get_memo(
@@ -478,7 +505,6 @@ class Project:
             target_id="project",
         )
         return None if row is None else str(row["body"])
-
 
     def add_standalone_memo(self, body: str, *, title: str | None = None) -> int:
         """Create a standalone memo and return its memo row id."""
@@ -489,14 +515,12 @@ class Project:
             body=body,
         )
 
-
     def list_standalone_memos(self) -> list[dict[str, Any]]:
         """Return the latest version of each standalone memo."""
         return self.catalog.list_memos(
             target_type="standalone",
             latest_only=True,
         )
-
 
     def get_standalone_memo(self, target_id: str | int) -> str:
         """Return the latest body for one standalone memo target id."""
@@ -753,7 +777,10 @@ class Project:
     def translate(
         self,
         translator: BaseTranslator,
-        sources: BaseArtifact | str | Sequence[BaseArtifact | str] | Mapping[str, BaseArtifact | str],
+        sources: BaseArtifact
+        | str
+        | Sequence[BaseArtifact | str]
+        | Mapping[str, BaseArtifact | str],
         *,
         workers: int = 1,
         batch_size: int | None = None,
@@ -799,13 +826,13 @@ class Project:
 
     def subset(
         self,
-        source: "BaseArtifact | str",
-        function: "FunctionSpec",
+        source: BaseArtifact | str,
+        function: FunctionSpec,
         *,
-        key_columns: "ColumnSelect" = True,
-        data_columns: "ColumnSelect" = True,
-        metadata_columns: "ColumnSelect" = False,
-        metadata_mode: "MetadataMode" = "none",
+        key_columns: ColumnSelect = True,
+        data_columns: ColumnSelect = True,
+        metadata_columns: ColumnSelect = False,
+        metadata_mode: MetadataMode = "none",
         form: QueryForm = "table",
         iter_batches: bool = True,
         batch_size: int | None = None,
@@ -815,7 +842,7 @@ class Project:
         memo: str | None = None,
         alias: str | None = None,
         overwrite: bool = False,
-    ) -> "Mapping[str, BaseArtifact]":
+    ) -> Mapping[str, BaseArtifact]:
         """Create a keys-only subset artifact using a boolean-mask function."""
         return _subset(
             self,
@@ -838,8 +865,8 @@ class Project:
 
     def feature_subset(
         self,
-        source: "BaseArtifact | str",
-        function: "FeatureSubsetFunction",
+        source: BaseArtifact | str,
+        function: FeatureSubsetFunction,
         *,
         output_label: str = DEFAULT_OUTPUT_LABEL,
         batch_size: int = 10_000,
@@ -864,7 +891,7 @@ class Project:
 
     def set_primary_keys(
         self,
-        source: "BaseArtifact | str",
+        source: BaseArtifact | str,
         *,
         levels: Mapping[str, str],
         leaf_key: str,
@@ -892,7 +919,7 @@ class Project:
 
     def collapse_runs(
         self,
-        source: "BaseArtifact | str",
+        source: BaseArtifact | str,
         *,
         by: str | Sequence[str],
         data: FieldAggregationSpec | None = None,
@@ -922,7 +949,7 @@ class Project:
 
     def select_keys(
         self,
-        source: "BaseArtifact | str",
+        source: BaseArtifact | str,
         keys: Sequence[Any],
         *,
         output_label: str = DEFAULT_OUTPUT_LABEL,
@@ -936,14 +963,19 @@ class Project:
         if plan is not None and plan.reuse:
             return reused_outputs(self, plan)[output_label]
         result = _select_keys(
-            self, source, keys, output_label=output_label, batch_size=batch_size, memo=memo
+            self,
+            source,
+            keys,
+            output_label=output_label,
+            batch_size=batch_size,
+            memo=memo,
         )
         finalize_alias_plan(self, plan, {output_label: result})
         return result
 
     def sample(
         self,
-        source: "BaseArtifact | str",
+        source: BaseArtifact | str,
         *,
         n: int,
         random_state: int | None = None,
@@ -969,9 +1001,9 @@ class Project:
 
     def restrict(
         self,
-        source: "BaseArtifact | str",
+        source: BaseArtifact | str,
         *,
-        to: "BaseArtifact | str",
+        to: BaseArtifact | str,
         output_label: str = DEFAULT_OUTPUT_LABEL,
         batch_size: int = 10_000,
         memo: str | None = None,
@@ -997,12 +1029,16 @@ class Project:
 
     def aggregate(
         self,
-        source: "BaseArtifact | str",
+        source: BaseArtifact | str,
         *,
         to_key: str | Sequence[str],
-        data: str | Mapping[str, str | ConcatReducer | AggregateField | LiteralValue] | None = None,
-        metadata: Mapping[str, str | ConcatReducer | AggregateField | LiteralValue] | None = None,
-        aggregations: Mapping[str, str | Sequence[str] | Mapping[str, str]] | None = None,
+        data: str
+        | Mapping[str, str | ConcatReducer | AggregateField | LiteralValue]
+        | None = None,
+        metadata: Mapping[str, str | ConcatReducer | AggregateField | LiteralValue]
+        | None = None,
+        aggregations: Mapping[str, str | Sequence[str] | Mapping[str, str]]
+        | None = None,
         output_label: str = DEFAULT_OUTPUT_LABEL,
         batch_size: int = 10_000,
         memo: str | None = None,
@@ -1035,7 +1071,7 @@ class Project:
 
     def split(
         self,
-        source: "BaseArtifact | str",
+        source: BaseArtifact | str,
         *,
         labels: Sequence[str] = ("train", "test"),
         proportions: Sequence[float] = (0.8, 0.2),
@@ -1045,7 +1081,7 @@ class Project:
         memo: str | None = None,
         alias: Mapping[str, str] | None = None,
         overwrite: bool = False,
-    ) -> Mapping[str, "BaseArtifact"]:
+    ) -> Mapping[str, BaseArtifact]:
         """Split one source artifact into keys-only child artifacts."""
         return _split(
             self,
@@ -1062,19 +1098,19 @@ class Project:
 
     def probability_split(
         self,
-        source: "BaseArtifact | str",
+        source: BaseArtifact | str,
         *,
         n: int,
         remainder_label: str = "remainder",
         sample_label: str = "sample",
-        strata: "BaseArtifact | str | None" = None,
+        strata: BaseArtifact | str | None = None,
         allocation: Mapping[Any, float] | None = None,
         random_state: int | None = None,
         workers: int = 1,
         memo: str | None = None,
         alias: Mapping[str, str] | None = None,
         overwrite: bool = False,
-    ) -> Mapping[str, "BaseArtifact"]:
+    ) -> Mapping[str, BaseArtifact]:
         """Draw a fixed-size probability audit sample and inclusion probabilities."""
         return _probability_split(
             self,
@@ -1102,14 +1138,14 @@ class Project:
         format: str | None = None,
         batch_size: int = 10_000,
         duckdb_options: Mapping[str, Any] | None = None,
-        sources: Mapping[str, "BaseArtifact | str"] | None = None,
+        sources: Mapping[str, BaseArtifact | str] | None = None,
         lineage_mode: LineageMode | str = "new_key",
         basis_labels: str | Sequence[str] | None = None,
         output_label: str = DEFAULT_OUTPUT_LABEL,
         memo: str | None = None,
         alias: str | None = None,
         overwrite: bool = False,
-    ) -> "BaseArtifact":
+    ) -> BaseArtifact:
         """Register an externally produced result as a durable TeAL artifact.
 
         ``external`` may be a DataFrame, a supported tabular path/dataset, one
@@ -1141,7 +1177,7 @@ class Project:
 
     def from_keyed_frame(
         self,
-        source: "BaseArtifact | str",
+        source: BaseArtifact | str,
         frame: Any,
         *,
         data_fields: str | Sequence[str],
@@ -1150,7 +1186,7 @@ class Project:
         memo: str | None = None,
         alias: str | None = None,
         overwrite: bool = False,
-    ) -> "BaseArtifact":
+    ) -> BaseArtifact:
         """Import same-key measurement data aligned by stable TeAL primary keys."""
         plan = prepare_alias_plan(self, (output_label,), alias, overwrite=overwrite)
         if plan is not None and plan.reuse:
@@ -1169,7 +1205,7 @@ class Project:
 
     def attach_metadata(
         self,
-        source: "BaseArtifact | str",
+        source: BaseArtifact | str,
         frame: Any,
         *,
         metadata_fields: str | Sequence[str],
@@ -1178,7 +1214,7 @@ class Project:
         memo: str | None = None,
         alias: str | None = None,
         overwrite: bool = False,
-    ) -> "BaseArtifact":
+    ) -> BaseArtifact:
         """Attach descriptive metadata by stable key without copying source data."""
         plan = prepare_alias_plan(self, (output_label,), alias, overwrite=overwrite)
         if plan is not None and plan.reuse:
@@ -1197,7 +1233,7 @@ class Project:
 
     def can_transform_texts_like(
         self,
-        artifact: "BaseArtifact | str",
+        artifact: BaseArtifact | str,
         *,
         query: bool = False,
     ) -> bool:
@@ -1206,7 +1242,7 @@ class Project:
 
     def transform_texts_like(
         self,
-        artifact: "BaseArtifact | str",
+        artifact: BaseArtifact | str,
         texts: Sequence[str],
         *,
         query: bool = False,
@@ -1216,9 +1252,9 @@ class Project:
 
     def binary_code(
         self,
-        source: "BaseArtifact | str",
+        source: BaseArtifact | str,
         *,
-        text_source: "BaseArtifact | str",
+        text_source: BaseArtifact | str,
         text_field: str,
         instructions: str,
         context_before: int = 2,
@@ -1226,7 +1262,7 @@ class Project:
         memo: str | None = None,
         alias: str | None = None,
         overwrite: bool = False,
-    ) -> "BaseArtifact":
+    ) -> BaseArtifact:
         """Interactively code every source observation as binary 0/1."""
         _label = DEFAULT_OUTPUT_LABEL
         plan = prepare_alias_plan(self, (_label,), alias, overwrite=overwrite)
@@ -1247,14 +1283,14 @@ class Project:
 
     def merge(
         self,
-        sources: Sequence["BaseArtifact | str"],
+        sources: Sequence[BaseArtifact | str],
         *,
         output_label: str = DEFAULT_OUTPUT_LABEL,
         batch_size: int = 10_000,
         memo: str | None = None,
         alias: str | None = None,
         overwrite: bool = False,
-    ) -> "BaseArtifact":
+    ) -> BaseArtifact:
         """N-way merge compatible disjoint table artifacts into a flat keys-only artifact."""
         plan = prepare_alias_plan(self, (output_label,), alias, overwrite=overwrite)
         if plan is not None and plan.reuse:
@@ -1271,14 +1307,14 @@ class Project:
 
     def join(
         self,
-        basis: "BaseArtifact | str",
-        *others: "BaseArtifact | str",
+        basis: BaseArtifact | str,
+        *others: BaseArtifact | str,
         output_label: str = DEFAULT_OUTPUT_LABEL,
         batch_size: int = 10_000,
         memo: str | None = None,
         alias: str | None = None,
         overwrite: bool = False,
-    ) -> "BaseArtifact":
+    ) -> BaseArtifact:
         """Lazily compose same-key relational fields onto the basis row universe."""
         plan = prepare_alias_plan(self, (output_label,), alias, overwrite=overwrite)
         if plan is not None and plan.reuse:

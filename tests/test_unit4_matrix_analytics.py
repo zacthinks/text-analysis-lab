@@ -8,7 +8,10 @@ import pytest
 from scipy import sparse
 
 from text_analysis_lab import analysis
-from text_analysis_lab.core.errors import ArtifactError, UnsupportedArtifactOperationError
+from text_analysis_lab.core.errors import (
+    ArtifactError,
+    UnsupportedArtifactOperationError,
+)
 from text_analysis_lab.core.types import ArtifactType
 
 
@@ -73,9 +76,7 @@ class _MatrixFixture:
 def test_cosine_similarity_and_distance_support_dense_and_sparse() -> None:
     for sparse_matrix in (False, True):
         artifact = _MatrixFixture(sparse_matrix=sparse_matrix)
-        similarity = analysis.cosine_similarity(
-            artifact, key=0, other_key=2
-        )
+        similarity = analysis.cosine_similarity(artifact, key=0, other_key=2)
         assert similarity == pytest.approx(2.0 / math.sqrt(10.0))
         assert analysis.distance(
             artifact, position=0, other_position=2, metric="cosine"
@@ -201,31 +202,41 @@ class _ContextFixture:
     def query_columns(self, *, metadata_mode="none"):
         cols = [
             {
-                "namespace": "key", "base_name": "doc_id",
-                "qualified_name": "key.doc_id", "output_name": "doc_id",
+                "namespace": "key",
+                "base_name": "doc_id",
+                "qualified_name": "key.doc_id",
+                "output_name": "doc_id",
             },
             {
-                "namespace": "data", "base_name": "title",
-                "qualified_name": "data.title", "output_name": "title",
+                "namespace": "data",
+                "base_name": "title",
+                "qualified_name": "data.title",
+                "output_name": "title",
             },
         ]
         if metadata_mode != "none":
             cols.append(
                 {
-                    "namespace": "metadata", "base_name": "group",
-                    "qualified_name": "metadata.ctx.group", "output_name": "group",
+                    "namespace": "metadata",
+                    "base_name": "group",
+                    "qualified_name": "metadata.ctx.group",
+                    "output_name": "group",
                 }
             )
         return {"columns": cols}
 
-    def query(self, *, positions, data_columns, metadata_columns, metadata_mode, **kwargs):
+    def query(
+        self, *, positions, data_columns, metadata_columns, metadata_mode, **kwargs
+    ):
         _ = kwargs
         frame = self.rows.iloc[[int(v) for v in positions]].copy()
         keep = ["doc_id"]
         if data_columns is True:
             keep.append("title")
         elif data_columns not in (False, None):
-            keep.extend([data_columns] if isinstance(data_columns, str) else list(data_columns))
+            keep.extend(
+                [data_columns] if isinstance(data_columns, str) else list(data_columns)
+            )
         if metadata_columns is True and metadata_mode != "none":
             keep.append("group")
         elif metadata_columns not in (False, None) and metadata_mode != "none":
@@ -272,6 +283,7 @@ def test_nearest_neighbors_context_requires_leading_key_prefix() -> None:
     artifact.project = _FakeProject(context)
     # document-level context is valid for sentence-level neighbors
     from text_analysis_lab.analysis.neighbors import _validate_context_keys
+
     _validate_context_keys(artifact, context)
 
     context.primary_key = ("sentence_id",)

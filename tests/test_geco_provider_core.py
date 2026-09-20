@@ -54,7 +54,9 @@ def test_provider_subsets_and_reorders_sparse_geometry_by_stable_key():
             ]
         )
     )
-    artifact = _FakeArtifact("art_geometry", ArtifactType.SPARSE_MATRIX, matrix, [7, 2, 9, 5])
+    artifact = _FakeArtifact(
+        "art_geometry", ArtifactType.SPARSE_MATRIX, matrix, [7, 2, 9, 5]
+    )
     provider = TeALGeCoProvider(_FakeProject([artifact]))
 
     result = provider.geometry_matrix(
@@ -83,7 +85,9 @@ def test_provider_subsets_and_reorders_dense_view_by_stable_key():
 
 def test_provider_missing_document_key_fails_instead_of_positional_fallback():
     matrix = sparse.eye(3, format="csr")
-    artifact = _FakeArtifact("art_geometry", ArtifactType.SPARSE_MATRIX, matrix, [0, 1, 2])
+    artifact = _FakeArtifact(
+        "art_geometry", ArtifactType.SPARSE_MATRIX, matrix, [0, 1, 2]
+    )
     provider = TeALGeCoProvider(_FakeProject([artifact]))
 
     with pytest.raises(GeCoIntegrationError, match="every document key"):
@@ -138,7 +142,9 @@ def test_provider_does_not_mislabel_catalog_threading_failures_as_missing():
 def test_provider_delegates_new_text_and_query_to_frozen_teal_geometry():
 
     matrix = sparse.eye(3, format="csr")
-    artifact = _FakeArtifact("art_geometry", ArtifactType.SPARSE_MATRIX, matrix, [0, 1, 2])
+    artifact = _FakeArtifact(
+        "art_geometry", ArtifactType.SPARSE_MATRIX, matrix, [0, 1, 2]
+    )
     project = _FakeProject([artifact])
     calls = []
 
@@ -146,11 +152,15 @@ def test_provider_delegates_new_text_and_query_to_frozen_teal_geometry():
         calls.append((target.artifact_id, list(texts), query))
         if query:
             return sparse.csr_matrix([[1.0, 2.0, 3.0]])
-        return sparse.csr_matrix(np.arange(len(texts) * 3, dtype=float).reshape(len(texts), 3))
+        return sparse.csr_matrix(
+            np.arange(len(texts) * 3, dtype=float).reshape(len(texts), 3)
+        )
 
     project.transform_texts_like = transform_texts_like
     provider = TeALGeCoProvider(project)
-    query = provider.transform_query({"artifact_id": "art_geometry"}, "room temperature")
+    query = provider.transform_query(
+        {"artifact_id": "art_geometry"}, "room temperature"
+    )
     texts = provider.transform_texts({"artifact_id": "art_geometry"}, ["a", "b"])
     np.testing.assert_array_equal(query.toarray(), [[1.0, 2.0, 3.0]])
     np.testing.assert_array_equal(texts.toarray(), [[0, 1, 2], [3, 4, 5]])
@@ -163,10 +173,13 @@ def test_provider_delegates_new_text_and_query_to_frozen_teal_geometry():
 def test_geco_contract_gate_rejects_pre_capability_build(monkeypatch):
     import sys
     from types import SimpleNamespace
+
     import text_analysis_lab.integrations.geco as bridge
 
     class OldGeometricCoder:
-        def register_external_geometry(self, *, name, external_ref, supports_query=False):
+        def register_external_geometry(
+            self, *, name, external_ref, supports_query=False
+        ):
             return 1
 
     monkeypatch.setitem(
@@ -181,6 +194,7 @@ def test_geco_contract_gate_rejects_pre_capability_build(monkeypatch):
 def test_geco_contract_gate_accepts_per_geometry_text_capability(monkeypatch):
     import sys
     from types import SimpleNamespace
+
     import text_analysis_lab.integrations.geco as bridge
 
     class CurrentGeometricCoder:

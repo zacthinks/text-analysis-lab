@@ -46,7 +46,7 @@ def validate_lineage_mode(mode: str) -> LineageMode:
     return cast(LineageMode, mode)
 
 
-def artifact_lineage(artifact: "BaseArtifact") -> dict[str, Any]:
+def artifact_lineage(artifact: BaseArtifact) -> dict[str, Any]:
     """Return the lineage descriptor for an artifact."""
     lineage = artifact.descriptor.get("lineage")
     if lineage is None:
@@ -60,13 +60,13 @@ def artifact_lineage(artifact: "BaseArtifact") -> dict[str, Any]:
     return dict(lineage)
 
 
-def lineage_mode_for_artifact(artifact: "BaseArtifact") -> LineageMode:
+def lineage_mode_for_artifact(artifact: BaseArtifact) -> LineageMode:
     """Return the recorded basis-lineage mode for an artifact descriptor."""
     lineage = artifact_lineage(artifact)
     return validate_lineage_mode(str(lineage.get("lineage_mode", "MISSING")))
 
 
-def basis_artifact_ids(artifact: "BaseArtifact") -> tuple[str, ...]:
+def basis_artifact_ids(artifact: BaseArtifact) -> tuple[str, ...]:
     """Return the artifact IDs this artifact is defined on."""
     lineage = artifact_lineage(artifact)
 
@@ -115,10 +115,10 @@ def is_prefix(
 
 
 def lineage_paths_to_ancestor(
-    project: "Project",
-    descendant: "BaseArtifact",
-    ancestor: "BaseArtifact",
-) -> list[tuple["BaseArtifact", ...]]:
+    project: Project,
+    descendant: BaseArtifact,
+    ancestor: BaseArtifact,
+) -> list[tuple[BaseArtifact, ...]]:
     """Return all basis-lineage paths from ``descendant`` to ``ancestor``.
 
     Paths include both endpoints. ``new_key`` lineage is a hard boundary and is
@@ -127,9 +127,9 @@ def lineage_paths_to_ancestor(
     inheritance.
     """
     target_id = str(ancestor.artifact_id)
-    paths: list[tuple["BaseArtifact", ...]] = []
+    paths: list[tuple[BaseArtifact, ...]] = []
 
-    def walk(current: "BaseArtifact", path: tuple["BaseArtifact", ...]) -> None:
+    def walk(current: BaseArtifact, path: tuple[BaseArtifact, ...]) -> None:
         current_id = str(current.artifact_id)
         if any(str(item.artifact_id) == current_id for item in path):
             raise LineageError(
@@ -156,9 +156,9 @@ def lineage_paths_to_ancestor(
 
 
 def iter_metadata_lineage_sources(
-    project: "Project",
-    artifact: "BaseArtifact",
-) -> list["BaseArtifact"]:
+    project: Project,
+    artifact: BaseArtifact,
+) -> list[BaseArtifact]:
     """Return artifacts whose local metadata can attach to ``artifact``.
 
     Ordinary lineage keeps the historical key-compatibility rules. A
@@ -174,7 +174,7 @@ def iter_metadata_lineage_sources(
     metadata_sources: list[BaseArtifact] = []
     included_artifact_ids: set[str] = set()
 
-    def include_if_has_metadata(candidate: "BaseArtifact") -> None:
+    def include_if_has_metadata(candidate: BaseArtifact) -> None:
         if (
             candidate.artifact_id not in included_artifact_ids
             and candidate.has_metadata()
@@ -185,7 +185,7 @@ def iter_metadata_lineage_sources(
     include_if_has_metadata(artifact)
 
     def walk(
-        current: "BaseArtifact",
+        current: BaseArtifact,
         *,
         compatibility_only: bool,
         target_key: tuple[str, ...],
@@ -381,7 +381,7 @@ def validate_primary_key_relationship(
     raise LineageError(f"Unsupported lineage mode {mode!r}.")
 
 
-def find_data_artifact(artifact: "BaseArtifact") -> "BaseArtifact | None":
+def find_data_artifact(artifact: BaseArtifact) -> BaseArtifact | None:
     """Return the nearest artifact that can provide representation data.
 
     Representation data inheritance is intentionally stricter than metadata

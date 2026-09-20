@@ -9,14 +9,14 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 import pandas as pd
 
+from text_analysis_lab._linguistics.cache import user_cache_paths
 from text_analysis_lab._linguistics.srl.resources import prepare_project_srl_runtime
 from text_analysis_lab._linguistics.srl.runtime import AllenNlpSrlRuntime
 from text_analysis_lab._linguistics.srl.structures import content_head_indices
-from text_analysis_lab._linguistics.cache import user_cache_paths
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     OutputSpec,
     SourceRequest,
@@ -82,11 +82,15 @@ class SemanticRoleLabeler(BaseTranslator):
     ) -> None:
         super().__init__(operator_id=operator_id)
         if not sentence_key or not token_key or sentence_key == token_key:
-            raise ValueError("sentence_key and token_key must be distinct non-empty names.")
+            raise ValueError(
+                "sentence_key and token_key must be distinct non-empty names."
+            )
         normalized_pos = tuple(str(value).upper() for value in predicate_pos)
         if not normalized_pos:
             raise ValueError("predicate_pos cannot be empty.")
-        if max_length is not None and (isinstance(max_length, bool) or int(max_length) < 1):
+        if max_length is not None and (
+            isinstance(max_length, bool) or int(max_length) < 1
+        ):
             raise ValueError("max_length must be a positive integer or None.")
         self.sentence_key = str(sentence_key)
         self.token_key = str(token_key)
@@ -97,23 +101,33 @@ class SemanticRoleLabeler(BaseTranslator):
         self.mixed_precision = bool(mixed_precision)
         self.show_progress = bool(show_progress)
 
-    def output_specs(self, *, sources: Mapping[str, "BaseArtifact"], request: TranslationRequest):
+    def output_specs(
+        self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest
+    ):
         _ = request
         sentences, tokens = _validate_sources(
             sources, sentence_key=self.sentence_key, token_key=self.token_key
         )
         _ = tokens
         if "predicate_id" in sentences.primary_key:
-            raise OperatorError("SemanticRoleLabeler predicate_id collides with sentence keys.")
+            raise OperatorError(
+                "SemanticRoleLabeler predicate_id collides with sentence keys."
+            )
         return {
             PREDICATES: OutputSpec(
-                artifact_type="table", lineage_mode="extended_key", basis_labels=SENTENCES
+                artifact_type="table",
+                lineage_mode="extended_key",
+                basis_labels=SENTENCES,
             ),
             ROLES: OutputSpec(
-                artifact_type="table", lineage_mode="extended_key", basis_labels=PREDICATES
+                artifact_type="table",
+                lineage_mode="extended_key",
+                basis_labels=PREDICATES,
             ),
             FAILURES: OutputSpec(
-                artifact_type="table", lineage_mode="preserved_key", basis_labels=SENTENCES
+                artifact_type="table",
+                lineage_mode="preserved_key",
+                basis_labels=SENTENCES,
             ),
         }
 
@@ -127,7 +141,9 @@ class SemanticRoleLabeler(BaseTranslator):
 
     def input_request(self, *, sources, mode, request):
         _ = mode, request
-        _validate_sources(sources, sentence_key=self.sentence_key, token_key=self.token_key)
+        _validate_sources(
+            sources, sentence_key=self.sentence_key, token_key=self.token_key
+        )
         return {
             SENTENCES: SourceRequest(
                 artifact_type="table",
@@ -213,7 +229,9 @@ class SemanticRoleLabeler(BaseTranslator):
         token_groups: dict[tuple[int, ...], pd.DataFrame] = {}
         for raw_key, group in grouped_tokens:
             key = raw_key if isinstance(raw_key, tuple) else (raw_key,)
-            token_groups[tuple(int(v) for v in key)] = group.sort_values(self.token_key).reset_index(drop=True)
+            token_groups[tuple(int(v) for v in key)] = group.sort_values(
+                self.token_key
+            ).reset_index(drop=True)
 
         predicate_keys: list[dict[str, Any]] = []
         predicate_data: list[dict[str, Any]] = []
@@ -228,7 +246,12 @@ class SemanticRoleLabeler(BaseTranslator):
             sentence_key_records[key_tuple] = key_record
             sentence_tokens = token_groups.get(key_tuple)
             if sentence_tokens is None or sentence_tokens.empty:
-                _issue(failures, key_tuple, "missing_tokens", "Sentence has no aligned token rows.")
+                _issue(
+                    failures,
+                    key_tuple,
+                    "missing_tokens",
+                    "Sentence has no aligned token rows.",
+                )
                 continue
             predicate_indices = [
                 idx
@@ -256,7 +279,12 @@ class SemanticRoleLabeler(BaseTranslator):
             except Exception as exc:
                 if _is_cuda_oom(exc):
                     _clear_cuda_cache()
-                    _issue(failures, key_tuple, "cuda_out_of_memory", f"{type(exc).__name__}: {exc}")
+                    _issue(
+                        failures,
+                        key_tuple,
+                        "cuda_out_of_memory",
+                        f"{type(exc).__name__}: {exc}",
+                    )
                     continue
                 raise
 
@@ -272,8 +300,12 @@ class SemanticRoleLabeler(BaseTranslator):
                         "char_start": int(predicate_row["char_start"]),
                         "char_end": int(predicate_row["char_end"]),
                         "text": str(predicate_row["text"]),
-                        "lemma": None if pd.isna(predicate_row["lemma"]) else str(predicate_row["lemma"]),
-                        "pos": None if pd.isna(predicate_row["pos"]) else str(predicate_row["pos"]),
+                        "lemma": None
+                        if pd.isna(predicate_row["lemma"])
+                        else str(predicate_row["lemma"]),
+                        "pos": None
+                        if pd.isna(predicate_row["pos"])
+                        else str(predicate_row["pos"]),
                     }
                 )
                 if prediction.bio_repairs:
@@ -284,7 +316,9 @@ class SemanticRoleLabeler(BaseTranslator):
                         json.dumps(
                             {
                                 "predicate_id": int(predicate_id),
-                                "predicate_token_id": int(predicate_row[self.token_key]),
+                                "predicate_token_id": int(
+                                    predicate_row[self.token_key]
+                                ),
                                 "repairs": [
                                     {
                                         "position": int(repair.position),
@@ -304,10 +338,17 @@ class SemanticRoleLabeler(BaseTranslator):
                         end=int(span.end),
                         token_ids=[int(v) for v in sentence_tokens[self.token_key]],
                         head_token_ids=[
-                            None if pd.isna(v) else int(v) for v in sentence_tokens["head_token_id"]
+                            None if pd.isna(v) else int(v)
+                            for v in sentence_tokens["head_token_id"]
                         ],
-                        dependencies=[None if pd.isna(v) else str(v) for v in sentence_tokens["dep"]],
-                        pos=[None if pd.isna(v) else str(v) for v in sentence_tokens["pos"]],
+                        dependencies=[
+                            None if pd.isna(v) else str(v)
+                            for v in sentence_tokens["dep"]
+                        ],
+                        pos=[
+                            None if pd.isna(v) else str(v)
+                            for v in sentence_tokens["pos"]
+                        ],
                         text=token_texts,
                         role=str(span.label),
                     )
@@ -318,7 +359,9 @@ class SemanticRoleLabeler(BaseTranslator):
                     local_end = int(end_row["char_end"]) - sentence_start
                     sentence_text = str(sentence_row["text"])
                     span_text = sentence_text[local_start:local_end]
-                    span_score = float(np.mean(prediction.word_scores[int(span.start) : int(span.end)]))
+                    span_score = float(
+                        np.mean(prediction.word_scores[int(span.start) : int(span.end)])
+                    )
                     for head_id, head_index in enumerate(head_indices):
                         head = sentence_tokens.iloc[int(head_index)]
                         role_keys.append(
@@ -338,9 +381,15 @@ class SemanticRoleLabeler(BaseTranslator):
                                 "text": span_text,
                                 "head_token_id": int(head[self.token_key]),
                                 "head_text": str(head["text"]),
-                                "head_lemma": None if pd.isna(head["lemma"]) else str(head["lemma"]),
-                                "head_pos": None if pd.isna(head["pos"]) else str(head["pos"]),
-                                "ent_type": None if pd.isna(head["ent_type"]) else str(head["ent_type"]),
+                                "head_lemma": None
+                                if pd.isna(head["lemma"])
+                                else str(head["lemma"]),
+                                "head_pos": None
+                                if pd.isna(head["pos"])
+                                else str(head["pos"]),
+                                "ent_type": None
+                                if pd.isna(head["ent_type"])
+                                else str(head["ent_type"]),
                                 "score": span_score,
                             }
                         )
@@ -371,7 +420,9 @@ class SemanticRoleLabeler(BaseTranslator):
                     role_keys,
                     columns=[*sentence_keys, "predicate_id", "role_id", "head_id"],
                 ),
-                "data": pd.DataFrame.from_records(role_data, columns=list(ROLE_DATA_COLUMNS)),
+                "data": pd.DataFrame.from_records(
+                    role_data, columns=list(ROLE_DATA_COLUMNS)
+                ),
             },
             FAILURES: {
                 "keys": pd.DataFrame.from_records(failure_keys, columns=sentence_keys),
@@ -388,7 +439,6 @@ class SemanticRoleLabeler(BaseTranslator):
 
     def finalize_translation(self, *, mode, request):
         _ = mode, request
-        return None
 
     def to_json_state(self) -> dict[str, Any]:
         return {
@@ -403,7 +453,7 @@ class SemanticRoleLabeler(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "SemanticRoleLabeler":
+    def from_json_state(cls, state: Mapping[str, Any]) -> SemanticRoleLabeler:
         return cls(**cast(dict[str, Any], dict(state)))
 
 
@@ -432,7 +482,10 @@ def _validate_sources(sources, *, sentence_key: str, token_key: str):
         )
     sentences = sources[SENTENCES]
     tokens = sources[TOKENS]
-    if sentences.artifact_type.value != "table" or tokens.artifact_type.value != "table":
+    if (
+        sentences.artifact_type.value != "table"
+        or tokens.artifact_type.value != "table"
+    ):
         raise OperatorError("SemanticRoleLabeler requires table artifacts.")
     if not sentences.primary_key or sentences.primary_key[-1] != sentence_key:
         raise OperatorError(
@@ -468,12 +521,17 @@ def _issue(store, key, reason, detail):
 
 def _frame(value: Any, label: str) -> pd.DataFrame:
     if not isinstance(value, pd.DataFrame):
-        raise ArtifactError(f"SemanticRoleLabeler expected {label} as a pandas DataFrame.")
+        raise ArtifactError(
+            f"SemanticRoleLabeler expected {label} as a pandas DataFrame."
+        )
     return value
 
 
 def _is_cuda_oom(exc: Exception) -> bool:
-    return exc.__class__.__name__ == "OutOfMemoryError" or "cuda out of memory" in str(exc).lower()
+    return (
+        exc.__class__.__name__ == "OutOfMemoryError"
+        or "cuda out of memory" in str(exc).lower()
+    )
 
 
 def _clear_cuda_cache() -> None:

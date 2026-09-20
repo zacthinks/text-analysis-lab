@@ -52,7 +52,7 @@ class SetPrimaryKeysOperator(BaseOperator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -67,7 +67,7 @@ class SetPrimaryKeysOperator(BaseOperator):
         return {"levels": dict(self.levels), "leaf_key": self.leaf_key}
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "SetPrimaryKeysOperator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> SetPrimaryKeysOperator:
         raw_levels = state.get("levels", {})
         if not isinstance(raw_levels, Mapping):
             raise ArtifactError("Serialized set_primary_keys levels must be a mapping.")
@@ -78,8 +78,8 @@ class SetPrimaryKeysOperator(BaseOperator):
 
 
 def _resolve_level_columns(
-    project: "Project",
-    artifact: "BaseArtifact",
+    project: Project,
+    artifact: BaseArtifact,
     source_names: list[str],
 ) -> list[tuple[str, str, str]]:
     """Resolve user field names to (namespace, qualified_name, output_name)."""
@@ -184,15 +184,15 @@ def _build_hierarchical_keys(
 
 
 def set_primary_keys(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     *,
     levels: Mapping[str, str],
     leaf_key: str,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     batch_size: int = 10_000,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Replace an artifact's primary-key namespace using existing row fields.
 
     ``levels`` maps accessible source field names to new integer key names in
@@ -211,7 +211,9 @@ def set_primary_keys(
 
     normalized_levels = {str(k): str(v) for k, v in levels.items()}
     if any(not name for name in normalized_levels):
-        raise ArtifactError("set_primary_keys source level names must be non-empty strings.")
+        raise ArtifactError(
+            "set_primary_keys source level names must be non-empty strings."
+        )
     new_level_names = list(normalized_levels.values())
     leaf_key = str(leaf_key)
     if not leaf_key:
@@ -249,7 +251,9 @@ def set_primary_keys(
     # Reject null grouping values explicitly. DuckDB has deterministic NULL sort
     # rules, but treating missing substantive group labels as a real key level
     # would make the generated hierarchy harder to interpret.
-    for source_name, output_name in zip(source_names, selected_output_names, strict=True):
+    for source_name, output_name in zip(
+        source_names, selected_output_names, strict=True
+    ):
         null_sql = (
             "SELECT 1 FROM ("
             f"{view.sql}"
@@ -302,9 +306,7 @@ def set_primary_keys(
         )
     key_exprs.append(leaf_expr)
     key_sql = (
-        "SELECT "
-        + ", ".join(key_exprs)
-        + f" FROM ({view.sql}) v ORDER BY v._position"
+        "SELECT " + ", ".join(key_exprs) + f" FROM ({view.sql}) v ORDER BY v._position"
     )
 
     output_pk = [*new_level_names, leaf_key]
@@ -399,7 +401,9 @@ def set_primary_keys(
                 writer.write({"keys": key_batch})
                 written_rows += len(key_batch)
         except Exception as exc:
-            raise QueryError(f"set_primary_keys key construction failed: {exc}") from exc
+            raise QueryError(
+                f"set_primary_keys key construction failed: {exc}"
+            ) from exc
 
         if written_rows == 0:
             empty_keys = pd.DataFrame(

@@ -10,8 +10,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -50,7 +50,7 @@ class MatrixRowAggregator(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -65,7 +65,7 @@ class MatrixRowAggregator(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -100,11 +100,15 @@ class MatrixRowAggregator(BaseTranslator):
         if not isinstance(info, pd.DataFrame) or matrix is None or columns is None:
             raise ArtifactError("MatrixRowAggregator received malformed matrix data.")
         if info.empty:
-            raise ArtifactError("MatrixRowAggregator cannot aggregate an empty artifact.")
+            raise ArtifactError(
+                "MatrixRowAggregator cannot aggregate an empty artifact."
+            )
         self._validate_key(packet.primary_key)
         missing = [name for name in self.group_by if name not in info.columns]
         if missing:
-            raise ArtifactError(f"Matrix source is missing group key columns {missing}.")
+            raise ArtifactError(
+                f"Matrix source is missing group key columns {missing}."
+            )
 
         group_frame = info.loc[:, list(self.group_by)].reset_index(drop=True)
         group_index = pd.MultiIndex.from_frame(group_frame)
@@ -119,7 +123,9 @@ class MatrixRowAggregator(BaseTranslator):
                 row = row / int(counts[group_id])
             pooled_rows.append(row)
         pooled = _stack_rows(pooled_rows, matrix)
-        keys = group_frame.loc[~group_index.duplicated(keep="first")].reset_index(drop=True)
+        keys = group_frame.loc[~group_index.duplicated(keep="first")].reset_index(
+            drop=True
+        )
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
@@ -154,7 +160,7 @@ class MatrixRowAggregator(BaseTranslator):
         return {"group_by": list(self.group_by), "pooling": self.pooling}
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "MatrixRowAggregator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> MatrixRowAggregator:
         return cls(
             group_by=cast(Sequence[str], state["group_by"]),
             pooling=cast(Pooling, state.get("pooling", "mean")),
@@ -162,7 +168,10 @@ class MatrixRowAggregator(BaseTranslator):
 
     def _validate_key(self, source_key: Sequence[str]) -> None:
         source_key = tuple(str(value) for value in source_key)
-        if len(self.group_by) >= len(source_key) or source_key[: len(self.group_by)] != self.group_by:
+        if (
+            len(self.group_by) >= len(source_key)
+            or source_key[: len(self.group_by)] != self.group_by
+        ):
             raise OperatorError(
                 "group_by must be a non-empty proper prefix of the matrix primary "
                 f"key {list(source_key)}; got {list(self.group_by)}."
@@ -181,14 +190,16 @@ def _stack_rows(rows: list[Any], source: Any) -> Any:
 
 def _normalize_columns(value: str | Sequence[str]) -> tuple[str, ...]:
     columns = (value,) if isinstance(value, str) else tuple(value)
-    if not columns or any(not isinstance(column, str) or not column for column in columns):
+    if not columns or any(
+        not isinstance(column, str) or not column for column in columns
+    ):
         raise ValueError("group_by must contain non-empty string column names.")
     if len(set(columns)) != len(columns):
         raise ValueError("group_by cannot contain duplicate columns.")
     return columns
 
 
-def _single_source(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
+def _single_source(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
         raise OperatorError(
             f"MatrixRowAggregator expects exactly source label {DEFAULT_SOURCE_LABEL!r}; "

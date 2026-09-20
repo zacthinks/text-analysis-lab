@@ -11,11 +11,15 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 from scipy import sparse
 
-from text_analysis_lab.core.errors import ArtifactError, OperatorError, OperatorNotFittedError
+from text_analysis_lab.core.errors import (
+    ArtifactError,
+    OperatorError,
+    OperatorNotFittedError,
+)
 from text_analysis_lab.core.feature_subset import slice_matrix_features
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -60,8 +64,8 @@ class FeatureTrimmer(BaseTranslator):
     def __init__(
         self,
         *,
-        min_df: int | float = 1,
-        max_df: int | float = 1.0,
+        min_df: float = 1,
+        max_df: float = 1.0,
         max_features: int | None = None,
         operator_id: str | None = None,
     ) -> None:
@@ -100,7 +104,7 @@ class FeatureTrimmer(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -119,7 +123,7 @@ class FeatureTrimmer(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -132,7 +136,7 @@ class FeatureTrimmer(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -273,7 +277,7 @@ class FeatureTrimmer(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "FeatureTrimmer":
+    ) -> FeatureTrimmer:
         _ = request
         if mode != "translate" or not self.is_fitted:
             raise OperatorNotFittedError(
@@ -294,7 +298,7 @@ class FeatureTrimmer(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "FeatureTrimmer":
+    def from_json_state(cls, state: Mapping[str, Any]) -> FeatureTrimmer:
         obj = cls(
             min_df=cast(int | float, state.get("min_df", 1)),
             max_df=cast(int | float, state.get("max_df", 1.0)),
@@ -346,7 +350,7 @@ class FeatureTrimmer(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "FeatureTrimmer":
+    ) -> FeatureTrimmer:
         _ = mode, route
         state = json.loads(
             (intermediate_dir / "state.json").read_text(encoding="utf-8")
@@ -370,9 +374,11 @@ class FeatureTrimmer(BaseTranslator):
         return self.kept_indices_
 
 
-def _validate_df_threshold(value: int | float, *, name: str) -> int | float:
+def _validate_df_threshold(value: float, *, name: str) -> int | float:
     if isinstance(value, bool):
-        raise ValueError(f"{name} must be an integer count or float fraction, not bool.")
+        raise ValueError(
+            f"{name} must be an integer count or float fraction, not bool."
+        )
     if isinstance(value, int):
         if value < 1:
             raise ValueError(f"{name} integer thresholds must be >= 1.")
@@ -383,19 +389,23 @@ def _validate_df_threshold(value: int | float, *, name: str) -> int | float:
     return numeric
 
 
-def _resolve_min_df(value: int | float, n_rows: int) -> int:
-    return int(value) if isinstance(value, int) else int(math.ceil(float(value) * n_rows))
+def _resolve_min_df(value: float, n_rows: int) -> int:
+    return (
+        int(value) if isinstance(value, int) else int(math.ceil(float(value) * n_rows))
+    )
 
 
-def _resolve_max_df(value: int | float, n_rows: int) -> int:
-    return int(value) if isinstance(value, int) else int(math.floor(float(value) * n_rows))
+def _resolve_max_df(value: float, n_rows: int) -> int:
+    return (
+        int(value) if isinstance(value, int) else int(math.floor(float(value) * n_rows))
+    )
 
 
 def _fit_feature_mask(
     matrix: Any,
     *,
-    min_df: int | float,
-    max_df: int | float,
+    min_df: float,
+    max_df: float,
     max_features: int | None,
 ) -> tuple[int, ...]:
     shape = getattr(matrix, "shape", None)
@@ -410,9 +420,7 @@ def _fit_feature_mask(
     if sparse.issparse(matrix):
         csr = sparse.csr_matrix(matrix, copy=True)
         csr.eliminate_zeros()
-        document_frequency = np.asarray(
-            csr.getnnz(axis=0), dtype=np.int64
-        ).reshape(-1)
+        document_frequency = np.asarray(csr.getnnz(axis=0), dtype=np.int64).reshape(-1)
         feature_sum = np.asarray(csr.sum(axis=0), dtype=float).reshape(-1)
     else:
         dense = np.asarray(matrix)

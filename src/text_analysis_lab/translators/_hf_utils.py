@@ -40,12 +40,18 @@ def resolve_device(value: str) -> str:
             return "mps"
         return "cpu"
     if requested == "cuda" and not torch.cuda.is_available():
-        raise TransformerResourceError("device='cuda' was requested but CUDA is unavailable.")
+        raise TransformerResourceError(
+            "device='cuda' was requested but CUDA is unavailable."
+        )
     if requested == "mps":
         mps = getattr(getattr(torch, "backends", None), "mps", None)
         if mps is None or not bool(mps.is_available()):
-            raise TransformerResourceError("device='mps' was requested but MPS is unavailable.")
-    if requested not in {"cpu", "cuda", "mps"} and not re.fullmatch(r"cuda:\d+", requested):
+            raise TransformerResourceError(
+                "device='mps' was requested but MPS is unavailable."
+            )
+    if requested not in {"cpu", "cuda", "mps"} and not re.fullmatch(
+        r"cuda:\d+", requested
+    ):
         raise OperatorError(
             "device must be 'auto', 'cpu', 'cuda', 'mps', or an explicit CUDA device such as 'cuda:1'."
         )
@@ -67,7 +73,9 @@ def count_tokens(tokenizer: Any, texts: Sequence[str]) -> list[int]:
     return [len(row) for row in input_ids]
 
 
-def detect_context_limit(tokenizer: Any, config: Any = None, explicit: int | None = None) -> int:
+def detect_context_limit(
+    tokenizer: Any, config: Any = None, explicit: int | None = None
+) -> int:
     candidates: list[int] = []
     _append_finite_limit(candidates, getattr(tokenizer, "model_max_length", None))
     if config is not None:
@@ -165,8 +173,8 @@ def require_frame(value: Any, *, translator_name: str) -> pd.DataFrame:
 
 
 def single_source(
-    sources: Mapping[str, "BaseArtifact"], *, translator_name: str
-) -> "BaseArtifact":
+    sources: Mapping[str, BaseArtifact], *, translator_name: str
+) -> BaseArtifact:
     if len(sources) != 1:
         raise OperatorError(
             f"{translator_name} requires exactly one source; got {list(sources)}."
@@ -174,7 +182,9 @@ def single_source(
     return next(iter(sources.values()))
 
 
-def single_input(inputs: Mapping[str, InputBatch], *, translator_name: str) -> InputBatch:
+def single_input(
+    inputs: Mapping[str, InputBatch], *, translator_name: str
+) -> InputBatch:
     if len(inputs) != 1:
         raise OperatorError(
             f"{translator_name} requires exactly one input packet; got {list(inputs)}."

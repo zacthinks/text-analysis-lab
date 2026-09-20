@@ -18,8 +18,11 @@ from text_analysis_lab._linguistics.wsd.mwe import (
     lexical_components,
     load_or_build_multiword_lemma_index,
 )
-from text_analysis_lab._linguistics.wsd.types import GlossPayload, SenseCandidate, WSDTarget
-
+from text_analysis_lab._linguistics.wsd.types import (
+    GlossPayload,
+    SenseCandidate,
+    WSDTarget,
+)
 
 POS_MAP = {
     "NOUN": "n",
@@ -98,7 +101,9 @@ class WnOntologyProvider:
             if share_runtime:
                 _WN_RUNTIME_CACHE[runtime_key] = runtime
         self.wordnet, self.morphy = runtime
-        self._lemma_cache: dict[tuple[str, str], tuple[tuple[str, tuple[str, ...]], ...]] = {}
+        self._lemma_cache: dict[
+            tuple[str, str], tuple[tuple[str, tuple[str, ...]], ...]
+        ] = {}
         self._direct_candidate_cache: dict[
             tuple[str, str], tuple[SenseCandidate, ...]
         ] = {}
@@ -413,9 +418,7 @@ class WnOntologyProvider:
         exact = [
             word
             for word in words
-            if " ".join(
-                str(_call_or_value(word, "lemma")).replace("_", " ").split()
-            )
+            if " ".join(str(_call_or_value(word, "lemma")).replace("_", " ").split())
             == lemma
         ]
         if exact:
@@ -509,7 +512,9 @@ class WnOntologyProvider:
                         "mwe_word_id": entry.word_id,
                         "mwe_components": entry.components,
                         "mwe_trigger_lemmas": trigger_lemmas,
-                        "mwe_component_token_indices": tuple(component_token_indices or ()),
+                        "mwe_component_token_indices": tuple(
+                            component_token_indices or ()
+                        ),
                         "mwe_component_token_matches": (
                             ()
                             if component_token_indices is None
@@ -750,8 +755,10 @@ class WordNetOverlay:
     @classmethod
     def legacy_default(
         cls, *, enable_legacy_function_words: bool = False
-    ) -> "WordNetOverlay":
-        resource = files("text_analysis_lab._linguistics.resources").joinpath("legacy_wordnet_extension.json")
+    ) -> WordNetOverlay:
+        resource = files("text_analysis_lab._linguistics.resources").joinpath(
+            "legacy_wordnet_extension.json"
+        )
         return cls(
             Path(str(resource)),
             enable_legacy_function_words=enable_legacy_function_words,
@@ -807,13 +814,17 @@ class WordNetOverlay:
                     pos=candidate_pos,
                     gloss=GlossPayload(
                         definition=str(payload["definition"]),
-                        examples=tuple(str(item) for item in payload.get("examples", ())),
+                        examples=tuple(
+                            str(item) for item in payload.get("examples", ())
+                        ),
                     ),
                     sense_label=sense_id,
                     aliases=(sense_id,),
                     source="overlay",
                     metadata={
-                        "hypernyms": tuple(str(item) for item in payload.get("hypernyms", ()))
+                        "hypernyms": tuple(
+                            str(item) for item in payload.get("hypernyms", ())
+                        )
                     },
                 )
             )
@@ -823,7 +834,9 @@ class WordNetOverlay:
 class OverlayOntologyProvider:
     """Union a base WordNet inventory with editable custom candidates."""
 
-    def __init__(self, base: OntologyProvider, overlay: WordNetOverlay | None = None) -> None:
+    def __init__(
+        self, base: OntologyProvider, overlay: WordNetOverlay | None = None
+    ) -> None:
         self.base = base
         self.overlay = overlay
 
@@ -831,7 +844,9 @@ class OverlayOntologyProvider:
         return {
             "type": "overlay-union",
             "base": dict(self.base.descriptor()),
-            "overlay": None if self.overlay is None else dict(self.overlay.descriptor()),
+            "overlay": None
+            if self.overlay is None
+            else dict(self.overlay.descriptor()),
         }
 
     def resolve_reference(self, reference: str) -> SenseCandidate | None:
@@ -864,9 +879,7 @@ class OverlayOntologyProvider:
                 candidates.extend(self.overlay.custom_candidates(overlay_lemma, pos))
                 if resolver is not None:
                     for reference in self.overlay.native_references(overlay_lemma, pos):
-                        resolved = resolver(
-                            reference, lemma=overlay_lemma, pos=pos
-                        )
+                        resolved = resolver(reference, lemma=overlay_lemma, pos=pos)
                         if resolved is not None:
                             candidates.append(resolved)
         deduplicated: dict[str, SenseCandidate] = {}
@@ -879,7 +892,6 @@ class OverlayOntologyProvider:
                     existing, candidate
                 )
         return tuple(deduplicated.values())
-
 
 
 def _mwe_entry_token_assignment(
@@ -955,12 +967,15 @@ def _mwe_entry_is_licensed(
 ) -> bool:
     """Compatibility Boolean wrapper around deterministic assignment."""
 
-    return _mwe_entry_token_assignment(
-        entry,
-        trigger_lemmas=trigger_lemmas,
-        target=target,
-        token_forms=token_forms,
-    ) is not None
+    return (
+        _mwe_entry_token_assignment(
+            entry,
+            trigger_lemmas=trigger_lemmas,
+            target=target,
+            token_forms=token_forms,
+        )
+        is not None
+    )
 
 
 def _assign_distinct_component_tokens(
@@ -988,6 +1003,7 @@ def _assign_distinct_component_tokens(
         assignment[component_index] = None
         used.remove(token_index)
     return False
+
 
 def _merge_synset_candidates(
     first: SenseCandidate, second: SenseCandidate
@@ -1018,9 +1034,7 @@ def _merge_synset_candidates(
             )
         )
     )
-    metadata["candidate_kinds"] = tuple(
-        dict.fromkeys((first_kind, second_kind))
-    )
+    metadata["candidate_kinds"] = tuple(dict.fromkeys((first_kind, second_kind)))
     mwe_lemmas = tuple(
         dict.fromkeys(
             str(value)
@@ -1054,7 +1068,11 @@ def _merge_synset_candidates(
                     (
                         *primary.aliases,
                         *other.aliases,
-                        *(() if primary.sense_label is None else (primary.sense_label,)),
+                        *(
+                            ()
+                            if primary.sense_label is None
+                            else (primary.sense_label,)
+                        ),
                         *(() if other.sense_label is None else (other.sense_label,)),
                     )
                 )

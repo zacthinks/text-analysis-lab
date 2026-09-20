@@ -15,7 +15,9 @@ from text_analysis_lab.translators import DelimiterDecomposer
 def _documents(project: teal.Project, tmp_path: Path):
     path = tmp_path / "docs.csv"
     pd.DataFrame({"text": ["a|b", "c|d|e", "f|g"]}).to_csv(path, index=False)
-    return project.read_csv(path, text_fields="text", metadata_fields=None, alias="docs")
+    return project.read_csv(
+        path, text_fields="text", metadata_fields=None, alias="docs"
+    )
 
 
 def test_restrict_alias_reuses_even_when_new_call_arguments_change(tmp_path, capsys):
@@ -23,7 +25,9 @@ def test_restrict_alias_reuses_even_when_new_call_arguments_change(tmp_path, cap
     try:
         docs = _documents(project, tmp_path)
         segments = project.translate(
-            DelimiterDecomposer(delimiter="|", new_key="segment_id"), docs, alias="segments"
+            DelimiterDecomposer(delimiter="|", new_key="segment_id"),
+            docs,
+            alias="segments",
         )["output"]
         domain_a = project.select_keys(docs, [0, 1])
         domain_b = project.select_keys(docs, [2])
@@ -65,6 +69,9 @@ def test_aggregate_alias_reuses_then_overwrites_when_requested(tmp_path):
             overwrite=True,
         )
         assert rebuilt.artifact_id != first.artifact_id
-        assert project.get_artifact("document_text_rollup").artifact_id == rebuilt.artifact_id
+        assert (
+            project.get_artifact("document_text_rollup").artifact_id
+            == rebuilt.artifact_id
+        )
     finally:
         project.close()

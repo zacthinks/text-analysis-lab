@@ -12,15 +12,14 @@ CC BY-NC-SA 4.0 license. See https://huggingface.co/Babelscape/wsl-reader-debert
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 DEFAULT_WSL_READER_MODEL = "Babelscape/wsl-reader-deberta-v3-base"
 DEFAULT_WSL_READER_REVISION = "809d05bd12f261d26b42e28dc2b31db430c1585c"
-DEFAULT_DEBERTA_V3_BASE_CONFIG_REVISION = (
-    "5f32929a4206c500f4044bf7778298aedc77531a"
-)
+DEFAULT_DEBERTA_V3_BASE_CONFIG_REVISION = "5f32929a4206c500f4044bf7778298aedc77531a"
 DEFAULT_MAX_LENGTH = 1000
 DEFAULT_MAX_CANDIDATE_SUBWORDS = 22
 MAX_CANDIDATES = 100
@@ -174,7 +173,9 @@ class LocalWSLReaderRuntime:
                 candidate_symbol_positions=packed.candidate_symbol_positions,
             )
         return WSLReaderScores(
-            candidate_logits=tuple(float(value) for value in candidate_logits.cpu().tolist()),
+            candidate_logits=tuple(
+                float(value) for value in candidate_logits.cpu().tolist()
+            ),
             candidate_probabilities=tuple(
                 float(value) for value in candidate_probabilities.cpu().tolist()
             ),
@@ -232,18 +233,21 @@ def build_wsl_reader_input(
             "A fast tokenizer that batch-encodes each supplied token is required."
         )
     token_piece_ids = [list(piece_ids) for piece_ids in token_piece_ids]
-    empty_tokens = [index for index, piece_ids in enumerate(token_piece_ids) if not piece_ids]
+    empty_tokens = [
+        index for index, piece_ids in enumerate(token_piece_ids) if not piece_ids
+    ]
     if empty_tokens:
         # This is an input-specific encoding limitation, not evidence that the
         # checkpoint/runtime is broken.  score_wsd_targets treats ValueError as
         # an unresolved target while still failing fast on systemic model errors.
         raise ValueError(
-            "WSL tokenizer produced no subwords for token indices "
-            f"{empty_tokens[:5]}."
+            f"WSL tokenizer produced no subwords for token indices {empty_tokens[:5]}."
         )
 
     sentence_ids = [piece for piece_ids in token_piece_ids for piece in piece_ids]
-    target_start_position = 1 + sum(len(piece_ids) for piece_ids in token_piece_ids[:target_start])
+    target_start_position = 1 + sum(
+        len(piece_ids) for piece_ids in token_piece_ids[:target_start]
+    )
     target_end_position = (
         1 + sum(len(piece_ids) for piece_ids in token_piece_ids[:target_end]) - 1
     )
@@ -299,7 +303,9 @@ def build_wsl_reader_input(
         candidate_encodings.append(candidate_ids)
         next_position += len(candidate_ids)
 
-    flat_candidate_ids = nme_ids + [piece for ids in candidate_encodings for piece in ids]
+    flat_candidate_ids = nme_ids + [
+        piece for ids in candidate_encodings for piece in ids
+    ]
     input_ids = (
         [tokenizer.cls_token_id]
         + sentence_ids
@@ -381,7 +387,9 @@ def _build_disambiguation_model(
                 ),
             )
 
-        def _features(self, input_ids: Any, attention_mask: Any, token_type_ids: Any) -> Any:
+        def _features(
+            self, input_ids: Any, attention_mask: Any, token_type_ids: Any
+        ) -> Any:
             output = self.transformer_model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -389,7 +397,9 @@ def _build_disambiguation_model(
                 output_hidden_states=self.use_last_k_layers > 1,
             )
             if self.use_last_k_layers > 1:
-                return torch.cat(output.hidden_states[-self.use_last_k_layers :], dim=-1)
+                return torch.cat(
+                    output.hidden_states[-self.use_last_k_layers :], dim=-1
+                )
             return output.last_hidden_state
 
         def score_predefined_target(
@@ -404,7 +414,9 @@ def _build_disambiguation_model(
             candidate_symbol_positions: Sequence[int],
         ) -> tuple[Any, Any, Any, Any, Any, Any]:
             features = self._features(input_ids, attention_mask, token_type_ids)
-            target_start = features[:, target_start_position : target_start_position + 1, :]
+            target_start = features[
+                :, target_start_position : target_start_position + 1, :
+            ]
             target_end = features[:, target_end_position : target_end_position + 1, :]
             # Match the released reader's class layout exactly: CLS is NONE,
             # --NME-- is the explicit no-meaning class, and candidates begin at class 2.
@@ -412,7 +424,10 @@ def _build_disambiguation_model(
             class_features = features[:, class_positions, :]
 
             target_representation = torch.cat(
-                [self.ed_start_projector(target_start), self.ed_end_projector(target_end)],
+                [
+                    self.ed_start_projector(target_start),
+                    self.ed_end_projector(target_end),
+                ],
                 dim=-1,
             )
             class_representation = torch.cat(
@@ -485,11 +500,13 @@ def _resolve_checkpoint_files(
 
 
 def _validate_checkpoint_load(incompatibility: Any) -> None:
-    required_prefixes = ("transformer_model.", "ed_start_projector.", "ed_end_projector.")
+    required_prefixes = (
+        "transformer_model.",
+        "ed_start_projector.",
+        "ed_end_projector.",
+    )
     missing_required = [
-        key
-        for key in incompatibility.missing_keys
-        if key.startswith(required_prefixes)
+        key for key in incompatibility.missing_keys if key.startswith(required_prefixes)
     ]
     if missing_required:
         raise RuntimeError(
@@ -504,8 +521,7 @@ def _validate_checkpoint_load(incompatibility: Any) -> None:
     if unexpected:
         raise RuntimeError(
             "The WSL checkpoint contains unrecognized parameters outside the intentionally "
-            "discarded span detector: "
-            + ", ".join(unexpected[:10])
+            "discarded span detector: " + ", ".join(unexpected[:10])
         )
 
 

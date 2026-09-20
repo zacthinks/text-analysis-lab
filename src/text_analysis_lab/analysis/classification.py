@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -47,16 +47,18 @@ class ClassificationEvaluation:
         """Return raw counts or inverse-probability weighted estimated totals."""
         if weighted:
             if self.weighted_confusion is None:
-                raise ValueError("This evaluation has no design-weighted confusion matrix.")
+                raise ValueError(
+                    "This evaluation has no design-weighted confusion matrix."
+                )
             return self.weighted_confusion.copy()
         return self.raw_confusion.copy()
 
 
 def classification(
-    predictions: "BaseArtifact",
+    predictions: BaseArtifact,
     *,
-    gold: "BaseArtifact | str",
-    pi: "BaseArtifact | str | None" = None,
+    gold: BaseArtifact | str,
+    pi: BaseArtifact | str | None = None,
     prediction_field: str = "prediction",
     gold_field: str = "label",
     pi_field: str = "pi",
@@ -80,13 +82,19 @@ def classification(
     if not keys:
         raise ArtifactError("Gold artifact has no primary key.")
     if tuple(str(value) for value in predictions.primary_key) != keys:
-        raise ArtifactError("Prediction and gold artifacts must use the same primary-key columns.")
+        raise ArtifactError(
+            "Prediction and gold artifacts must use the same primary-key columns."
+        )
 
     pred_col = "__teal_prediction__"
     gold_col = "__teal_gold__"
     pi_col = "__teal_pi__"
-    pred = _frame(predictions, prediction_field).rename(columns={prediction_field: pred_col})
-    gold_frame = _frame(gold_artifact, gold_field).rename(columns={gold_field: gold_col})
+    pred = _frame(predictions, prediction_field).rename(
+        columns={prediction_field: pred_col}
+    )
+    gold_frame = _frame(gold_artifact, gold_field).rename(
+        columns={gold_field: gold_col}
+    )
     _validate_unique(pred, keys, role="predictions")
     _validate_unique(gold_frame, keys, role="gold")
 
@@ -113,7 +121,9 @@ def classification(
 
     _require_fields(pi_artifact, pi_field, role="pi")
     if tuple(str(value) for value in pi_artifact.primary_key) != keys:
-        raise ArtifactError("pi and gold artifacts must use the same primary-key columns.")
+        raise ArtifactError(
+            "pi and gold artifacts must use the same primary-key columns."
+        )
     pi_frame = _frame(pi_artifact, pi_field).rename(columns={pi_field: pi_col})
     _validate_unique(pi_frame, keys, role="pi")
     if set(_key_tuples(pi_frame, keys)) != set(_key_tuples(gold_frame, keys)):
@@ -127,7 +137,11 @@ def classification(
         sort=False,
     )
     inclusion = pd.to_numeric(merged_pi[pi_col], errors="coerce").to_numpy(dtype=float)
-    if np.any(~np.isfinite(inclusion)) or np.any(inclusion <= 0) or np.any(inclusion > 1):
+    if (
+        np.any(~np.isfinite(inclusion))
+        or np.any(inclusion <= 0)
+        or np.any(inclusion > 1)
+    ):
         raise ArtifactError("pi values must be finite and satisfy 0 < pi <= 1.")
     weights = 1.0 / inclusion
     weighted_conf = _confusion(y_true, y_pred, weights=weights)
@@ -140,7 +154,7 @@ def classification(
     )
 
 
-def _frame(artifact: "BaseArtifact", field: str) -> pd.DataFrame:
+def _frame(artifact: BaseArtifact, field: str) -> pd.DataFrame:
     value = artifact.query(
         key_columns=True,
         data_columns=[field],
@@ -153,7 +167,7 @@ def _frame(artifact: "BaseArtifact", field: str) -> pd.DataFrame:
     return value.reset_index(drop=True)
 
 
-def _require_fields(artifact: "BaseArtifact", field: str, *, role: str) -> None:
+def _require_fields(artifact: BaseArtifact, field: str, *, role: str) -> None:
     columns = [str(value) for value in artifact.get_data_columns()]
     if field not in columns:
         raise ArtifactError(

@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from text_analysis_lab.core.errors import OperatorError, OperatorNotFittedError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -84,11 +84,15 @@ class TfidfTransformer(BaseTranslator):
         return self.is_fitted
 
     def supports_resume(self, *, mode: TranslationMode, route: RunRoute) -> bool:
-        return route == "sequential" and mode in {"fit_translate", "translate"} or (
-            mode == "translate" and route == "parallel"
+        return (
+            route == "sequential"
+            and mode in {"fit_translate", "translate"}
+            or (mode == "translate" and route == "parallel")
         )
 
-    def output_specs(self, *, sources: Mapping[str, "BaseArtifact"], request: TranslationRequest) -> OutputSpec:
+    def output_specs(
+        self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest
+    ) -> OutputSpec:
         _ = request
         single_source(sources, name="TfidfTransformer")
         return OutputSpec(
@@ -97,37 +101,68 @@ class TfidfTransformer(BaseTranslator):
             basis_labels=DEFAULT_SOURCE_LABEL,
         )
 
-    def validate_operation_params(self, params: Mapping[str, Any], *, sources: Mapping[str, "BaseArtifact"], mode: TranslationMode) -> Mapping[str, Any]:
+    def validate_operation_params(
+        self,
+        params: Mapping[str, Any],
+        *,
+        sources: Mapping[str, BaseArtifact],
+        mode: TranslationMode,
+    ) -> Mapping[str, Any]:
         _ = sources, mode
         if params:
-            raise OperatorError(f"TfidfTransformer does not accept operation parameters; got {sorted(params)}.")
+            raise OperatorError(
+                f"TfidfTransformer does not accept operation parameters; got {sorted(params)}."
+            )
         return {}
 
-    def input_request(self, *, sources: Mapping[str, "BaseArtifact"], mode: TranslationMode, request: TranslationRequest) -> SourceRequest:
+    def input_request(
+        self,
+        *,
+        sources: Mapping[str, BaseArtifact],
+        mode: TranslationMode,
+        request: TranslationRequest,
+    ) -> SourceRequest:
         source = single_source(sources, name="TfidfTransformer")
         if source.artifact_type.value not in {"sparse_matrix", "dense_matrix"}:
-            raise OperatorError("TfidfTransformer requires a sparse_matrix or dense_matrix source.")
+            raise OperatorError(
+                "TfidfTransformer requires a sparse_matrix or dense_matrix source."
+            )
         self.source_features_ = establish_or_validate_features(
-            self.source_features_, source.get_data_columns(), fitted=self.is_fitted, name="TfidfTransformer"
+            self.source_features_,
+            source.get_data_columns(),
+            fitted=self.is_fitted,
+            name="TfidfTransformer",
         )
         return SourceRequest(
             artifact_type=("sparse_matrix", "dense_matrix"),
             mode="full_artifact" if mode == "fit_translate" else "batches",
             columns=ColumnRequest(keys=True, data=True, metadata=False),
-            batch_size=None if mode == "fit_translate" else (request.batch_size or 10_000),
+            batch_size=None
+            if mode == "fit_translate"
+            else (request.batch_size or 10_000),
             form="native",
             metadata_mode="none",
             include_position=False,
         )
 
-    def translate_batch(self, inputs: Mapping[str, InputBatch], *, mode: TranslationMode, request: TranslationRequest) -> BatchResult:
+    def translate_batch(
+        self,
+        inputs: Mapping[str, InputBatch],
+        *,
+        mode: TranslationMode,
+        request: TranslationRequest,
+    ) -> BatchResult:
         _ = request
         packet = single_input(inputs, name="TfidfTransformer")
-        info, matrix, key_columns = native_matrix_packet(packet, name="TfidfTransformer")
+        info, matrix, key_columns = native_matrix_packet(
+            packet, name="TfidfTransformer"
+        )
         require_nonnegative(matrix, name="TfidfTransformer")
         if mode == "fit_translate":
             if self.is_fitted:
-                raise OperatorError("fit_translate received an already fitted TfidfTransformer.")
+                raise OperatorError(
+                    "fit_translate received an already fitted TfidfTransformer."
+                )
             transformer = self._make_transformer()
             values = transformer.fit_transform(matrix)
             self._transformer = transformer
@@ -135,10 +170,17 @@ class TfidfTransformer(BaseTranslator):
             values = self._require_transformer().transform(matrix)
         else:  # pragma: no cover
             raise OperatorError(f"Unsupported TfidfTransformer mode {mode!r}.")
-        return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: {
-            "keys": key_frame(info, key_columns),
-            "data": {"values": values.tocsr(), "columns": list(self._require_features())},
-        }})
+        return BatchResult(
+            outputs={
+                DEFAULT_OUTPUT_LABEL: {
+                    "keys": key_frame(info, key_columns),
+                    "data": {
+                        "values": values.tocsr(),
+                        "columns": list(self._require_features()),
+                    },
+                }
+            }
+        )
 
     def transform_external_matrix(
         self,
@@ -156,19 +198,37 @@ class TfidfTransformer(BaseTranslator):
         _ = query
         return input_kind == "matrix" and self.is_fitted
 
-    def handle_batch_result(self, result: BatchResult, *, batch_index: int, mode: TranslationMode, request: TranslationRequest) -> OutputMap | None:
+    def handle_batch_result(
+        self,
+        result: BatchResult,
+        *,
+        batch_index: int,
+        mode: TranslationMode,
+        request: TranslationRequest,
+    ) -> OutputMap | None:
         _ = batch_index, mode, request
         return result.outputs
 
-    def finalize_translation(self, *, mode: TranslationMode, request: TranslationRequest) -> OutputMap | None:
+    def finalize_translation(
+        self, *, mode: TranslationMode, request: TranslationRequest
+    ) -> OutputMap | None:
         _ = mode, request
         return None
 
-    def make_translate_worker(self, *, mode: TranslationMode, request: TranslationRequest) -> "TfidfTransformer":
+    def make_translate_worker(
+        self, *, mode: TranslationMode, request: TranslationRequest
+    ) -> TfidfTransformer:
         _ = request
         if mode != "translate" or not self.is_fitted:
-            raise OperatorNotFittedError("Parallel TfidfTransformer workers require fitted IDF state.")
-        worker = TfidfTransformer(norm=self.norm, use_idf=self.use_idf, smooth_idf=self.smooth_idf, sublinear_tf=self.sublinear_tf)
+            raise OperatorNotFittedError(
+                "Parallel TfidfTransformer workers require fitted IDF state."
+            )
+        worker = TfidfTransformer(
+            norm=self.norm,
+            use_idf=self.use_idf,
+            smooth_idf=self.smooth_idf,
+            sublinear_tf=self.sublinear_tf,
+        )
         worker.source_features_ = self._require_features()
         worker._transformer = clone_estimator(self._require_transformer())
         return worker
@@ -179,12 +239,14 @@ class TfidfTransformer(BaseTranslator):
             "use_idf": self.use_idf,
             "smooth_idf": self.smooth_idf,
             "sublinear_tf": self.sublinear_tf,
-            "source_features": None if self.source_features_ is None else list(self.source_features_),
+            "source_features": None
+            if self.source_features_ is None
+            else list(self.source_features_),
             "is_fitted": self.is_fitted,
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "TfidfTransformer":
+    def from_json_state(cls, state: Mapping[str, Any]) -> TfidfTransformer:
         obj = cls(
             norm=cast(str | None, state.get("norm")),
             use_idf=bool(state.get("use_idf", True)),
@@ -209,28 +271,51 @@ class TfidfTransformer(BaseTranslator):
         if filename is None:
             return
         if not isinstance(filename, str) or not filename:
-            raise OperatorError("TfidfTransformer asset manifest has invalid estimator_file.")
+            raise OperatorError(
+                "TfidfTransformer asset manifest has invalid estimator_file."
+            )
         self._transformer = load_estimator(assets_dir / filename)
 
-    def save_intermediate_state(self, intermediate_dir: Path, *, operator_id: str, mode: TranslationMode, route: RunRoute) -> None:
+    def save_intermediate_state(
+        self,
+        intermediate_dir: Path,
+        *,
+        operator_id: str,
+        mode: TranslationMode,
+        route: RunRoute,
+    ) -> None:
         _ = mode, route
         intermediate_dir.mkdir(parents=True, exist_ok=True)
         state = self.to_json_state()
         state["assets"] = dict(self.save_assets(intermediate_dir))
         state["operator_id"] = operator_id
-        (intermediate_dir / "state.json").write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+        (intermediate_dir / "state.json").write_text(
+            json.dumps(state, indent=2, sort_keys=True), encoding="utf-8"
+        )
 
     @classmethod
-    def load_intermediate_state(cls, intermediate_dir: Path, *, operator_id: str, mode: TranslationMode, route: RunRoute) -> "TfidfTransformer":
+    def load_intermediate_state(
+        cls,
+        intermediate_dir: Path,
+        *,
+        operator_id: str,
+        mode: TranslationMode,
+        route: RunRoute,
+    ) -> TfidfTransformer:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         obj = cls.from_json_state(state)
         obj.load_assets(intermediate_dir, state.get("assets", {}))
         obj.operator_id = operator_id
         return obj
 
     def _make_transformer(self):
-        from sklearn.feature_extraction.text import TfidfTransformer as SklearnTfidfTransformer
+        from sklearn.feature_extraction.text import (
+            TfidfTransformer as SklearnTfidfTransformer,
+        )
+
         return SklearnTfidfTransformer(
             norm=self.norm,
             use_idf=self.use_idf,

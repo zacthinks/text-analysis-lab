@@ -12,8 +12,13 @@ from typing import TYPE_CHECKING, Any
 from text_analysis_lab.core.errors import ArtifactError
 from text_analysis_lab.core.ids import next_id
 from text_analysis_lab.core.lineage import validate_primary_key_relationship
-from text_analysis_lab.core.operator import BaseOperator, OutputSpec, TranslationRequest, validate_output_label
-from text_analysis_lab.core.types import ArtifactType, DEFAULT_OUTPUT_LABEL
+from text_analysis_lab.core.operator import (
+    BaseOperator,
+    OutputSpec,
+    TranslationRequest,
+    validate_output_label,
+)
+from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, ArtifactType
 from text_analysis_lab.core.writer import create_artifact_writer
 
 if TYPE_CHECKING:
@@ -29,12 +34,14 @@ class JoinOperator(BaseOperator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> Mapping[str, OutputSpec]:
         _ = request
         if len(sources) < 2:
-            raise ArtifactError("Join requires a basis artifact and at least one additional artifact.")
+            raise ArtifactError(
+                "Join requires a basis artifact and at least one additional artifact."
+            )
         first = next(iter(sources.values()))
         return {
             DEFAULT_OUTPUT_LABEL: OutputSpec(
@@ -46,13 +53,13 @@ class JoinOperator(BaseOperator):
 
 
 def join(
-    project: "Project",
-    basis: "BaseArtifact | str",
-    *others: "BaseArtifact | str",
+    project: Project,
+    basis: BaseArtifact | str,
+    *others: BaseArtifact | str,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     batch_size: int = 10_000,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Lazily compose fields onto the first artifact's exact key universe/order.
 
     Every source must be a relational (table/JSONL) artifact with exactly the
@@ -60,7 +67,10 @@ def join(
     Later-only keys are ignored; missing later matches resolve as null. The
     result owns keys only and resolves source data/metadata lazily at query time.
     """
-    sources = [project.get_artifact(basis), *[project.get_artifact(ref) for ref in others]]
+    sources = [
+        project.get_artifact(basis),
+        *[project.get_artifact(ref) for ref in others],
+    ]
     if len(sources) < 2:
         raise ArtifactError("join requires at least two artifacts.")
     output_label = validate_output_label(output_label)
@@ -76,7 +86,9 @@ def join(
         snapshot_status="pending",
     )
     try:
-        operator.save_to_dir(project.storage.operator_dir(operator_id), operator_id=operator_id)
+        operator.save_to_dir(
+            project.storage.operator_dir(operator_id), operator_id=operator_id
+        )
         project.catalog.mark_operator_serialized(operator_id)
     except Exception:
         project.catalog.mark_operator_snapshot_failed(operator_id)
@@ -91,7 +103,10 @@ def join(
         operator_id=operator_id,
         status="incomplete",
     )
-    source_labels = ["basis", *[f"source_{index:04d}" for index in range(1, len(sources))]]
+    source_labels = [
+        "basis",
+        *[f"source_{index:04d}" for index in range(1, len(sources))],
+    ]
     for label, source in zip(source_labels, sources, strict=True):
         project.catalog.add_operation_source(operation_id, label, source.artifact_id)
 
@@ -106,7 +121,9 @@ def join(
         status="incomplete",
         basis_artifact_ids=basis_ids,
     )
-    project.catalog.add_operation_output(operation_id, output_label, artifact_id, ordinal=0)
+    project.catalog.add_operation_output(
+        operation_id, output_label, artifact_id, ordinal=0
+    )
     writer = create_artifact_writer(
         artifact_type=artifact_type,
         artifact_dir=project.storage.artifact_dir(artifact_id),
@@ -138,7 +155,9 @@ def join(
 
     try:
         if memo is not None:
-            project.catalog.add_memo(target_type="operation", target_id=operation_id, body=memo)
+            project.catalog.add_memo(
+                target_type="operation", target_id=operation_id, body=memo
+            )
         key_columns = list(sources[0].primary_key)
         for frame in sources[0].query(
             key_columns=True,
@@ -185,7 +204,7 @@ def join(
         raise
 
 
-def _validate_sources(project: "Project", sources: Sequence["BaseArtifact"]) -> None:
+def _validate_sources(project: Project, sources: Sequence[BaseArtifact]) -> None:
     first = sources[0]
     first.require_complete()
     allowed = {ArtifactType.TABLE, ArtifactType.JSONL}
@@ -213,7 +232,9 @@ def _validate_sources(project: "Project", sources: Sequence["BaseArtifact"]) -> 
     _validate_field_collisions(project, sources)
 
 
-def _validate_field_collisions(project: "Project", sources: Sequence["BaseArtifact"]) -> None:
+def _validate_field_collisions(
+    project: Project, sources: Sequence[BaseArtifact]
+) -> None:
     """Reject new same-namespace base-name collisions across joined sources.
 
     A single source may already expose qualified ambiguous columns; ``join`` does

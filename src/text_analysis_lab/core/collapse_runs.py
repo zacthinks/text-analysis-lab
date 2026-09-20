@@ -32,9 +32,21 @@ from text_analysis_lab.core.aggregate import (
 )
 from text_analysis_lab.core.errors import ArtifactError, QueryError
 from text_analysis_lab.core.ids import next_id
-from text_analysis_lab.core.lineage import expected_span_key, validate_primary_key_relationship
-from text_analysis_lab.core.operator import BaseOperator, OutputSpec, TranslationRequest, validate_output_label
-from text_analysis_lab.core.types import ArtifactType, DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.core.lineage import (
+    expected_span_key,
+    validate_primary_key_relationship,
+)
+from text_analysis_lab.core.operator import (
+    BaseOperator,
+    OutputSpec,
+    TranslationRequest,
+    validate_output_label,
+)
+from text_analysis_lab.core.types import (
+    DEFAULT_OUTPUT_LABEL,
+    DEFAULT_SOURCE_LABEL,
+    ArtifactType,
+)
 from text_analysis_lab.core.utils import quote_identifier
 from text_analysis_lab.core.writer import create_artifact_writer
 
@@ -64,12 +76,14 @@ class CollapseRunsOperator(BaseOperator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
         if len(sources) != 1:
-            raise ArtifactError("CollapseRunsOperator expects exactly one source artifact.")
+            raise ArtifactError(
+                "CollapseRunsOperator expects exactly one source artifact."
+            )
         return OutputSpec(
             artifact_type=ArtifactType.TABLE,
             lineage_mode="span_key",
@@ -84,10 +98,12 @@ class CollapseRunsOperator(BaseOperator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "CollapseRunsOperator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> CollapseRunsOperator:
         raw_by = state.get("by", ())
         if isinstance(raw_by, str) or not isinstance(raw_by, Sequence):
-            raise ArtifactError("Serialized collapse_runs by must be a sequence of field names.")
+            raise ArtifactError(
+                "Serialized collapse_runs by must be a sequence of field names."
+            )
         data_spec = state.get("data_spec")
         metadata_spec = state.get("metadata_spec")
         return cls(
@@ -98,8 +114,8 @@ class CollapseRunsOperator(BaseOperator):
 
 
 def collapse_runs(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     *,
     by: str | Sequence[str],
     data: FieldAggregationSpec | None = None,
@@ -107,7 +123,7 @@ def collapse_runs(
     output_label: str = DEFAULT_OUTPUT_LABEL,
     batch_size: int = 10_000,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Collapse maximal adjacent runs into one span-key row per run.
 
     Runs are discovered in current artifact position order independently within
@@ -159,7 +175,9 @@ def collapse_runs(
     )
 
     resolved_data = _resolve_rule_sources(view, data_rules, namespace="data")
-    resolved_metadata = _resolve_rule_sources(view, metadata_rules, namespace="metadata")
+    resolved_metadata = _resolve_rule_sources(
+        view, metadata_rules, namespace="metadata"
+    )
 
     operator = CollapseRunsOperator(
         by=by_fields,
@@ -218,7 +236,9 @@ def collapse_runs(
         if not wrote_any:
             payload = {
                 "keys": pd.DataFrame(columns=list(output_pk)),
-                "metadata": pd.DataFrame(columns=[*by_output_names, "n_rows", *metadata_names]),
+                "metadata": pd.DataFrame(
+                    columns=[*by_output_names, "n_rows", *metadata_names]
+                ),
             }
             if data_names:
                 payload["data"] = pd.DataFrame(columns=data_names)
@@ -249,7 +269,9 @@ def _normalize_by(by: str | Sequence[str]) -> tuple[str, ...]:
     return tuple(str(value) for value in values)
 
 
-def _resolve_by_fields(view: Any, by_fields: Sequence[str]) -> list[tuple[str, str, str]]:
+def _resolve_by_fields(
+    view: Any, by_fields: Sequence[str]
+) -> list[tuple[str, str, str]]:
     """Return ``(namespace, resolved_output_name, local_metadata_name)`` per field."""
     resolved: list[tuple[str, str, str]] = []
     for requested in by_fields:
@@ -323,7 +345,9 @@ def _collapse_sql(
     by_output_names = [item[2] for item in resolved_by]
 
     partition = (
-        "PARTITION BY " + ", ".join(quote_identifier(name) for name in parent_cols) + " "
+        "PARTITION BY "
+        + ", ".join(quote_identifier(name) for name in parent_cols)
+        + " "
         if parent_cols
         else ""
     )
@@ -354,7 +378,8 @@ def _collapse_sql(
     )
 
     join_parts = [
-        f"b.{quote_identifier(name)} = r.{quote_identifier(name)}" for name in parent_cols
+        f"b.{quote_identifier(name)} = r.{quote_identifier(name)}"
+        for name in parent_cols
     ]
     join_parts.extend(
         [
@@ -365,7 +390,10 @@ def _collapse_sql(
     join_sql = " AND ".join(join_parts)
 
     final_select: list[str] = [
-        *[f"m.{quote_identifier(name)} AS {quote_identifier(name)}" for name in parent_cols],
+        *[
+            f"m.{quote_identifier(name)} AS {quote_identifier(name)}"
+            for name in parent_cols
+        ],
         f"m.{quote_identifier(start_col)} AS {quote_identifier(start_col)}",
         f"m.{quote_identifier(end_col)} AS {quote_identifier(end_col)}",
     ]
@@ -426,7 +454,7 @@ marked AS (
 numbered AS (
     SELECT marked.*,
            SUM(__teal_boundary) OVER (
-               {partition}ORDER BY {quote_identifier('_position')}
+               {partition}ORDER BY {quote_identifier("_position")}
                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
            ) AS __teal_run_id
     FROM marked
@@ -436,7 +464,7 @@ runs AS (
            __teal_run_id,
            MIN({quote_identifier(leaf_col)}) AS {quote_identifier(start_col)},
            MAX({quote_identifier(leaf_col)}) AS {quote_identifier(end_col)},
-           MIN({quote_identifier('_position')}) AS __teal_run_first_position
+           MIN({quote_identifier("_position")}) AS __teal_run_first_position
            {run_extra}
     FROM numbered
     GROUP BY {run_group_sql}
@@ -447,21 +475,21 @@ members AS (
            r.{quote_identifier(end_col)} AS {quote_identifier(end_col)},
            r.__teal_run_id,
            r.__teal_run_first_position,
-           {', '.join(f'r.{quote_identifier(f"__teal_run_by_{i}")} AS {quote_identifier(f"__teal_run_by_{i}")}' for i in range(len(by_source_names)))}
+           {", ".join(f"r.{quote_identifier(f"__teal_run_by_{i}")} AS {quote_identifier(f"__teal_run_by_{i}")}" for i in range(len(by_source_names)))}
     FROM runs r
     JOIN base b ON {join_sql}
 )
-SELECT {', '.join(final_select)}
+SELECT {", ".join(final_select)}
 FROM members m
-GROUP BY {', '.join(final_group_cols)}
+GROUP BY {", ".join(final_group_cols)}
 ORDER BY __teal_first_position
 """.strip()
     return sql, postprocess
 
 
 def _start_operation(
-    project: "Project",
-    artifact: "BaseArtifact",
+    project: Project,
+    artifact: BaseArtifact,
     *,
     operator: CollapseRunsOperator,
     output_label: str,
@@ -478,7 +506,9 @@ def _start_operation(
         snapshot_status="pending",
     )
     try:
-        operator.save_to_dir(project.storage.operator_dir(operator_id), operator_id=operator_id)
+        operator.save_to_dir(
+            project.storage.operator_dir(operator_id), operator_id=operator_id
+        )
         project.catalog.mark_operator_serialized(operator_id)
     except Exception:
         project.catalog.mark_operator_snapshot_failed(operator_id)
@@ -493,7 +523,9 @@ def _start_operation(
         operator_id=operator_id,
         status="incomplete",
     )
-    project.catalog.add_operation_source(operation_id, DEFAULT_SOURCE_LABEL, artifact.artifact_id)
+    project.catalog.add_operation_source(
+        operation_id, DEFAULT_SOURCE_LABEL, artifact.artifact_id
+    )
 
     artifact_id = next_id(project.storage.manifest_path, "artifact")
     project.catalog.register_artifact(
@@ -504,7 +536,9 @@ def _start_operation(
         status="incomplete",
         basis_artifact_ids=(artifact.artifact_id,),
     )
-    project.catalog.add_operation_output(operation_id, output_label, artifact_id, ordinal=0)
+    project.catalog.add_operation_output(
+        operation_id, output_label, artifact_id, ordinal=0
+    )
     writer = create_artifact_writer(
         artifact_type=ArtifactType.TABLE,
         artifact_dir=project.storage.artifact_dir(artifact_id),
@@ -535,7 +569,9 @@ def _start_operation(
     }
     _write_descriptor(operation_dir, descriptor)
     if memo is not None:
-        project.catalog.add_memo(target_type="operation", target_id=operation_id, body=memo)
+        project.catalog.add_memo(
+            target_type="operation", target_id=operation_id, body=memo
+        )
 
     return {
         "operator_id": operator_id,
@@ -548,12 +584,12 @@ def _start_operation(
 
 
 def _finish_operation(
-    project: "Project",
-    artifact: "BaseArtifact",
+    project: Project,
+    artifact: BaseArtifact,
     *,
     output_pk: Sequence[str],
     operation: Mapping[str, Any],
-) -> "BaseArtifact":
+) -> BaseArtifact:
     writer = operation["writer"]
     writer.finalize()
     validate_primary_key_relationship(
@@ -574,7 +610,7 @@ def _finish_operation(
 
 
 def _fail_operation(
-    project: "Project",
+    project: Project,
     *,
     operation: Mapping[str, Any],
     exc: BaseException,

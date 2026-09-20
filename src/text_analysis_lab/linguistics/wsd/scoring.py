@@ -105,7 +105,9 @@ def score_wsd_targets(
         ]
         score_total = sum(max(score, 0.0) for score in raw_scores)
         if score_total <= 0:
-            unresolved_targets.append(_unresolved(target, "nonpositive_candidate_scores"))
+            unresolved_targets.append(
+                _unresolved(target, "nonpositive_candidate_scores")
+            )
             continue
         normalized = [max(score, 0.0) / score_total for score in raw_scores]
         order = sorted(
@@ -138,7 +140,9 @@ def score_wsd_targets(
                     gloss_text=cached.gloss_text,
                     gloss_hash=cached.gloss_hash,
                     model_input_text=model_input_text,
-                    model_input_hash=fingerprint({"language": "en", "text": model_input_text}),
+                    model_input_hash=fingerprint(
+                        {"language": "en", "text": model_input_text}
+                    ),
                     embedding_cache_key=None,
                     raw_score=raw_scores[index],
                     score_type="wsl_reader_candidate_probability_joint_with_none_and_nme",
@@ -147,9 +151,12 @@ def score_wsd_targets(
                     selected=ranks[index] == 1,
                     top1_margin=margin,
                     source=candidate.source,
-                    candidate_kind=str(candidate.metadata.get("candidate_kind") or "singleword"),
+                    candidate_kind=str(
+                        candidate.metadata.get("candidate_kind") or "singleword"
+                    ),
                     candidate_components=tuple(
-                        str(item) for item in candidate.metadata.get("mwe_components", ())
+                        str(item)
+                        for item in candidate.metadata.get("mwe_components", ())
                     ),
                     candidate_trigger_lemmas=tuple(
                         str(item)
@@ -237,9 +244,7 @@ def _reader_target_selection(
             "target_span_policy must be 'carrier_only' or 'unique_mwe_envelope'"
         )
 
-    carrier_heading = " ".join(
-        target.tokens[target.target_start : target.target_end]
-    )
+    carrier_heading = " ".join(target.tokens[target.target_start : target.target_end])
     if target_span_policy == "carrier_only":
         return target, carrier_heading, "carrier_only"
 
@@ -267,10 +272,7 @@ def _reader_target_selection(
     ordered_indices = tuple(sorted(matched_indices))
     reader_start = ordered_indices[0]
     reader_end = ordered_indices[-1] + 1
-    if not (
-        reader_start <= target.target_start
-        and reader_end >= target.target_end
-    ):
+    if not (reader_start <= target.target_start and reader_end >= target.target_end):
         return target, carrier_heading, "carrier_only_unanchored_mwe_match"
 
     reader_target = target.model_copy(
@@ -285,6 +287,7 @@ def _wsl_candidate_text(*, heading: str, gloss_text: str) -> str:
 
     normalized = " ".join(heading.replace("_", " ").split())
     return f"{normalized}: {gloss_text}"
+
 
 def _unresolved(target: WSDTarget, reason: str) -> UnresolvedWSDTarget:
     return UnresolvedWSDTarget(

@@ -33,7 +33,9 @@ def single_input(inputs: Mapping[str, InputBatch], *, name: str) -> InputBatch:
     return inputs["source"]
 
 
-def native_matrix_packet(packet: InputBatch, *, name: str) -> tuple[pd.DataFrame, Any, list[str]]:
+def native_matrix_packet(
+    packet: InputBatch, *, name: str
+) -> tuple[pd.DataFrame, Any, list[str]]:
     if not isinstance(packet.data, Mapping):
         raise ArtifactError(f"{name} expected a native matrix packet.")
     info = packet.data.get("info")

@@ -16,7 +16,7 @@ class _FakeArtifact:
         frame: pd.DataFrame,
         data_columns: list[str],
         *,
-        project: "_FakeProject",
+        project: _FakeProject,
         artifact_id: str,
         operation_id: str | None = None,
     ) -> None:
@@ -158,7 +158,9 @@ def test_generalized_difference_point_estimate_aligns_by_key() -> None:
         result.confidence_interval()
 
 
-def test_generalized_difference_recovers_srswor_standard_error_from_provenance() -> None:
+def test_generalized_difference_recovers_srswor_standard_error_from_provenance() -> (
+    None
+):
     project = _FakeProject()
     documents = _artifact(
         project,
@@ -251,7 +253,9 @@ def test_generalized_difference_recovers_stratified_srswor_standard_error() -> N
         pi=pi,
         documents=documents,
         strata=strata,
-        translator=ProbabilitySplitTranslator(n=4, allocation={0: 1, 1: 1}, random_state=2),
+        translator=ProbabilitySplitTranslator(
+            n=4, allocation={0: 1, 1: 1}, random_state=2
+        ),
     )
 
     result = generalized_difference(population, gold=gold, pi=pi)
@@ -300,7 +304,9 @@ def test_generalized_difference_stratum_with_one_noncensus_audit_has_no_se() -> 
         pi=pi,
         documents=documents,
         strata=strata,
-        translator=ProbabilitySplitTranslator(n=2, allocation={0: 1, 1: 1}, random_state=3),
+        translator=ProbabilitySplitTranslator(
+            n=2, allocation={0: 1, 1: 1}, random_state=3
+        ),
     )
 
     result = generalized_difference(population, gold=gold, pi=pi)
@@ -309,7 +315,9 @@ def test_generalized_difference_stratum_with_one_noncensus_audit_has_no_se() -> 
     assert "only n_h=1" in (result.variance_note or "")
 
 
-def test_generalized_difference_supports_probability_surrogate_and_rejects_bad_keys() -> None:
+def test_generalized_difference_supports_probability_surrogate_and_rejects_bad_keys() -> (
+    None
+):
     project = _FakeProject()
     population = _artifact(
         project,
@@ -354,7 +362,9 @@ def test_generalized_difference_supports_probability_surrogate_and_rejects_bad_k
 
 
 def test_generalized_difference_grouped_estimates_and_contrast_with_srswor_se() -> None:
-    from text_analysis_lab.analysis.generalized_difference import generalized_difference_by
+    from text_analysis_lab.analysis.generalized_difference import (
+        generalized_difference_by,
+    )
 
     project = _FakeProject()
     documents = _artifact(
@@ -441,7 +451,9 @@ def test_generalized_difference_grouped_estimates_and_contrast_with_srswor_se() 
 
 def test_generalized_difference_result_p_value_uses_design_se() -> None:
     project = _FakeProject()
-    documents = _artifact(project, "documents_p", pd.DataFrame({"row_id": [0, 1, 2, 3]}), [])
+    documents = _artifact(
+        project, "documents_p", pd.DataFrame({"row_id": [0, 1, 2, 3]}), []
+    )
     population = _artifact(
         project,
         "population_p",

@@ -14,9 +14,9 @@ from text_analysis_lab.core.operator import validate_operation_type
 from text_analysis_lab.core.set_primary_keys import _build_hierarchical_keys
 
 
-
 def test_rekey_operation_type_is_registered() -> None:
     assert validate_operation_type("rekey") == "rekey"
+
 
 def test_hierarchical_keys_are_sorted_locally_and_leaf_follows_row_order() -> None:
     frame = pd.DataFrame(
@@ -156,7 +156,9 @@ def test_reduced_key_after_rekey_blocks_older_cross_keyspace_metadata() -> None:
     assert sources == []
 
 
-def test_mapping_sql_collapses_ordinary_segments_and_crosses_each_rekey_by_position(tmp_path) -> None:
+def test_mapping_sql_collapses_ordinary_segments_and_crosses_each_rekey_by_position(
+    tmp_path,
+) -> None:
     from text_analysis_lab.core.query import QueryEngine
     from text_analysis_lab.core.types import ArtifactType
 
@@ -177,7 +179,9 @@ def test_mapping_sql_collapses_ordinary_segments_and_crosses_each_rekey_by_posit
     b1 = QArtifact("b1", ["child_id", "turn_id"], "rekeyed_key", ("a3",), n_rows=4)
     b3 = QArtifact("b3", ["child_id", "turn_id"], "preserved_key", ("b1",), n_rows=4)
     c1 = QArtifact("c1", ["group_id", "item_id"], "rekeyed_key", ("b3",), n_rows=4)
-    c3 = QArtifact("c3", ["group_id", "item_id", "piece_id"], "extended_key", ("c1",), n_rows=8)
+    c3 = QArtifact(
+        "c3", ["group_id", "item_id", "piece_id"], "extended_key", ("c1",), n_rows=8
+    )
 
     engine = QueryEngine(project=None)
     sql = engine._mapping_sql_for_path((c3, c1, b3, b1, a3, a1))
@@ -189,10 +193,12 @@ def test_mapping_sql_collapses_ordinary_segments_and_crosses_each_rekey_by_posit
     assert 'm."doc_id" = sk."doc_id"' in sql
 
 
-def test_mapping_sql_rejects_malformed_rekey_and_unresolvable_reduced_domain(tmp_path) -> None:
+def test_mapping_sql_rejects_malformed_rekey_and_unresolvable_reduced_domain(
+    tmp_path,
+) -> None:
+    from text_analysis_lab.core.errors import QueryError
     from text_analysis_lab.core.query import QueryEngine
     from text_analysis_lab.core.types import ArtifactType
-    from text_analysis_lab.core.errors import QueryError
 
     @dataclass
     class QArtifact(_FakeArtifact):
@@ -204,19 +210,27 @@ def test_mapping_sql_rejects_malformed_rekey_and_unresolvable_reduced_domain(tmp
             return tmp_path / self.artifact_id / "keys"
 
     old = QArtifact("old", ["row_id"], "new_key", (), n_rows=3)
-    rekey = QArtifact("rekey", ["child_id", "turn_id"], "rekeyed_key", ("old",), n_rows=2)
+    rekey = QArtifact(
+        "rekey", ["child_id", "turn_id"], "rekeyed_key", ("old",), n_rows=2
+    )
     engine = QueryEngine(project=None)
     with pytest.raises(QueryError, match="row counts differ"):
         engine._mapping_sql_for_path((rekey, old))
 
     # If the downstream target no longer has all rekey-side key fields, there is
     # no unique row at the positional bridge; the path is intentionally unusable.
-    good_rekey = QArtifact("good_rekey", ["child_id", "turn_id"], "rekeyed_key", ("old",), n_rows=3)
-    reduced = QArtifact("reduced", ["child_id"], "reduced_key", ("good_rekey",), n_rows=2)
+    good_rekey = QArtifact(
+        "good_rekey", ["child_id", "turn_id"], "rekeyed_key", ("old",), n_rows=3
+    )
+    reduced = QArtifact(
+        "reduced", ["child_id"], "reduced_key", ("good_rekey",), n_rows=2
+    )
     assert engine._mapping_sql_for_path((reduced, good_rekey, old)) is None
 
 
-def test_new_key_still_hard_stops_metadata_even_when_older_lineage_contains_rekeys() -> None:
+def test_new_key_still_hard_stops_metadata_even_when_older_lineage_contains_rekeys() -> (
+    None
+):
     a = _FakeArtifact("a", ["row_id"], "new_key", (), metadata=True)
     b = _FakeArtifact("b", ["child_id", "turn_id"], "rekeyed_key", ("a",))
     c = _FakeArtifact("c", ["fresh_id"], "new_key", ("b",))

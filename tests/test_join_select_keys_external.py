@@ -89,7 +89,9 @@ def test_join_is_lazy_basis_first_and_survives_reopen(tmp_path: Path) -> None:
             metadata=pd.DataFrame({"reviewed": [True, False]}),
         )
 
-        joined = project.join(basis, scores, annotations, output_label="joined", batch_size=2)
+        joined = project.join(
+            basis, scores, annotations, output_label="joined", batch_size=2
+        )
         assert joined.descriptor["lineage"] == {
             "lineage_mode": "joined_key",
             "basis_artifact_ids": [
@@ -164,7 +166,9 @@ def test_join_rejects_schema_mismatch_and_new_field_collisions(tmp_path: Path) -
         project.close()
 
 
-def test_select_keys_uses_source_order_and_inherits_data_after_reopen(tmp_path: Path) -> None:
+def test_select_keys_uses_source_order_and_inherits_data_after_reopen(
+    tmp_path: Path,
+) -> None:
     project_path = tmp_path / "project"
     project = teal.Project.create(project_path, name="select_keys")
     try:

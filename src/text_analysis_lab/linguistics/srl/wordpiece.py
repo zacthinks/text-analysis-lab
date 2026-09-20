@@ -30,7 +30,7 @@ class LegacyBertVocabulary:
     cls_token: str = "[CLS]"
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "LegacyBertVocabulary":
+    def from_file(cls, path: str | Path) -> LegacyBertVocabulary:
         path = Path(path)
         tokens = path.read_text(encoding="utf-8").splitlines()
         if not tokens:

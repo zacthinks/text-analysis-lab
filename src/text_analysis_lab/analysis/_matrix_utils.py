@@ -16,15 +16,17 @@ if TYPE_CHECKING:
 _MATRIX_TYPES = {ArtifactType.SPARSE_MATRIX, ArtifactType.DENSE_MATRIX}
 
 
-def require_matrix_artifact(artifact: "BaseArtifact", method: str) -> None:
-    if artifact.artifact_type not in _MATRIX_TYPES or not hasattr(artifact, "get_matrix"):
+def require_matrix_artifact(artifact: BaseArtifact, method: str) -> None:
+    if artifact.artifact_type not in _MATRIX_TYPES or not hasattr(
+        artifact, "get_matrix"
+    ):
         raise UnsupportedArtifactOperationError(
             f"{method} requires a sparse_matrix or dense_matrix artifact."
         )
 
 
 def resolve_position(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     key: Any | None,
     position: int | None,

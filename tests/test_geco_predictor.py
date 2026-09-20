@@ -35,7 +35,12 @@ class _ColumnProbability:
 
 class _FakeArtifact:
     def __init__(
-        self, artifact_id: str, *, n_rows: int, kind=ArtifactType.DENSE_MATRIX, n_features: int = 1
+        self,
+        artifact_id: str,
+        *,
+        n_rows: int,
+        kind=ArtifactType.DENSE_MATRIX,
+        n_features: int = 1,
     ):
         self.artifact_id = artifact_id
         self.artifact_type = kind
@@ -74,10 +79,14 @@ def _packet(label: str, values, keys, *, batch_index=0, batch_count=1):
 
 
 def _predictor(*, aggregation="single", stacker=None):
-    models = [_ColumnProbability(0)] if aggregation == "single" else [
-        _ColumnProbability(0),
-        _ColumnProbability(0),
-    ]
+    models = (
+        [_ColumnProbability(0)]
+        if aggregation == "single"
+        else [
+            _ColumnProbability(0),
+            _ColumnProbability(0),
+        ]
+    )
     source_specs = [{"source_index": 0}]
     member_specs = [{"source_index": 0, "positive_class": 1}]
     if aggregation != "single":
@@ -139,7 +148,9 @@ def test_fixed_committee_mixed_packets_reproduces_aggregation():
         ),
         "source_1": _packet("source_1", np.array([[0.6], [0.1], [0.9]]), [1, 2, 3]),
     }
-    result = predictor.translate_batch(inputs, mode="translate", request=TranslationRequest())
+    result = predictor.translate_batch(
+        inputs, mode="translate", request=TranslationRequest()
+    )
     frame = result.outputs["output"]["data"]
     np.testing.assert_allclose(frame["probability"], [0.4, 0.45, 0.65])
     assert frame["prediction"].tolist() == [0, 0, 1]
@@ -155,7 +166,9 @@ def test_logistic_stack_uses_frozen_member_order():
         "source_0": _packet("source_0", p0.reshape(-1, 1), range(5)),
         "source_1": _packet("source_1", p1.reshape(-1, 1), range(5)),
     }
-    result = predictor.translate_batch(inputs, mode="translate", request=TranslationRequest())
+    result = predictor.translate_batch(
+        inputs, mode="translate", request=TranslationRequest()
+    )
     observed = result.outputs["output"]["data"]["probability"].to_numpy()
     expected = stacker.predict_proba(np.column_stack([p0, p1]))[:, 1]
     np.testing.assert_allclose(observed, expected)
@@ -168,7 +181,9 @@ def test_geco_predictor_rejects_misaligned_keys():
         "source_1": _packet("source_1", np.array([[0.6], [0.1]]), [2, 1]),
     }
     with pytest.raises(ArtifactError, match="not row-aligned"):
-        predictor.translate_batch(inputs, mode="translate", request=TranslationRequest())
+        predictor.translate_batch(
+            inputs, mode="translate", request=TranslationRequest()
+        )
 
 
 def test_geco_predictor_rejects_row_count_mismatch_before_batches():
@@ -179,8 +194,6 @@ def test_geco_predictor_rejects_row_count_mismatch_before_batches():
         predictor.output_specs(
             sources={"source_0": a, "source_1": b}, request=TranslationRequest()
         )
-
-
 
 
 def test_geco_predictor_rejects_feature_width_mismatch_before_batches():
@@ -196,6 +209,7 @@ def test_geco_predictor_rejects_feature_width_mismatch_before_batches():
             sources={"source_0": source}, request=TranslationRequest()
         )
 
+
 def test_geco_predictor_serialization_round_trip(tmp_path):
     predictor = _predictor(aggregation="mean")
     predictor.save_to_dir(tmp_path / "operator", operator_id="op_1")
@@ -207,8 +221,12 @@ def test_geco_predictor_serialization_round_trip(tmp_path):
         "source_0": _packet("source_0", np.array([[0.2], [0.8]]), [1, 2]),
         "source_1": _packet("source_1", np.array([[0.6], [0.1]]), [1, 2]),
     }
-    result = restored.translate_batch(inputs, mode="translate", request=TranslationRequest())
-    np.testing.assert_allclose(result.outputs["output"]["data"]["probability"], [0.4, 0.45])
+    result = restored.translate_batch(
+        inputs, mode="translate", request=TranslationRequest()
+    )
+    np.testing.assert_allclose(
+        result.outputs["output"]["data"]["probability"], [0.4, 0.45]
+    )
 
 
 def test_bridge_consumes_neutral_frozen_export_without_geco_dependency():
@@ -277,12 +295,15 @@ def test_bridge_consumes_neutral_frozen_export_without_geco_dependency():
         None,
     )
     refs = linked.predictors()
-    assert refs == [GeCoPredictorRef(kind="classifier", id=7, code_id=3, name="quality")]
+    assert refs == [
+        GeCoPredictorRef(kind="classifier", id=7, code_id=3, name="quality")
+    ]
     predictor = linked.export_predictor(refs[0])
     assert isinstance(predictor, GeCoPredictor)
     assert predictor.aggregation == "single"
     assert predictor.source_specs[0]["geometry_name"] == "tfidf"
     assert predictor.provenance["geco_name"] == "quality"
+
 
 def test_export_predictor_rejects_bare_name():
     class Coder:

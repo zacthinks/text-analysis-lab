@@ -18,7 +18,7 @@ LengthUnit = Literal["characters", "words"]
 
 
 def text_length(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     text_field: str = "text",
     unit: LengthUnit = "characters",

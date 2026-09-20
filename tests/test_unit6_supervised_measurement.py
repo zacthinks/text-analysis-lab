@@ -28,23 +28,29 @@ def _source(
             "columns": [
                 *[
                     {
-                        "namespace": "key", "base_name": "row_id",
-                        "qualified_name": "key.row_id", "output_name": "row_id",
+                        "namespace": "key",
+                        "base_name": "row_id",
+                        "qualified_name": "key.row_id",
+                        "output_name": "row_id",
                         "source_artifact_id": "art_source",
                     }
                 ],
                 *[
                     {
-                        "namespace": "data", "base_name": c,
-                        "qualified_name": f"data.{c}", "output_name": c,
+                        "namespace": "data",
+                        "base_name": c,
+                        "qualified_name": f"data.{c}",
+                        "output_name": c,
                         "source_artifact_id": "art_source",
                     }
                     for c in columns
                 ],
                 *[
                     {
-                        "namespace": "metadata", "base_name": c,
-                        "qualified_name": f"metadata.art_source.{c}", "output_name": c,
+                        "namespace": "metadata",
+                        "base_name": c,
+                        "qualified_name": f"metadata.art_source.{c}",
+                        "output_name": c,
                         "source_artifact_id": "art_source",
                     }
                     for c in metadata_cols
@@ -101,9 +107,7 @@ def test_function_mapper_packet_contract_data_and_metadata() -> None:
             "data": pd.DataFrame(
                 {"H": ((data["x"] > 0) | (data["z"] > 0)).astype(int)}
             ),
-            "metadata": pd.DataFrame(
-                {"group_upper": metadata["group"].str.upper()}
-            ),
+            "metadata": pd.DataFrame({"group_upper": metadata["group"].str.upper()}),
             # FunctionMapper consumes only data/metadata packet components;
             # unrelated callable metadata is ignored.
             "notes": {"source": "unit-test"},
@@ -147,7 +151,9 @@ def test_function_mapper_packet_contract_data_and_metadata() -> None:
     assert result["metadata"].to_dict("list") == {"group_upper": ["A", "B", "A"]}
 
 
-def test_function_mapper_matrix_columns_resolve_from_matrix_schema_not_query_view() -> None:
+def test_function_mapper_matrix_columns_resolve_from_matrix_schema_not_query_view() -> (
+    None
+):
     """Matrix features live outside the relational query column inventory."""
     source = _source("sparse_matrix", ("qualitative", "quantitative"))
 
@@ -223,7 +229,9 @@ def test_function_mapper_sparse_matrix_dataframe_packet_and_snapshot(tmp_path) -
     smaller = pd.DataFrame.sparse.from_spmatrix(matrix[:2], columns=["a", "b"])
     smaller.insert(0, "row_id", [0, 1])
     result = restored.translate_batch(
-        {"source": _table_packet(smaller)}, mode="translate", request=TranslationRequest()
+        {"source": _table_packet(smaller)},
+        mode="translate",
+        request=TranslationRequest(),
     )
     assert result.outputs["output"]["data"]["H"].tolist() == [1, 0]
 
@@ -239,7 +247,9 @@ def test_function_mapper_rejects_row_change_and_key_authority() -> None:
     request = TranslationRequest(params=params)
     wrong.input_request(sources={"source": source}, mode="translate", request=request)
     with pytest.raises(ArtifactError, match="returned 1 data rows"):
-        wrong.translate_batch({"source": _table_packet(frame)}, mode="translate", request=request)
+        wrong.translate_batch(
+            {"source": _table_packet(frame)}, mode="translate", request=request
+        )
 
     keys = FunctionMapper(
         lambda packet: {
@@ -253,14 +263,18 @@ def test_function_mapper_rejects_row_change_and_key_authority() -> None:
     request = TranslationRequest(params=params)
     keys.input_request(sources={"source": source}, mode="translate", request=request)
     with pytest.raises(ArtifactError, match="may not return 'keys'"):
-        keys.translate_batch({"source": _table_packet(frame)}, mode="translate", request=request)
+        keys.translate_batch(
+            {"source": _table_packet(frame)}, mode="translate", request=request
+        )
 
     non_packet = FunctionMapper(lambda packet: pd.DataFrame({"value": [1, 2]}))
     params = non_packet.validate_operation_params(
         {"data_columns": True}, sources={"source": source}, mode="translate"
     )
     request = TranslationRequest(params=params)
-    non_packet.input_request(sources={"source": source}, mode="translate", request=request)
+    non_packet.input_request(
+        sources={"source": source}, mode="translate", request=request
+    )
     with pytest.raises(ArtifactError, match="must return a mapping"):
         non_packet.translate_batch(
             {"source": _table_packet(frame)}, mode="translate", request=request
@@ -275,7 +289,9 @@ def test_fitted_predictor_sparse_prediction_probability_and_snapshot(tmp_path) -
     model = LogisticRegression(random_state=0).fit(X, y)
     predictor = FittedPredictor(model, probability_class=1)
     source = _source("sparse_matrix", ("a", "b"))
-    predictor.input_request(sources={"source": source}, mode="translate", request=TranslationRequest())
+    predictor.input_request(
+        sources={"source": source}, mode="translate", request=TranslationRequest()
+    )
     output = predictor.translate_batch(
         {"source": _matrix_packet(X)}, mode="translate", request=TranslationRequest()
     ).outputs["output"]
@@ -291,7 +307,9 @@ def test_fitted_predictor_sparse_prediction_probability_and_snapshot(tmp_path) -
     assert isinstance(restored, FittedPredictor)
     restored._source_type = "sparse_matrix"
     restored_output = restored.translate_batch(
-        {"source": _matrix_packet(X[:2])}, mode="translate", request=TranslationRequest()
+        {"source": _matrix_packet(X[:2])},
+        mode="translate",
+        request=TranslationRequest(),
     ).outputs["output"]["data"]
     assert restored_output["prediction"].tolist() == model.predict(X[:2]).tolist()
     assert restored_output["probability"].tolist() == pytest.approx(
@@ -305,7 +323,9 @@ def test_fitted_predictor_dense_and_probability_unsupported_failure() -> None:
     model = LogisticRegression(random_state=0).fit(X, y)
     predictor = FittedPredictor(model)
     source = _source("dense_matrix", ("x",))
-    predictor.input_request(sources={"source": source}, mode="translate", request=TranslationRequest())
+    predictor.input_request(
+        sources={"source": source}, mode="translate", request=TranslationRequest()
+    )
     output = predictor.translate_batch(
         {"source": _matrix_packet(X)}, mode="translate", request=TranslationRequest()
     ).outputs["output"]["data"]
@@ -318,7 +338,9 @@ def test_fitted_predictor_dense_and_probability_unsupported_failure() -> None:
     )
     with pytest.raises(OperatorError, match="does not expose predict_proba"):
         unsupported.translate_batch(
-            {"source": _matrix_packet(X)}, mode="translate", request=TranslationRequest()
+            {"source": _matrix_packet(X)},
+            mode="translate",
+            request=TranslationRequest(),
         )
 
 
@@ -348,9 +370,15 @@ def test_probability_split_srs_exact_n_disjoint_exhaustive_and_constant_pi() -> 
     assert result["pi"]["keys"]["row_id"].tolist() == sample
     assert result["pi"]["data"]["pi"].tolist() == pytest.approx([0.4] * 4)
 
-    again = ProbabilitySplitTranslator(n=4, random_state=12).translate_batch(
-        {"documents": _prob_documents()}, mode="translate", request=TranslationRequest()
-    ).outputs
+    again = (
+        ProbabilitySplitTranslator(n=4, random_state=12)
+        .translate_batch(
+            {"documents": _prob_documents()},
+            mode="translate",
+            request=TranslationRequest(),
+        )
+        .outputs
+    )
     assert again["sample"]["keys"]["row_id"].tolist() == sample
 
 
@@ -372,13 +400,15 @@ def test_probability_split_disproportionate_alignment_and_realized_pi() -> None:
     assert result["pi"]["data"]["pi"].tolist() == pytest.approx(expected_pi)
 
     # Relative weights rather than literal counts.
-    result_scaled = ProbabilitySplitTranslator(
-        n=4, allocation={0: 20, 1: 20}, random_state=3
-    ).translate_batch(
-        {"documents": _prob_documents(), "strata": _prob_strata(strata)},
-        mode="translate",
-        request=TranslationRequest(),
-    ).outputs
+    result_scaled = (
+        ProbabilitySplitTranslator(n=4, allocation={0: 20, 1: 20}, random_state=3)
+        .translate_batch(
+            {"documents": _prob_documents(), "strata": _prob_strata(strata)},
+            mode="translate",
+            request=TranslationRequest(),
+        )
+        .outputs
+    )
     assert result_scaled["sample"]["keys"]["row_id"].tolist() == sample
 
 
@@ -386,10 +416,15 @@ def test_probability_split_strata_contract_failures() -> None:
     strata = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 1, 7: 1, 8: 1, 9: 1}
     documents = _prob_documents()
 
-    missing_frame = pd.DataFrame({"row_id": list(range(9)), "H": [strata[i] for i in range(9)]})
+    missing_frame = pd.DataFrame(
+        {"row_id": list(range(9)), "H": [strata[i] for i in range(9)]}
+    )
     with pytest.raises(ArtifactError, match="key set must exactly equal"):
         ProbabilitySplitTranslator(n=4, allocation={0: 1, 1: 1}).translate_batch(
-            {"documents": documents, "strata": _table_packet(missing_frame, label="strata")},
+            {
+                "documents": documents,
+                "strata": _table_packet(missing_frame, label="strata"),
+            },
             mode="translate",
             request=TranslationRequest(),
         )
@@ -397,7 +432,10 @@ def test_probability_split_strata_contract_failures() -> None:
     duplicate_frame = pd.DataFrame({"row_id": [*range(9), 8], "H": [0] * 10})
     with pytest.raises(ArtifactError, match="duplicate"):
         ProbabilitySplitTranslator(n=4, allocation={0: 1}).translate_batch(
-            {"documents": documents, "strata": _table_packet(duplicate_frame, label="strata")},
+            {
+                "documents": documents,
+                "strata": _table_packet(duplicate_frame, label="strata"),
+            },
             mode="translate",
             request=TranslationRequest(),
         )
@@ -441,7 +479,9 @@ class _FakeProject:
 
 
 class _FakeArtifact:
-    def __init__(self, frame: pd.DataFrame, data_columns: list[str], project: _FakeProject):
+    def __init__(
+        self, frame: pd.DataFrame, data_columns: list[str], project: _FakeProject
+    ):
         self._frame = frame.copy()
         self._data_columns = list(data_columns)
         self.project = project
@@ -492,7 +532,12 @@ def test_classification_aligns_by_key_and_computes_design_weighted_metrics() -> 
     tidy = result.to_frame()
     assert set(tidy["scope"]) == {"raw_audit", "design_weighted"}
     assert set(tidy["metric"]) == {
-        "accuracy", "precision", "recall", "specificity", "f1", "prevalence"
+        "accuracy",
+        "precision",
+        "recall",
+        "specificity",
+        "f1",
+        "prevalence",
     }
 
 
@@ -540,20 +585,25 @@ def test_classification_constant_pi_matches_raw_and_key_contracts_fail() -> None
     project = _FakeProject()
     predictions = _FakeArtifact(
         pd.DataFrame({"row_id": [0, 1, 2, 3], "prediction": [0, 1, 1, 0]}),
-        ["prediction"], project,
+        ["prediction"],
+        project,
     )
     gold = _FakeArtifact(
         pd.DataFrame({"row_id": [3, 1, 0, 2], "label": [1, 1, 0, 0]}),
-        ["label"], project,
+        ["label"],
+        project,
     )
     pi = _FakeArtifact(
         pd.DataFrame({"row_id": [2, 0, 3, 1], "pi": [0.25] * 4}),
-        ["pi"], project,
+        ["pi"],
+        project,
     )
     result = classification(predictions, gold=gold, pi=pi)
     assert result.weighted_metrics == pytest.approx(result.raw_metrics)
 
-    missing_pi = _FakeArtifact(pd.DataFrame({"row_id": [0, 1, 2], "pi": [0.5] * 3}), ["pi"], project)
+    missing_pi = _FakeArtifact(
+        pd.DataFrame({"row_id": [0, 1, 2], "pi": [0.5] * 3}), ["pi"], project
+    )
     with pytest.raises(ArtifactError, match="key set must exactly equal"):
         classification(predictions, gold=gold, pi=missing_pi)
 
@@ -563,8 +613,11 @@ def test_classification_constant_pi_matches_raw_and_key_contracts_fail() -> None
     with pytest.raises(ArtifactError, match="duplicate"):
         classification(predictions, gold=duplicate_gold)
 
+
 class _FakeCodingArtifact:
-    def __init__(self, *, artifact_id: str, frame: pd.DataFrame, data_columns: list[str], project):
+    def __init__(
+        self, *, artifact_id: str, frame: pd.DataFrame, data_columns: list[str], project
+    ):
         self.artifact_id = artifact_id
         self._frame = frame.copy().reset_index(drop=True)
         self._data_columns = list(data_columns)
@@ -624,7 +677,9 @@ class _FakeCodingProject:
         return self.result
 
 
-def test_binary_code_resumes_after_interrupt_and_commits_complete_labels(tmp_path, monkeypatch) -> None:
+def test_binary_code_resumes_after_interrupt_and_commits_complete_labels(
+    tmp_path, monkeypatch
+) -> None:
     from text_analysis_lab.core.binary_code import binary_code
 
     project = _FakeCodingProject(tmp_path / ".teal")
@@ -689,24 +744,40 @@ def test_binary_code_resumes_after_interrupt_and_commits_complete_labels(tmp_pat
 def test_probability_split_numeric_strata_match_bool_int_and_integral_float() -> None:
     documents = _prob_documents()
     bool_frame = pd.DataFrame(
-        {"row_id": list(reversed(range(10))), "H": [key >= 6 for key in reversed(range(10))]}
+        {
+            "row_id": list(reversed(range(10))),
+            "H": [key >= 6 for key in reversed(range(10))],
+        }
     )
-    result = ProbabilitySplitTranslator(
-        n=4, allocation={0: 1, 1: 1}, random_state=5
-    ).translate_batch(
-        {"documents": documents, "strata": _table_packet(bool_frame, label="strata")},
-        mode="translate",
-        request=TranslationRequest(),
-    ).outputs
+    result = (
+        ProbabilitySplitTranslator(n=4, allocation={0: 1, 1: 1}, random_state=5)
+        .translate_batch(
+            {
+                "documents": documents,
+                "strata": _table_packet(bool_frame, label="strata"),
+            },
+            mode="translate",
+            request=TranslationRequest(),
+        )
+        .outputs
+    )
     assert len(result["sample"]["keys"]) == 4
 
     float_frame = bool_frame.copy()
     float_frame["H"] = float_frame["H"].astype(float)
-    result_float = ProbabilitySplitTranslator(
-        n=4, allocation={False: 1, True: 1}, random_state=5
-    ).translate_batch(
-        {"documents": documents, "strata": _table_packet(float_frame, label="strata")},
-        mode="translate",
-        request=TranslationRequest(),
-    ).outputs
-    assert result_float["sample"]["keys"]["row_id"].tolist() == result["sample"]["keys"]["row_id"].tolist()
+    result_float = (
+        ProbabilitySplitTranslator(n=4, allocation={False: 1, True: 1}, random_state=5)
+        .translate_batch(
+            {
+                "documents": documents,
+                "strata": _table_packet(float_frame, label="strata"),
+            },
+            mode="translate",
+            request=TranslationRequest(),
+        )
+        .outputs
+    )
+    assert (
+        result_float["sample"]["keys"]["row_id"].tolist()
+        == result["sample"]["keys"]["row_id"].tolist()
+    )

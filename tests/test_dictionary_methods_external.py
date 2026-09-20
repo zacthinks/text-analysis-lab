@@ -14,7 +14,6 @@ import text_analysis_lab as teal
 from text_analysis_lab.core.writer import create_artifact_writer
 from text_analysis_lab.translators import DictionaryTranslator
 
-
 _VALUES = np.array(
     [
         [2.0, 1.0, 0.0, 0.0, 3.0, 0.0, 4.0],
@@ -58,7 +57,9 @@ def _register_dtm(project: teal.Project):
     return project.get_artifact(artifact_id)
 
 
-def test_dictionary_translation_and_analysis_real_sparse_round_trip(tmp_path: Path) -> None:
+def test_dictionary_translation_and_analysis_real_sparse_round_trip(
+    tmp_path: Path,
+) -> None:
     project_path = tmp_path / "dictionary_project"
     project = teal.Project.create(project_path, name="dictionary_project")
     try:
@@ -95,7 +96,11 @@ def test_dictionary_translation_and_analysis_real_sparse_round_trip(tmp_path: Pa
             batch_size=2,
         )["output"]
         assert polarity_artifact.primary_key == ["doc_id"]
-        assert polarity_artifact.get_data_columns() == ["positive", "negative", "neutral"]
+        assert polarity_artifact.get_data_columns() == [
+            "positive",
+            "negative",
+            "neutral",
+        ]
         assert polarity_artifact.get_matrix().toarray().tolist() == [
             [3, 0, 4],
             [0, 3, 1],
@@ -147,28 +152,35 @@ def test_dictionary_translation_and_analysis_real_sparse_round_trip(tmp_path: Pa
     try:
         polarity_artifact = reopened.get_artifact(polarity_id)
         valence_artifact = reopened.get_artifact(valence_id)
-        assert polarity_artifact.analysis.polarity()["difference"].tolist() == pytest.approx(
-            [3, -3, 0, 0]
-        )
-        assert valence_artifact.analysis.valence()["mean_matched"].tolist() == pytest.approx(
-            [7 / 3, -10 / 3, 0, 0]
-        )
+        assert polarity_artifact.analysis.polarity()[
+            "difference"
+        ].tolist() == pytest.approx([3, -3, 0, 0])
+        assert valence_artifact.analysis.valence()[
+            "mean_matched"
+        ].tolist() == pytest.approx([7 / 3, -10 / 3, 0, 0])
 
         # The frozen operator retains the dictionary rules and can be reused.
         operator = reopened.get_operator(str(polarity_operator_id))
         assert isinstance(operator, DictionaryTranslator)
         assert operator.dictionary_kind == "polarity"
-        reused = reopened.translate(operator, reopened.get_artifact("art_dictionary_dtm"), batch_size=3)[
-            "output"
-        ]
-        assert reused.get_matrix().toarray().tolist() == polarity_artifact.get_matrix().toarray().tolist()
+        reused = reopened.translate(
+            operator, reopened.get_artifact("art_dictionary_dtm"), batch_size=3
+        )["output"]
+        assert (
+            reused.get_matrix().toarray().tolist()
+            == polarity_artifact.get_matrix().toarray().tolist()
+        )
     finally:
         reopened.close()
 
 
-def test_dictionary_translation_real_parallel_matches_sequential(tmp_path: Path) -> None:
+def test_dictionary_translation_real_parallel_matches_sequential(
+    tmp_path: Path,
+) -> None:
     pytest.importorskip("dask.distributed")
-    project = teal.Project.create(tmp_path / "dictionary_parallel", name="dictionary_parallel")
+    project = teal.Project.create(
+        tmp_path / "dictionary_parallel", name="dictionary_parallel"
+    )
     try:
         dtm = _register_dtm(project)
         dictionary = teal.dictionaries.ValenceDictionary(
@@ -185,7 +197,10 @@ def test_dictionary_translation_real_parallel_matches_sequential(tmp_path: Path)
             max_outstanding_units=2,
         )["output"]
         assert parallel.get_data_columns() == sequential.get_data_columns()
-        assert parallel.get_matrix().toarray().tolist() == sequential.get_matrix().toarray().tolist()
+        assert (
+            parallel.get_matrix().toarray().tolist()
+            == sequential.get_matrix().toarray().tolist()
+        )
         sequential_meta = sequential.query(
             key_columns=False,
             data_columns=False,

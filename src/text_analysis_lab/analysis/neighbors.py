@@ -8,8 +8,14 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 
-from text_analysis_lab.analysis._matrix_utils import require_matrix_artifact, resolve_position
-from text_analysis_lab.core.errors import ArtifactError, UnsupportedArtifactOperationError
+from text_analysis_lab.analysis._matrix_utils import (
+    require_matrix_artifact,
+    resolve_position,
+)
+from text_analysis_lab.core.errors import (
+    ArtifactError,
+    UnsupportedArtifactOperationError,
+)
 from text_analysis_lab.core.lineage import is_prefix
 
 if TYPE_CHECKING:
@@ -17,7 +23,7 @@ if TYPE_CHECKING:
 
 
 def nearest_neighbors(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     key: Any | None = None,
     position: int | None = None,
@@ -26,7 +32,7 @@ def nearest_neighbors(
     metric: str = "cosine",
     include_self: bool = False,
     batch_size: int = 10_000,
-    context: "BaseArtifact | str | None" = None,
+    context: BaseArtifact | str | None = None,
     context_data_columns: Any = False,
     context_metadata_columns: Any = False,
     context_metadata_mode: str = "none",
@@ -60,7 +66,9 @@ def nearest_neighbors(
     if row_name_column is not None and row_name_column not in output_columns:
         output_columns.append(str(row_name_column))
     output_columns.extend(["_position", "rank", "distance"])
-    context_artifact = None if context is None else artifact.project.get_artifact(context)
+    context_artifact = (
+        None if context is None else artifact.project.get_artifact(context)
+    )
     context_columns: list[str] = []
     if context_artifact is not None:
         _validate_context_keys(artifact, context_artifact)
@@ -110,15 +118,11 @@ def nearest_neighbors(
             continue
 
         distances = np.asarray(
-            pairwise_distances(
-                matrix, focus_matrix, metric=metric, **metric_kwargs
-            )
+            pairwise_distances(matrix, focus_matrix, metric=metric, **metric_kwargs)
         ).reshape(-1)
         positions = info["_position"].astype(int).tolist()
 
-        for candidate_position, raw_distance in zip(
-            positions, distances, strict=True
-        ):
+        for candidate_position, raw_distance in zip(positions, distances, strict=True):
             if not include_self and candidate_position == focus_position:
                 continue
             distance = float(raw_distance)
@@ -146,8 +150,7 @@ def nearest_neighbors(
         include_position=True,
     )
     by_position = {
-        int(row["_position"]): row
-        for row in key_frame.to_dict(orient="records")
+        int(row["_position"]): row for row in key_frame.to_dict(orient="records")
     }
 
     rows: list[dict[str, Any]] = []
@@ -182,7 +185,9 @@ def nearest_neighbors(
     return result
 
 
-def _validate_context_keys(neighbor_artifact: "BaseArtifact", context_artifact: "BaseArtifact") -> None:
+def _validate_context_keys(
+    neighbor_artifact: BaseArtifact, context_artifact: BaseArtifact
+) -> None:
     neighbor_pk = tuple(str(v) for v in neighbor_artifact.primary_key)
     context_pk = tuple(str(v) for v in context_artifact.primary_key)
     if not is_prefix(context_pk, neighbor_pk):
@@ -194,7 +199,7 @@ def _validate_context_keys(neighbor_artifact: "BaseArtifact", context_artifact: 
 
 
 def _selected_context_output_columns(
-    context_artifact: "BaseArtifact",
+    context_artifact: BaseArtifact,
     *,
     data_columns: Any,
     metadata_columns: Any,
@@ -217,7 +222,11 @@ def _selected_context_output_columns(
             names = []
             for raw in requested:
                 name = str(raw)
-                exact = [c for c in cols if name in {str(c.get("qualified_name")), str(c.get("output_name"))}]
+                exact = [
+                    c
+                    for c in cols
+                    if name in {str(c.get("qualified_name")), str(c.get("output_name"))}
+                ]
                 base = [c for c in cols if str(c.get("base_name")) == name]
                 matches = exact if exact else base
                 if len(matches) != 1:
@@ -238,8 +247,8 @@ def _selected_context_output_columns(
 def _append_context(
     result: pd.DataFrame,
     *,
-    neighbor_artifact: "BaseArtifact",
-    context_artifact: "BaseArtifact",
+    neighbor_artifact: BaseArtifact,
+    context_artifact: BaseArtifact,
     data_columns: Any,
     metadata_columns: Any,
     metadata_mode: str,
@@ -270,4 +279,6 @@ def _append_context(
     )
     keep = [*context_pk, *context_columns]
     frame = frame.loc[:, keep].copy()
-    return result.merge(frame, on=context_pk, how="left", sort=False, validate="many_to_one")
+    return result.merge(
+        frame, on=context_pk, how="left", sort=False, validate="many_to_one"
+    )

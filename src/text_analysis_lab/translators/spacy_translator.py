@@ -28,8 +28,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -135,7 +135,9 @@ class SpacyTranslator(BaseTranslator):
     ) -> None:
         super().__init__(operator_id=operator_id)
         if not isinstance(model, str) or not model:
-            raise ValueError("model must be a non-empty spaCy package name or model path.")
+            raise ValueError(
+                "model must be a non-empty spaCy package name or model path."
+            )
         if not isinstance(text_field, str) or not text_field:
             raise ValueError("text_field must be a non-empty string.")
         for name, value in (("sentence_key", sentence_key), ("token_key", token_key)):
@@ -164,16 +166,14 @@ class SpacyTranslator(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> Mapping[str, OutputSpec]:
         _ = request
         source = _single_source(sources)
         key_columns = tuple(str(name) for name in source.primary_key)
         collisions = [
-            name
-            for name in (self.sentence_key, self.token_key)
-            if name in key_columns
+            name for name in (self.sentence_key, self.token_key) if name in key_columns
         ]
         if collisions:
             raise OperatorError(
@@ -205,7 +205,7 @@ class SpacyTranslator(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -218,7 +218,7 @@ class SpacyTranslator(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -352,7 +352,7 @@ class SpacyTranslator(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "SpacyTranslator":
+    ) -> SpacyTranslator:
         _ = mode, request
         return self.from_json_state(self.to_json_state())
 
@@ -367,7 +367,7 @@ class SpacyTranslator(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "SpacyTranslator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> SpacyTranslator:
         return cls(
             model=str(state.get("model", "en_core_web_sm")),
             text_field=str(state.get("text_field", "text")),
@@ -401,9 +401,11 @@ class SpacyTranslator(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "SpacyTranslator":
+    ) -> SpacyTranslator:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         obj = cls.from_json_state(cast(Mapping[str, Any], state))
         obj.operator_id = operator_id
         return obj
@@ -492,7 +494,9 @@ def _token_record(token: Any, *, sentence_start: int) -> dict[str, Any]:
         "like_url": bool(token.like_url),
         "like_num": bool(token.like_num),
         "like_email": bool(token.like_email),
-        "is_sent_start": None if token.is_sent_start is None else bool(token.is_sent_start),
+        "is_sent_start": None
+        if token.is_sent_start is None
+        else bool(token.is_sent_start),
         "is_sent_end": None if token.is_sent_end is None else bool(token.is_sent_end),
     }
 
@@ -531,7 +535,7 @@ def _load_spacy_pipeline(model: str, disable: tuple[str, ...]):
         ) from exc
 
 
-def _single_source(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
+def _single_source(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
         raise OperatorError(
             f"SpacyTranslator requires exactly one source under {DEFAULT_SOURCE_LABEL!r}."

@@ -22,7 +22,7 @@ class ResolvedField:
 
 
 def resolve_tabular_fields(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *names: str,
 ) -> tuple[ResolvedField, ...]:
     """Resolve unambiguous data/metadata fields using the full artifact view."""

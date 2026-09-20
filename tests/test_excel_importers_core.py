@@ -43,7 +43,7 @@ def test_excel_sheet_selector_normalization_and_resolution() -> None:
 
 
 def test_missing_fields_policy_distinguishes_error_from_null_fill() -> None:
-    import text_analysis_lab.core.importers as importers
+    from text_analysis_lab.core import importers
 
     assert _validate_missing_fields_policy(importers._MISSING_FIELDS_ERROR) == {
         "mode": "error"

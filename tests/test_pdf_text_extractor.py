@@ -102,7 +102,9 @@ def test_pdf_text_extractor_missing_path_is_row_aligned_failure() -> None:
     assert payload["data"]["text"].tolist() == ["", ""]
     assert payload["data"]["extraction_status"].tolist() == ["failed", "failed"]
     assert payload["data"]["pages_extracted"].astype(int).tolist() == [0, 0]
-    assert all("Missing PDF path" in value for value in payload["data"]["extraction_error"])
+    assert all(
+        "Missing PDF path" in value for value in payload["data"]["extraction_error"]
+    )
 
 
 def test_pdf_text_extractor_real_backend_statuses_and_page_separator() -> None:
@@ -139,7 +141,9 @@ def test_pdf_text_extractor_real_backend_statuses_and_page_separator() -> None:
 
 
 def test_pdf_text_extractor_real_backend_normalized_crop_and_page_range() -> None:
-    fixture = Path(__file__).parent / "fixtures" / "pdf_extractor" / "sample_two_page.pdf"
+    fixture = (
+        Path(__file__).parent / "fixtures" / "pdf_extractor" / "sample_two_page.pdf"
+    )
     extractor = PdfTextExtractor(
         margins={"top": 0.1, "bottom": 0.1},
         start_page=2,

@@ -63,7 +63,9 @@ def test_text_file_extractor_declares_preserved_key_batch_contract() -> None:
     assert source_request.columns.data == "path"
     assert source_request.columns.metadata is False
 
-    colliding = SimpleNamespace(artifact_type=ArtifactType.TABLE, primary_key=["page_count"])
+    colliding = SimpleNamespace(
+        artifact_type=ArtifactType.TABLE, primary_key=["page_count"]
+    )
     with pytest.raises(OperatorError, match="collide with source primary-key"):
         extractor.input_request(
             sources={"source": colliding},
@@ -72,7 +74,9 @@ def test_text_file_extractor_declares_preserved_key_batch_contract() -> None:
         )
 
 
-def test_text_file_extractor_reads_normalizes_and_keeps_pdf_compatible_schema(tmp_path) -> None:
+def test_text_file_extractor_reads_normalizes_and_keeps_pdf_compatible_schema(
+    tmp_path,
+) -> None:
     text_path = tmp_path / "document.txt"
     text_path.write_bytes(b"alpha\r\nbeta\rgamma\n")
     empty_path = tmp_path / "empty.txt"
@@ -85,7 +89,11 @@ def test_text_file_extractor_reads_normalizes_and_keeps_pdf_compatible_schema(tm
                 pd.DataFrame(
                     {
                         "file_id": [3, 4, 5],
-                        "path": [str(text_path), str(empty_path), str(tmp_path / "missing.txt")],
+                        "path": [
+                            str(text_path),
+                            str(empty_path),
+                            str(tmp_path / "missing.txt"),
+                        ],
                     }
                 )
             )

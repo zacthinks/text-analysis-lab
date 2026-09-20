@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
 import numbers
-import pandas as pd
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 from text_analysis_lab.core.errors import ArtifactError
 from text_analysis_lab.core.ids import next_id
-from text_analysis_lab.core.operator import BaseOperator, OutputSpec, TranslationRequest, validate_output_label
+from text_analysis_lab.core.operator import (
+    BaseOperator,
+    OutputSpec,
+    TranslationRequest,
+    validate_output_label,
+)
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
 from text_analysis_lab.core.writer import create_artifact_writer
 
@@ -30,7 +32,9 @@ class SelectKeysOperator(BaseOperator):
         super().__init__(operator_id=operator_id)
         self.requested_count = int(requested_count)
 
-    def output_specs(self, *, sources: Mapping[str, "BaseArtifact"], request: TranslationRequest):
+    def output_specs(
+        self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest
+    ):
         _ = request
         source = sources[DEFAULT_SOURCE_LABEL]
         return OutputSpec(
@@ -43,19 +47,19 @@ class SelectKeysOperator(BaseOperator):
         return {"requested_count": self.requested_count}
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "SelectKeysOperator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> SelectKeysOperator:
         return cls(requested_count=int(state.get("requested_count", 0)))
 
 
 def select_keys(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     keys: Sequence[Any],
     *,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     batch_size: int = 10_000,
     memo: str | None = None,
-) -> "BaseArtifact":
+) -> BaseArtifact:
     """Create a keys-only preserved-key child containing exactly requested keys.
 
     Result order follows source artifact order, not request order. Unknown or
@@ -81,7 +85,9 @@ def select_keys(
         operator_id=operator_id, operation_type="subset", snapshot_status="pending"
     )
     try:
-        operator.save_to_dir(project.storage.operator_dir(operator_id), operator_id=operator_id)
+        operator.save_to_dir(
+            project.storage.operator_dir(operator_id), operator_id=operator_id
+        )
         project.catalog.mark_operator_serialized(operator_id)
     except Exception:
         project.catalog.mark_operator_snapshot_failed(operator_id)
@@ -96,7 +102,9 @@ def select_keys(
         operator_id=operator_id,
         status="incomplete",
     )
-    project.catalog.add_operation_source(operation_id, DEFAULT_SOURCE_LABEL, artifact.artifact_id)
+    project.catalog.add_operation_source(
+        operation_id, DEFAULT_SOURCE_LABEL, artifact.artifact_id
+    )
 
     artifact_id = next_id(project.storage.manifest_path, "artifact")
     project.catalog.register_artifact(
@@ -129,13 +137,17 @@ def select_keys(
         "output_artifact_ids": {label: artifact_id},
         "request": {"output_label": label, "requested_count": len(requested)},
     }
-    (op_dir / "operation.json").write_text(json.dumps(descriptor, indent=2, sort_keys=True), encoding="utf-8")
+    (op_dir / "operation.json").write_text(
+        json.dumps(descriptor, indent=2, sort_keys=True), encoding="utf-8"
+    )
 
     requested_set = set(requested)
     found: set[tuple[int, ...]] = set()
     try:
         if memo is not None:
-            project.catalog.add_memo(target_type="operation", target_id=operation_id, body=memo)
+            project.catalog.add_memo(
+                target_type="operation", target_id=operation_id, body=memo
+            )
         for frame in artifact.query(
             key_columns=True,
             data_columns=False,
@@ -149,11 +161,16 @@ def select_keys(
         ):
             if frame.empty:
                 continue
-            tuples = [tuple(int(v) for v in row) for row in frame.loc[:, list(pk)].itertuples(index=False, name=None)]
+            tuples = [
+                tuple(int(v) for v in row)
+                for row in frame.loc[:, list(pk)].itertuples(index=False, name=None)
+            ]
             mask = [value in requested_set for value in tuples]
             if any(mask):
                 chosen = frame.loc[mask, list(pk)].reset_index(drop=True)
-                found.update(value for value, keep in zip(tuples, mask, strict=True) if keep)
+                found.update(
+                    value for value, keep in zip(tuples, mask, strict=True) if keep
+                )
                 writer.write({"keys": chosen})
         missing = requested_set - found
         if missing:
@@ -165,7 +182,9 @@ def select_keys(
         project.catalog.mark_artifact_complete(artifact_id)
         project.catalog.mark_operation_complete(operation_id)
         descriptor["status"] = "complete"
-        (op_dir / "operation.json").write_text(json.dumps(descriptor, indent=2, sort_keys=True), encoding="utf-8")
+        (op_dir / "operation.json").write_text(
+            json.dumps(descriptor, indent=2, sort_keys=True), encoding="utf-8"
+        )
         project.storage.touch_manifest()
         return project.get_artifact(artifact_id)
     except Exception as exc:
@@ -183,13 +202,19 @@ def select_keys(
             pass
         descriptor["status"] = "failed"
         descriptor["error"] = f"{exc.__class__.__name__}: {exc}"
-        (op_dir / "operation.json").write_text(json.dumps(descriptor, indent=2, sort_keys=True), encoding="utf-8")
+        (op_dir / "operation.json").write_text(
+            json.dumps(descriptor, indent=2, sort_keys=True), encoding="utf-8"
+        )
         raise
 
 
-def _normalize_requested_keys(keys: Sequence[Any], primary_key: Sequence[str]) -> list[tuple[int, ...]]:
+def _normalize_requested_keys(
+    keys: Sequence[Any], primary_key: Sequence[str]
+) -> list[tuple[int, ...]]:
     if isinstance(keys, (str, bytes, bytearray)):
-        raise TypeError("select_keys keys must be a sequence of key values, not a string.")
+        raise TypeError(
+            "select_keys keys must be a sequence of key values, not a string."
+        )
     out: list[tuple[int, ...]] = []
     for raw in keys:
         if len(primary_key) == 1:
@@ -197,7 +222,9 @@ def _normalize_requested_keys(keys: Sequence[Any], primary_key: Sequence[str]) -
         elif isinstance(raw, Mapping):
             missing = [col for col in primary_key if col not in raw]
             if missing:
-                raise ArtifactError(f"select_keys composite key is missing columns {missing}.")
+                raise ArtifactError(
+                    f"select_keys composite key is missing columns {missing}."
+                )
             values = tuple(raw[col] for col in primary_key)
         elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
             if len(raw) != len(primary_key):
@@ -209,8 +236,13 @@ def _normalize_requested_keys(keys: Sequence[Any], primary_key: Sequence[str]) -
             raise ArtifactError(
                 f"select_keys requires composite keys as mappings/tuples for primary key {list(primary_key)}."
             )
-        if any(not isinstance(value, numbers.Integral) or isinstance(value, bool) for value in values):
-            raise ArtifactError("TeAL primary-key values supplied to select_keys must be integers.")
+        if any(
+            not isinstance(value, numbers.Integral) or isinstance(value, bool)
+            for value in values
+        ):
+            raise ArtifactError(
+                "TeAL primary-key values supplied to select_keys must be integers."
+            )
         out.append(tuple(int(value) for value in values))
     if len(set(out)) != len(out):
         raise ArtifactError("select_keys request contains duplicate primary keys.")

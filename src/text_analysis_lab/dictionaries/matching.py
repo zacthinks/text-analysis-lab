@@ -143,7 +143,9 @@ def _match_any(
         translated = tuple(_glob_to_regex(pattern) for pattern in patterns)
         return _match_regex_chunks(features, translated, flags=0, contains=False)
     if valuetype == "non_whitespace_glob":
-        translated = tuple(_translate_non_whitespace_glob(pattern) for pattern in patterns)
+        translated = tuple(
+            _translate_non_whitespace_glob(pattern) for pattern in patterns
+        )
         return _match_regex_chunks(features, translated, flags=0, contains=False)
     if valuetype == "regex":
         flags = 0 if case_sensitive else re.IGNORECASE
@@ -222,8 +224,7 @@ def _translate_non_whitespace_glob(pattern: str) -> str:
                     chunks[k - 1] = chunks[k - 1][:-1] + chunks[k][1:]
                     del chunks[k]
             stuff = "-".join(
-                value.replace("\\", r"\\").replace("-", r"\-")
-                for value in chunks
+                value.replace("\\", r"\\").replace("-", r"\-") for value in chunks
             )
 
         # Escape regex set-operation syntax that has no glob meaning.

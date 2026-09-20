@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, cast, get_args
-from collections.abc import Iterable
 
 from text_analysis_lab.core.errors import (
     AliasOverwriteBlockedError,
@@ -32,7 +32,9 @@ _RESERVED_OPERATOR_ID_RE = re.compile(r"^optr_[0-9]{6,}$")
 
 ARTIFACT_STATUS_VALUES: tuple[ArtifactStatus, ...] = get_args(ArtifactStatus)
 OPERATION_STATUS_VALUES: tuple[OperationStatus, ...] = get_args(OperationStatus)
-OPERATOR_SNAPSHOT_STATUS_VALUES: tuple[OperatorSnapshotStatus, ...] = get_args(OperatorSnapshotStatus)
+OPERATOR_SNAPSHOT_STATUS_VALUES: tuple[OperatorSnapshotStatus, ...] = get_args(
+    OperatorSnapshotStatus
+)
 OPERATION_TYPE_VALUES: tuple[OperationType, ...] = get_args(OperationType)
 MEMO_TARGET_TYPE_VALUES: tuple[MemoTargetType, ...] = get_args(MemoTargetType)
 
@@ -234,7 +236,9 @@ class ProjectCatalog:
         column: str,
         definition: str,
     ) -> None:
-        existing = {str(row["name"]) for row in con.execute(f"PRAGMA table_info({table})")}
+        existing = {
+            str(row["name"]) for row in con.execute(f"PRAGMA table_info({table})")
+        }
         if column not in existing:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
@@ -395,9 +399,7 @@ class ProjectCatalog:
             params.append(self._validate_operation_type(str(operation_type)))
         if snapshot_status is not None:
             where.append("snapshot_status = ?")
-            params.append(
-                self._validate_operator_snapshot_status(str(snapshot_status))
-            )
+            params.append(self._validate_operator_snapshot_status(str(snapshot_status)))
 
         sql = "SELECT * FROM operators"
         if where:
@@ -906,7 +908,9 @@ class ProjectCatalog:
             for alias, artifact_id in bindings.items()
         }
         if set(normalized) != set(expected_existing):
-            raise InvalidAliasError("Alias bundle expectation keys do not match bindings.")
+            raise InvalidAliasError(
+                "Alias bundle expectation keys do not match bindings."
+            )
         now = utc_now_iso()
         with self.con as con:
             for alias, artifact_id in normalized.items():
@@ -934,7 +938,9 @@ class ProjectCatalog:
 
             retire_ids = {str(value) for value in retire_artifact_ids}
             if retire_ids:
-                allowed_aliases: dict[str, set[str]] = {artifact_id: set() for artifact_id in retire_ids}
+                allowed_aliases: dict[str, set[str]] = {
+                    artifact_id: set() for artifact_id in retire_ids
+                }
                 for alias, artifact_id in expected_existing.items():
                     if artifact_id is not None and str(artifact_id) in retire_ids:
                         allowed_aliases[str(artifact_id)].add(alias)
@@ -943,7 +949,9 @@ class ProjectCatalog:
                         "SELECT alias FROM artifact_aliases WHERE artifact_id = ?",
                         (artifact_id,),
                     ).fetchall()
-                    extras = {str(row["alias"]) for row in rows} - allowed_aliases[artifact_id]
+                    extras = {str(row["alias"]) for row in rows} - allowed_aliases[
+                        artifact_id
+                    ]
                     if extras:
                         raise AliasOverwriteBlockedError(
                             f"Cannot overwrite {artifact_id}: additional aliases appeared "

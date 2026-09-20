@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 class ArtifactAnalysis:
     """Bind Analytic Methods to one artifact without mutating its artifact graph."""
 
-    def __init__(self, artifact: "BaseArtifact") -> None:
+    def __init__(self, artifact: BaseArtifact) -> None:
         self._artifact = artifact
 
     def text_diagnostics(self, **kwargs: Any):
@@ -23,7 +23,6 @@ class ArtifactAnalysis:
         from text_analysis_lab.analysis.summary import summarize
 
         return summarize(self._artifact)
-
 
     def cosine_similarity(self, **kwargs: Any):
         from text_analysis_lab.analysis.cosine_similarity import cosine_similarity
@@ -81,12 +80,16 @@ class ArtifactAnalysis:
         return classification(self._artifact, **kwargs)
 
     def generalized_difference(self, **kwargs: Any):
-        from text_analysis_lab.analysis.generalized_difference import generalized_difference
+        from text_analysis_lab.analysis.generalized_difference import (
+            generalized_difference,
+        )
 
         return generalized_difference(self._artifact, **kwargs)
 
     def generalized_difference_by(self, **kwargs: Any):
-        from text_analysis_lab.analysis.generalized_difference import generalized_difference_by
+        from text_analysis_lab.analysis.generalized_difference import (
+            generalized_difference_by,
+        )
 
         return generalized_difference_by(self._artifact, **kwargs)
 

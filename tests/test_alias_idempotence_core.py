@@ -6,11 +6,21 @@ from pathlib import Path
 import pytest
 
 import text_analysis_lab as teal
-from text_analysis_lab.core.errors import AliasBundleError, AliasOverwriteBlockedError, InvalidAliasError
-from text_analysis_lab.core.idempotence import finalize_alias_plan, prepare_alias_plan, reused_outputs
+from text_analysis_lab.core.errors import (
+    AliasBundleError,
+    AliasOverwriteBlockedError,
+    InvalidAliasError,
+)
+from text_analysis_lab.core.idempotence import (
+    finalize_alias_plan,
+    prepare_alias_plan,
+    reused_outputs,
+)
 
 
-def _seed_artifact(project: teal.Project, artifact_id: str, *, label: str = "output", basis=()):
+def _seed_artifact(
+    project: teal.Project, artifact_id: str, *, label: str = "output", basis=()
+):
     project.catalog.register_artifact(
         artifact_id=artifact_id,
         artifact_type="table",
@@ -60,7 +70,9 @@ def test_single_alias_shape_and_multi_alias_shape_are_strict(tmp_path: Path) -> 
         project.close()
 
 
-def test_reuse_returns_existing_artifact_without_mutation(tmp_path: Path, capsys) -> None:
+def test_reuse_returns_existing_artifact_without_mutation(
+    tmp_path: Path, capsys
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="alias_reuse_core")
     try:
         old = _seed_artifact(project, "art_900001")
@@ -87,11 +99,15 @@ def test_finalize_new_alias_bundle_is_atomic(tmp_path: Path) -> None:
         project.close()
 
 
-def test_overwrite_ignores_dependencies_inside_bundle_but_blocks_external_dependents(tmp_path: Path) -> None:
+def test_overwrite_ignores_dependencies_inside_bundle_but_blocks_external_dependents(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="alias_dependency_core")
     try:
         old_a = _seed_artifact(project, "art_900001", label="a")
-        old_b = _seed_artifact(project, "art_900002", label="b", basis=(old_a.artifact_id,))
+        old_b = _seed_artifact(
+            project, "art_900002", label="b", basis=(old_a.artifact_id,)
+        )
         old_a.add_alias("alias_a")
         old_b.add_alias("alias_b")
         plan = prepare_alias_plan(
@@ -102,7 +118,9 @@ def test_overwrite_ignores_dependencies_inside_bundle_but_blocks_external_depend
         )
         assert plan is not None and not plan.reuse
 
-        external = _seed_artifact(project, "art_900003", label="external", basis=(old_a.artifact_id,))
+        external = _seed_artifact(
+            project, "art_900003", label="external", basis=(old_a.artifact_id,)
+        )
         assert external.artifact_id
         with pytest.raises(AliasOverwriteBlockedError, match="live dependents"):
             prepare_alias_plan(
@@ -124,7 +142,9 @@ def test_catalog_bundle_swap_checks_expected_alias_target(tmp_path: Path) -> Non
         old.add_alias("stable")
         project.remove_artifact_alias("stable")
         other.add_alias("stable")
-        with pytest.raises(InvalidAliasError, match="changed while the operation was running"):
+        with pytest.raises(
+            InvalidAliasError, match="changed while the operation was running"
+        ):
             project.catalog.replace_artifact_alias_bundle(
                 {"stable": new.artifact_id},
                 expected_existing={"stable": old.artifact_id},

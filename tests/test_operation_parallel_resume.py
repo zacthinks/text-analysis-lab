@@ -3,11 +3,11 @@ from __future__ import annotations
 import multiprocessing
 import queue
 import time
+from collections.abc import Mapping
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Mapping
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -22,10 +22,10 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.core.translate import (
     _ExecutionPlan,
-    _PlanUnit,
-    _SourcePlan,
     _parallel_results,
+    _PlanUnit,
     _replace_directory_with_staging,
+    _SourcePlan,
 )
 
 
@@ -90,12 +90,18 @@ class _DelayTranslator(BaseTranslator):
         return True
 
     def output_specs(self, *, sources, request):
-        return {"output": OutputSpec(artifact_type="table", lineage_mode="preserved_key")}
+        return {
+            "output": OutputSpec(artifact_type="table", lineage_mode="preserved_key")
+        }
 
     def input_request(self, *, sources, mode, request):
-        return SourceRequest(artifact_type="table", mode="batches", batch_size=1, form="table")
+        return SourceRequest(
+            artifact_type="table", mode="batches", batch_size=1, form="table"
+        )
 
-    def translate_batch(self, inputs: Mapping[str, InputBatch], *, mode, request) -> BatchResult:
+    def translate_batch(
+        self, inputs: Mapping[str, InputBatch], *, mode, request
+    ) -> BatchResult:
         _ = mode, request
         batch = next(iter(inputs.values()))
         unit = int(batch.data["unit"].iloc[0])
@@ -105,11 +111,9 @@ class _DelayTranslator(BaseTranslator):
 
     def handle_batch_result(self, result, *, batch_index, mode, request):
         _ = result, batch_index, mode, request
-        return None
 
     def finalize_translation(self, *, mode, request):
         _ = mode, request
-        return None
 
     def make_translate_worker(self, *, mode, request):
         _ = mode, request
@@ -184,7 +188,9 @@ def test_parallel_results_are_restored_to_plan_order_with_real_processes(
                 translate_worker=_DelayTranslator(),
                 plan=plan,
                 sources={"source": _FakeArtifact()},
-                input_request={"source": SourceRequest(artifact_type="table", batch_size=1)},
+                input_request={
+                    "source": SourceRequest(artifact_type="table", batch_size=1)
+                },
                 mode="translate",
                 request=request,
                 workers=3,
@@ -216,6 +222,7 @@ def test_resume_retries_failed_and_interrupted_units(tmp_path: Path) -> None:
         assert plan.complete_count() == 1
     finally:
         plan.close()
+
 
 # ---------------------------------------------------------------------------
 # Near-end-to-end translation/resume tests.  These replace only unavailable
@@ -281,7 +288,9 @@ def _install_fake_source_queries(monkeypatch, rows: pd.DataFrame) -> None:
         if where:
             import re
 
-            match = re.fullmatch(r"_position >= (\d+) AND _position < (\d+)", str(where))
+            match = re.fullmatch(
+                r"_position >= (\d+) AND _position < (\d+)", str(where)
+            )
             if not match:
                 raise AssertionError(f"unexpected where clause: {where}")
             start, stop = map(int, match.groups())
@@ -328,15 +337,18 @@ class _TransientResumableTranslator(BaseTranslator):
             batch_size=request.batch_size or 2,
             form="table",
             include_position=True,
-            columns=__import__("text_analysis_lab.core.operator", fromlist=["ColumnRequest"]).ColumnRequest(
-                keys=True, data=False, metadata=False
-            ),
+            columns=__import__(
+                "text_analysis_lab.core.operator", fromlist=["ColumnRequest"]
+            ).ColumnRequest(keys=True, data=False, metadata=False),
         )
 
     def translate_batch(self, inputs, *, mode, request):
         _ = mode, request
         batch = inputs["source"]
-        if batch.batch_index == self.fail_unit and not Path(self.sentinel_path).exists():
+        if (
+            batch.batch_index == self.fail_unit
+            and not Path(self.sentinel_path).exists()
+        ):
             Path(self.sentinel_path).write_text("failed-once", encoding="utf-8")
             raise RuntimeError(f"transient unit {self.fail_unit}")
         return BatchResult(
@@ -349,7 +361,6 @@ class _TransientResumableTranslator(BaseTranslator):
 
     def finalize_translation(self, *, mode, request):
         _ = mode, request
-        return None
 
     def make_translate_worker(self, *, mode, request):
         _ = mode, request
@@ -372,7 +383,9 @@ class _TransientResumableTranslator(BaseTranslator):
     @classmethod
     def load_intermediate_state(cls, intermediate_dir, *, operator_id, mode, route):
         _ = mode, route
-        state = __import__("json").loads((Path(intermediate_dir) / "state.json").read_text())
+        state = __import__("json").loads(
+            (Path(intermediate_dir) / "state.json").read_text()
+        )
         obj = cls.from_json_state(state)
         obj.operator_id = operator_id
         return obj
@@ -456,7 +469,9 @@ def test_parallel_resume_preserves_canonical_output_order_and_completed_units(
             pd.read_parquet(output.keys_dir / f"part-{index:06d}.parquet")
             for index in range(5)
         ]
-        assert pd.concat(key_frames, ignore_index=True)["id"].tolist() == list(range(10))
+        assert pd.concat(key_frames, ignore_index=True)["id"].tolist() == list(
+            range(10)
+        )
     finally:
         project.close()
 
@@ -526,7 +541,9 @@ def test_function_subset_parallel_acceptance_preserves_canonical_selected_keys(
         assert output.primary_key == ["id"]
         assert _read_all_key_ids(output) == [0, 2, 4, 6, 8, 10]
         assert output.descriptor["lineage"]["lineage_mode"] == "preserved_key"
-        assert output.descriptor["lineage"]["basis_artifact_ids"] == [source.artifact_id]
+        assert output.descriptor["lineage"]["basis_artifact_ids"] == [
+            source.artifact_id
+        ]
     finally:
         project.close()
 
@@ -598,7 +615,6 @@ def transient_keep_even_rows(packet):
 def test_parallel_subset_can_resume_from_last_completed_unit(
     tmp_path: Path, monkeypatch
 ) -> None:
-    import os
     import text_analysis_lab as teal
     import text_analysis_lab.core.translate as translate_module
 
@@ -640,7 +656,7 @@ def test_parallel_subset_can_resume_from_last_completed_unit(
 
 
 def test_file_backed_subset_operator_uses_frozen_asset_after_source_is_deleted(
-    tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     from text_analysis_lab.core.operator import BaseOperator
     from text_analysis_lab.core.subset import FunctionSubsetTranslator
@@ -688,6 +704,7 @@ def test_file_backed_subset_resume_state_is_self_contained(tmp_path: Path) -> No
     mask = loaded.function(pd.DataFrame({"id": [0, 1, 2, 3]}))
     assert list(mask) == [True, False, True, False]
 
+
 @pytest.mark.parametrize("limit", [1, 2, 4])
 def test_parallel_backpressure_limit_is_respected_under_out_of_order_completion(
     tmp_path: Path, monkeypatch, limit: int
@@ -717,7 +734,9 @@ def test_parallel_backpressure_limit_is_respected_under_out_of_order_completion(
                 translate_worker=_DelayTranslator(),
                 plan=plan,
                 sources={"source": _FakeArtifact()},
-                input_request={"source": SourceRequest(artifact_type="table", batch_size=1)},
+                input_request={
+                    "source": SourceRequest(artifact_type="table", batch_size=1)
+                },
                 mode="translate",
                 request=request,
                 workers=4,
@@ -730,7 +749,9 @@ def test_parallel_backpressure_limit_is_respected_under_out_of_order_completion(
     assert client_holder["client"].max_in_flight <= limit
 
 
-def test_execution_plan_recovery_state_survives_close_and_reopen(tmp_path: Path) -> None:
+def test_execution_plan_recovery_state_survives_close_and_reopen(
+    tmp_path: Path,
+) -> None:
     operation_dir = tmp_path / "operation"
     plan = _ExecutionPlan(operation_dir)
     plan.initialize(_plan_units(4))
@@ -774,8 +795,8 @@ def test_split_ignores_parallel_workers_for_full_artifact_source(
 
 
 def test_file_backed_subset_parallel_worker_uses_frozen_copy(tmp_path: Path) -> None:
-    from text_analysis_lab.core.subset import FunctionSubsetTranslator
     from text_analysis_lab.core.operator import TranslationRequest
+    from text_analysis_lab.core.subset import FunctionSubsetTranslator
 
     source_file = tmp_path / "subset_rule.py"
     source_file.write_text(
@@ -813,7 +834,9 @@ class _MultiTransientTranslator(_TransientResumableTranslator):
         if unit in self.fail_units and not sentinel.exists():
             sentinel.write_text("failed-once", encoding="utf-8")
             raise RuntimeError(f"transient unit {unit}")
-        return BatchResult(outputs={"output": {"keys": batch.data.loc[:, ["id"]].copy()}})
+        return BatchResult(
+            outputs={"output": {"keys": batch.data.loc[:, ["id"]].copy()}}
+        )
 
     def make_translate_worker(self, *, mode, request):
         _ = mode, request
@@ -870,7 +893,9 @@ def test_subset_skips_empty_selected_batches_without_failing_writer(
     rows = pd.DataFrame({"id": list(range(9)), "group": [0] * 9})
     _install_fake_source_queries(monkeypatch, rows)
     _install_fake_query_columns(monkeypatch)
-    project = teal.Project.create(tmp_path / "project", name="subset_empty_batch_project")
+    project = teal.Project.create(
+        tmp_path / "project", name="subset_empty_batch_project"
+    )
     try:
         source = _seed_source_artifact(project, rows)
         outputs = project.subset(
@@ -965,7 +990,7 @@ def test_function_mapper_cloudpickle_freezes_captured_state(tmp_path: Path) -> N
 def test_checkpoint_swap_retries_transient_permission_error(
     tmp_path: Path, monkeypatch
 ) -> None:
-    import text_analysis_lab.core.translate as translate
+    from text_analysis_lab.core import translate
 
     target = tmp_path / "temp"
     target.mkdir()
@@ -995,7 +1020,7 @@ def test_checkpoint_swap_retries_transient_permission_error(
 def test_checkpoint_swap_persistent_promotion_failure_restores_previous(
     tmp_path: Path, monkeypatch
 ) -> None:
-    import text_analysis_lab.core.translate as translate
+    from text_analysis_lab.core import translate
 
     target = tmp_path / "temp"
     target.mkdir()
@@ -1013,9 +1038,7 @@ def test_checkpoint_swap_persistent_promotion_failure_restores_previous(
     with pytest.raises(PermissionError, match="persistent Windows"):
         _replace_directory_with_staging(
             target,
-            lambda staging: (staging / "state.txt").write_text(
-                "new", encoding="utf-8"
-            ),
+            lambda staging: (staging / "state.txt").write_text("new", encoding="utf-8"),
         )
 
     assert (target / "state.txt").read_text(encoding="utf-8") == "old"
@@ -1023,7 +1046,9 @@ def test_checkpoint_swap_persistent_promotion_failure_restores_previous(
     assert not target.with_name("temp.__previous__").exists()
 
 
-def test_checkpoint_swap_recovers_interrupted_previous_generation(tmp_path: Path) -> None:
+def test_checkpoint_swap_recovers_interrupted_previous_generation(
+    tmp_path: Path,
+) -> None:
     target = tmp_path / "temp"
     previous = tmp_path / "temp.__previous__"
     staging = tmp_path / "temp.__staging__"

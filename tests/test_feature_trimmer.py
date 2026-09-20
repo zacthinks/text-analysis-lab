@@ -13,7 +13,6 @@ from text_analysis_lab.core.operator import BaseOperator, InputBatch, Translatio
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.translators import FeatureTrimmer
 
-
 FEATURES = ["alpha", "beta", "gamma", "delta", "epsilon"]
 COUNTS = sparse.csr_matrix(
     np.array(
@@ -73,7 +72,9 @@ def test_feature_trimmer_fits_df_mask_and_preserves_original_column_order() -> N
 def test_feature_trimmer_fractional_max_df_and_max_features_are_deterministic() -> None:
     low_df = FeatureTrimmer(max_df=0.5)
     low_df.input_request(
-        sources={"source": _source()}, mode="fit_translate", request=TranslationRequest()
+        sources={"source": _source()},
+        mode="fit_translate",
+        request=TranslationRequest(),
     )
     low_df.translate_batch(
         {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
@@ -82,7 +83,9 @@ def test_feature_trimmer_fractional_max_df_and_max_features_are_deterministic() 
 
     top_one = FeatureTrimmer(min_df=4, max_features=1)
     top_one.input_request(
-        sources={"source": _source()}, mode="fit_translate", request=TranslationRequest()
+        sources={"source": _source()},
+        mode="fit_translate",
+        request=TranslationRequest(),
     )
     top_one.translate_batch(
         {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
@@ -91,10 +94,14 @@ def test_feature_trimmer_fractional_max_df_and_max_features_are_deterministic() 
     assert top_one.kept_indices_ == (1,)
 
 
-def test_feature_trimmer_replays_exact_frozen_mask_and_round_trips(tmp_path: Path) -> None:
+def test_feature_trimmer_replays_exact_frozen_mask_and_round_trips(
+    tmp_path: Path,
+) -> None:
     trimmer = FeatureTrimmer(min_df=4)
     trimmer.input_request(
-        sources={"source": _source()}, mode="fit_translate", request=TranslationRequest()
+        sources={"source": _source()},
+        mode="fit_translate",
+        request=TranslationRequest(),
     )
     trimmer.translate_batch(
         {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
@@ -136,7 +143,9 @@ def test_feature_trimmer_dense_external_replay_stays_dense() -> None:
 def test_feature_trimmer_rejects_empty_or_mismatched_schema() -> None:
     trimmer = FeatureTrimmer(min_df=7, max_df=100)
     trimmer.input_request(
-        sources={"source": _source()}, mode="fit_translate", request=TranslationRequest()
+        sources={"source": _source()},
+        mode="fit_translate",
+        request=TranslationRequest(),
     )
     with pytest.raises(ArtifactError, match="retained no features"):
         trimmer.translate_batch(
@@ -145,7 +154,9 @@ def test_feature_trimmer_rejects_empty_or_mismatched_schema() -> None:
 
     fitted = FeatureTrimmer(min_df=4)
     fitted.input_request(
-        sources={"source": _source()}, mode="fit_translate", request=TranslationRequest()
+        sources={"source": _source()},
+        mode="fit_translate",
+        request=TranslationRequest(),
     )
     fitted.translate_batch(
         {"source": _packet()}, mode="fit_translate", request=TranslationRequest()

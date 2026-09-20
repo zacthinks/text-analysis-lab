@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 
 class InvalidBioSequence(ValueError):
@@ -120,7 +120,19 @@ def bio_spans(tags: Sequence[str]) -> tuple[BioSpan, ...]:
 
 _FUNCTION_POS = frozenset({"ADP", "SCONJ", "CCONJ", "DET", "PART"})
 _QUANTIFIERS = frozenset(
-    {"all", "some", "more", "lot", "lots", "enough", "none", "any", "most", "less", "much"}
+    {
+        "all",
+        "some",
+        "more",
+        "lot",
+        "lots",
+        "enough",
+        "none",
+        "any",
+        "most",
+        "less",
+        "much",
+    }
 )
 
 
@@ -143,7 +155,9 @@ def content_head_indices(
     """
 
     if start < 0 or end > len(token_ids) or start >= end:
-        raise ValueError(f"Invalid token span [{start}, {end}) for {len(token_ids)} tokens")
+        raise ValueError(
+            f"Invalid token span [{start}, {end}) for {len(token_ids)} tokens"
+        )
 
     global_to_local = {int(token_id): index for index, token_id in enumerate(token_ids)}
     span_indices = tuple(range(start, end))
@@ -176,7 +190,10 @@ def content_head_indices(
             if candidate in visited:
                 continue
             visited.add(candidate)
-            if dependencies[candidate] != "punct" and pos[candidate] not in _FUNCTION_POS:
+            if (
+                dependencies[candidate] != "punct"
+                and pos[candidate] not in _FUNCTION_POS
+            ):
                 return candidate
             queue.extend(children.get(candidate, ()))
         return index
@@ -185,7 +202,9 @@ def content_head_indices(
         root = nearest_content_descendant(root)
 
     if text[root].lower() in _QUANTIFIERS:
-        of_children = [child for child in children.get(root, ()) if text[child].lower() == "of"]
+        of_children = [
+            child for child in children.get(root, ()) if text[child].lower() == "of"
+        ]
         if of_children:
             replacement = nearest_content_descendant(of_children[0])
             if replacement != of_children[0] or pos[replacement] not in _FUNCTION_POS:
@@ -202,7 +221,11 @@ def content_head_indices(
                 if index in heads or dependencies[index] != "conj":
                     continue
                 parent_global = head_token_ids[index]
-                parent = None if parent_global is None else global_to_local.get(int(parent_global))
+                parent = (
+                    None
+                    if parent_global is None
+                    else global_to_local.get(int(parent_global))
+                )
                 if parent in heads:
                     heads.append(index)
                     changed = True

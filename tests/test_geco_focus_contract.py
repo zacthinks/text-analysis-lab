@@ -6,11 +6,17 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from text_analysis_lab.integrations.geco import GeCoIntegrationError, GeCoManager, _normalize_focus_codes
+from text_analysis_lab.integrations.geco import (
+    GeCoIntegrationError,
+    GeCoManager,
+    _normalize_focus_codes,
+)
 
 
 class FakeArtifact:
-    def __init__(self, artifact_id: str, frame: pd.DataFrame, *, keys=("row_id",)) -> None:
+    def __init__(
+        self, artifact_id: str, frame: pd.DataFrame, *, keys=("row_id",)
+    ) -> None:
         self.artifact_id = artifact_id
         self.primary_key = list(keys)
         self._frame = frame.reset_index(drop=True).copy()
@@ -40,7 +46,7 @@ class FakeArtifact:
 
 
 class FakeCoder:
-    registry: dict[str, "FakeCoder"] = {}
+    registry: dict[str, FakeCoder] = {}
 
     def __init__(self, path: Path, data: pd.DataFrame) -> None:
         self.path = path
@@ -75,7 +81,13 @@ class FakeCoder:
         return code_id
 
     def sessions(self):
-        return [{"session_id": 1, "title": "Default session", "state": dict(self.session_state)}]
+        return [
+            {
+                "session_id": 1,
+                "title": "Default session",
+                "state": dict(self.session_state),
+            }
+        ]
 
     def patch_session_state(self, session_id, patch):
         assert int(session_id) == 1
@@ -131,7 +143,9 @@ def test_focus_code_normalization_preserves_order_and_descriptions() -> None:
         _normalize_focus_codes([{"name": "x"}, {"name": "x"}])
 
 
-def test_create_focus_uses_audit_keys_but_larger_text_source(tmp_path: Path, monkeypatch) -> None:
+def test_create_focus_uses_audit_keys_but_larger_text_source(
+    tmp_path: Path, monkeypatch
+) -> None:
     import text_analysis_lab.integrations.geco as bridge
 
     FakeCoder.registry.clear()
@@ -190,8 +204,9 @@ def test_create_focus_uses_audit_keys_but_larger_text_source(tmp_path: Path, mon
     assert reopened.external_provider is None
 
 
-
-def test_launch_focus_keeps_geco_0814_integrated_ui_fallback(tmp_path: Path, monkeypatch) -> None:
+def test_launch_focus_keeps_geco_0814_integrated_ui_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
     import text_analysis_lab.integrations.geco as bridge
 
     class IntegratedUICoder(FakeCoder):
@@ -222,7 +237,9 @@ def test_launch_focus_keeps_geco_0814_integrated_ui_fallback(tmp_path: Path, mon
     assert linked.launch_focus() == "launched"
 
 
-def test_focus_export_requires_binary_completion_and_combines_codes(tmp_path: Path, monkeypatch) -> None:
+def test_focus_export_requires_binary_completion_and_combines_codes(
+    tmp_path: Path, monkeypatch
+) -> None:
     import text_analysis_lab.integrations.geco as bridge
 
     FakeCoder.registry.clear()

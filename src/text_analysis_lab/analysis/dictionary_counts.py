@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 def dictionary_counts(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     dictionary: Dictionary,
     *,
     batch_size: int = 10_000,
@@ -39,8 +39,7 @@ def dictionary_counts(
     collisions = sorted(set(keys).intersection({*primary_key, "_position"}))
     if collisions:
         raise ValueError(
-            "Dictionary keys collide with structural output columns: "
-            f"{collisions}."
+            f"Dictionary keys collide with structural output columns: {collisions}."
         )
     columns = [*primary_key, "_position", *keys]
     frames: list[pd.DataFrame] = []

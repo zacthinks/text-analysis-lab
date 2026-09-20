@@ -33,7 +33,9 @@ def test_import_operator_is_source_free_new_key_table() -> None:
     assert ImportOperator.from_json_state(state).kind == "read_csv"
 
 
-def test_tabular_column_plan_requires_explicit_roles_and_discards_everything_else() -> None:
+def test_tabular_column_plan_requires_explicit_roles_and_discards_everything_else() -> (
+    None
+):
     plan = _plan_tabular_columns(
         ["document_id", "title", "text", "speaker", "score", "_position"],
         text_fields=["title", "text"],
@@ -52,7 +54,10 @@ def test_tabular_column_plan_requires_explicit_roles_and_discards_everything_els
     [
         ({"text_fields": [], "metadata_fields": None}, "at least one"),
         ({"text_fields": "missing", "metadata_fields": None}, "Unknown text_fields"),
-        ({"text_fields": "text", "metadata_fields": "missing"}, "Unknown metadata_fields"),
+        (
+            {"text_fields": "text", "metadata_fields": "missing"},
+            "Unknown metadata_fields",
+        ),
         (
             {"text_fields": ["text", "group"], "metadata_fields": "group"},
             "both text_fields and metadata_fields",
@@ -156,5 +161,3 @@ def test_duckdb_source_sql_many_accepts_explicit_csv_file_list() -> None:
         "read_csv(['/tmp/a.csv', '/tmp/O''Brien/b.csv'], "
         "header = TRUE, filename = TRUE)"
     )
-
-

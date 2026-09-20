@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import shutil
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -18,8 +18,9 @@ from text_analysis_lab.translators import (
     TextFileExtractor,
 )
 
-
-PDF_FIXTURE = Path(__file__).parent / "fixtures" / "pdf_extractor" / "sample_two_page.pdf"
+PDF_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "pdf_extractor" / "sample_two_page.pdf"
+)
 
 
 def _query_full(artifact):
@@ -43,7 +44,9 @@ def _write_extension_rule(path: Path, extension: str) -> Path:
     return path
 
 
-def test_mixed_pdf_txt_inventory_extract_merge_downstream_and_reopen(tmp_path: Path) -> None:
+def test_mixed_pdf_txt_inventory_extract_merge_downstream_and_reopen(
+    tmp_path: Path,
+) -> None:
     corpus = tmp_path / "corpus"
     corpus.mkdir()
     shutil.copy2(PDF_FIXTURE, corpus / "b.pdf")
@@ -81,14 +84,19 @@ def test_mixed_pdf_txt_inventory_extract_merge_downstream_and_reopen(tmp_path: P
             output_label="txt_paths",
         )["txt_paths"]
 
-        pdf_text = project.translate(PdfTextExtractor(), pdf_branch, batch_size=1)["output"]
-        txt_text = project.translate(TextFileExtractor(), txt_branch, batch_size=1)["output"]
+        pdf_text = project.translate(PdfTextExtractor(), pdf_branch, batch_size=1)[
+            "output"
+        ]
+        txt_text = project.translate(TextFileExtractor(), txt_branch, batch_size=1)[
+            "output"
+        ]
 
         # The two extractors deliberately expose the same logical output schema,
         # allowing strict structural merge after format-specific processing.
-        assert pdf_text.query_columns(metadata_mode="full")["data"] == txt_text.query_columns(
-            metadata_mode="full"
-        )["data"]
+        assert (
+            pdf_text.query_columns(metadata_mode="full")["data"]
+            == txt_text.query_columns(metadata_mode="full")["data"]
+        )
 
         merged = project.merge([pdf_text, txt_text], batch_size=1)
         assert set(merged.components) == {"keys"}
@@ -96,15 +104,24 @@ def test_mixed_pdf_txt_inventory_extract_merge_downstream_and_reopen(tmp_path: P
         # Merge source order is durable: PDF branch first, then TXT branch.
         assert frame["file_id"].astype(int).tolist() == [1, 0, 2]
         assert frame["extraction_status"].tolist() == ["ok", "ok", "ok"]
-        assert "Body page one alpha" in frame.loc[
-            frame["file_id"].astype(int) == 1, "text"
-        ].iloc[0]
-        assert frame.loc[frame["file_id"].astype(int) == 0, "text"].iloc[0] == "Plain\ntext alpha"
-        assert frame.loc[frame["file_id"].astype(int) == 2, "text"].iloc[0] == "Plain text gamma"
+        assert (
+            "Body page one alpha"
+            in frame.loc[frame["file_id"].astype(int) == 1, "text"].iloc[0]
+        )
+        assert (
+            frame.loc[frame["file_id"].astype(int) == 0, "text"].iloc[0]
+            == "Plain\ntext alpha"
+        )
+        assert (
+            frame.loc[frame["file_id"].astype(int) == 2, "text"].iloc[0]
+            == "Plain text gamma"
+        )
         assert pd.isna(
             frame.loc[frame["file_id"].astype(int) == 0, "page_count"].iloc[0]
         )
-        assert int(frame.loc[frame["file_id"].astype(int) == 1, "page_count"].iloc[0]) == 2
+        assert (
+            int(frame.loc[frame["file_id"].astype(int) == 1, "page_count"].iloc[0]) == 2
+        )
 
         cleaned = project.translate(
             RegexCleaner(
@@ -117,9 +134,11 @@ def test_mixed_pdf_txt_inventory_extract_merge_downstream_and_reopen(tmp_path: P
         )["output"]
         cleaned_frame = _query_full(cleaned)
         assert cleaned_frame["file_id"].astype(int).tolist() == [1, 0, 2]
-        assert cleaned_frame.loc[
-            cleaned_frame["file_id"].astype(int) == 0, "clean_text"
-        ].iloc[0].startswith("CLEAN")
+        assert (
+            cleaned_frame.loc[cleaned_frame["file_id"].astype(int) == 0, "clean_text"]
+            .iloc[0]
+            .startswith("CLEAN")
+        )
         merged_id = merged.artifact_id
         cleaned_id = cleaned.artifact_id
     finally:
@@ -130,12 +149,17 @@ def test_mixed_pdf_txt_inventory_extract_merge_downstream_and_reopen(tmp_path: P
         merged = reopened.get_artifact(merged_id)
         frame = _query_full(merged)
         assert frame["file_id"].astype(int).tolist() == [1, 0, 2]
-        assert frame.loc[frame["file_id"].astype(int) == 2, "text"].iloc[0] == "Plain text gamma"
+        assert (
+            frame.loc[frame["file_id"].astype(int) == 2, "text"].iloc[0]
+            == "Plain text gamma"
+        )
 
         cleaned = reopened.get_artifact(cleaned_id)
         cleaned_frame = _query_full(cleaned)
-        assert cleaned_frame.loc[
-            cleaned_frame["file_id"].astype(int) == 0, "clean_text"
-        ].iloc[0].startswith("CLEAN")
+        assert (
+            cleaned_frame.loc[cleaned_frame["file_id"].astype(int) == 0, "clean_text"]
+            .iloc[0]
+            .startswith("CLEAN")
+        )
     finally:
         reopened.close()

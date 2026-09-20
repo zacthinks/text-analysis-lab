@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -13,8 +13,8 @@ from scipy import sparse
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -58,7 +58,9 @@ class FittedPredictor(BaseTranslator):
     ) -> None:
         super().__init__(operator_id=operator_id)
         if model is not None and not callable(getattr(model, "predict", None)):
-            raise TypeError("FittedPredictor model must expose a callable predict(...).")
+            raise TypeError(
+                "FittedPredictor model must expose a callable predict(...)."
+            )
         self.model = model
         self.probability_class = _json_scalar(probability_class)
         self._source_type: str | None = None
@@ -73,7 +75,7 @@ class FittedPredictor(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -93,7 +95,7 @@ class FittedPredictor(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -106,7 +108,7 @@ class FittedPredictor(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -123,7 +125,9 @@ class FittedPredictor(BaseTranslator):
             mode="batches",
             columns=ColumnRequest(keys=True, data=True, metadata=False),
             batch_size=request.batch_size or 10_000,
-            form="native" if source_type in {"sparse_matrix", "dense_matrix"} else "table",
+            form="native"
+            if source_type in {"sparse_matrix", "dense_matrix"}
+            else "table",
             metadata_mode="none",
             include_position=False,
         )
@@ -218,7 +222,7 @@ class FittedPredictor(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "FittedPredictor":
+    ) -> FittedPredictor:
         _ = request
         if mode != "translate":
             raise OperatorError("FittedPredictor workers support translate mode only.")
@@ -233,7 +237,7 @@ class FittedPredictor(BaseTranslator):
         return {"probability_class": self.probability_class}
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "FittedPredictor":
+    def from_json_state(cls, state: Mapping[str, Any]) -> FittedPredictor:
         return cls(None, probability_class=state.get("probability_class"))
 
     def save_assets(self, assets_dir: Path) -> Mapping[str, Any]:
@@ -245,7 +249,9 @@ class FittedPredictor(BaseTranslator):
     def load_assets(self, assets_dir: Path, manifest: Mapping[str, Any]) -> None:
         filename = manifest.get("estimator_file")
         if not isinstance(filename, str) or not filename:
-            raise OperatorError("FittedPredictor operator is missing its estimator asset.")
+            raise OperatorError(
+                "FittedPredictor operator is missing its estimator asset."
+            )
         self.model = load_estimator(assets_dir / filename)
 
     def save_intermediate_state(
@@ -277,16 +283,20 @@ class FittedPredictor(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "FittedPredictor":
+    ) -> FittedPredictor:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         obj = cls.from_json_state(state)
         obj.operator_id = operator_id
         raw_source_type = state.get("source_type")
         obj._source_type = None if raw_source_type is None else str(raw_source_type)
         assets = state.get("assets", {})
         if not isinstance(assets, Mapping):
-            raise OperatorError("FittedPredictor intermediate assets must be a mapping.")
+            raise OperatorError(
+                "FittedPredictor intermediate assets must be a mapping."
+            )
         obj.load_assets(intermediate_dir, assets)
         return obj
 
@@ -294,23 +304,31 @@ class FittedPredictor(BaseTranslator):
         if self.model is None:
             raise OperatorError("FittedPredictor estimator is unavailable.")
         if not callable(getattr(self.model, "predict", None)):
-            raise OperatorError("FittedPredictor estimator has no callable predict(...).")
+            raise OperatorError(
+                "FittedPredictor estimator has no callable predict(...)."
+            )
         return self.model
 
 
 def _single_source(sources: Mapping[str, Any]):
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
-        raise OperatorError("FittedPredictor requires exactly one source under 'source'.")
+        raise OperatorError(
+            "FittedPredictor requires exactly one source under 'source'."
+        )
     return sources[DEFAULT_SOURCE_LABEL]
 
 
 def _single_input(inputs: Mapping[str, InputBatch]) -> InputBatch:
     if set(inputs) != {DEFAULT_SOURCE_LABEL}:
-        raise OperatorError("FittedPredictor expected exactly one input under 'source'.")
+        raise OperatorError(
+            "FittedPredictor expected exactly one input under 'source'."
+        )
     return inputs[DEFAULT_SOURCE_LABEL]
 
 
-def _prediction_input(packet: InputBatch, *, source_type: str | None) -> tuple[pd.DataFrame, Any]:
+def _prediction_input(
+    packet: InputBatch, *, source_type: str | None
+) -> tuple[pd.DataFrame, Any]:
     key_columns = list(packet.primary_key)
     if source_type in {"sparse_matrix", "dense_matrix"}:
         if not isinstance(packet.data, Mapping):
@@ -324,21 +342,31 @@ def _prediction_input(packet: InputBatch, *, source_type: str | None) -> tuple[p
         else:
             matrix = np.asarray(matrix)
             if matrix.ndim != 2:
-                raise ArtifactError("FittedPredictor matrix input must be two-dimensional.")
+                raise ArtifactError(
+                    "FittedPredictor matrix input must be two-dimensional."
+                )
             n_rows = int(matrix.shape[0])
         if len(info) != n_rows:
-            raise ArtifactError("FittedPredictor matrix keys and values have different row counts.")
+            raise ArtifactError(
+                "FittedPredictor matrix keys and values have different row counts."
+            )
         missing = [column for column in key_columns if column not in info.columns]
         if missing:
-            raise ArtifactError(f"FittedPredictor packet is missing key column(s) {missing}.")
+            raise ArtifactError(
+                f"FittedPredictor packet is missing key column(s) {missing}."
+            )
         return info.loc[:, key_columns].reset_index(drop=True), matrix
 
     if not isinstance(packet.data, pd.DataFrame):
-        raise ArtifactError("FittedPredictor relational input must materialize as a DataFrame.")
+        raise ArtifactError(
+            "FittedPredictor relational input must materialize as a DataFrame."
+        )
     frame = packet.data
     missing = [column for column in key_columns if column not in frame.columns]
     if missing:
-        raise ArtifactError(f"FittedPredictor packet is missing key column(s) {missing}.")
+        raise ArtifactError(
+            f"FittedPredictor packet is missing key column(s) {missing}."
+        )
     keys = frame.loc[:, key_columns].reset_index(drop=True)
     values = frame.drop(columns=key_columns, errors="ignore").reset_index(drop=True)
     return keys, values
@@ -349,7 +377,9 @@ def _one_dimensional(value: Any, *, expected_rows: int, name: str) -> np.ndarray
     if arr.ndim == 2 and arr.shape[1] == 1:
         arr = arr[:, 0]
     if arr.ndim != 1:
-        raise ArtifactError(f"{name}(...) must return one value per row; got shape {arr.shape}.")
+        raise ArtifactError(
+            f"{name}(...) must return one value per row; got shape {arr.shape}."
+        )
     if len(arr) != int(expected_rows):
         raise ArtifactError(
             f"{name}(...) returned {len(arr)} values for {expected_rows} input rows."

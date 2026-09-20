@@ -16,8 +16,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -38,20 +38,20 @@ _PI_LABEL = "pi"
 
 
 def probability_split(
-    project: "Project",
-    source: "BaseArtifact | str",
+    project: Project,
+    source: BaseArtifact | str,
     *,
     n: int,
     remainder_label: str = "remainder",
     sample_label: str = "sample",
-    strata: "BaseArtifact | str | None" = None,
+    strata: BaseArtifact | str | None = None,
     allocation: Mapping[Any, float] | None = None,
     random_state: int | None = None,
     workers: int = 1,
     memo: str | None = None,
     alias: Mapping[str, str] | None = None,
     overwrite: bool = False,
-) -> Mapping[str, "BaseArtifact"]:
+) -> Mapping[str, BaseArtifact]:
     """Draw a fixed-size probability audit sample without replacement.
 
     With no ``strata``, every source observation has inclusion probability
@@ -75,7 +75,12 @@ def probability_split(
     if strata is not None:
         sources[_STRATA] = strata
     return project.translate(
-        translator, sources, workers=workers, memo=memo, alias=alias, overwrite=overwrite
+        translator,
+        sources,
+        workers=workers,
+        memo=memo,
+        alias=alias,
+        overwrite=overwrite,
     )
 
 
@@ -101,8 +106,12 @@ class ProbabilitySplitTranslator(BaseTranslator):
         if self.remainder_label == self.sample_label:
             raise ValueError("remainder_label and sample_label must be different.")
         if _PI_LABEL in {self.remainder_label, self.sample_label}:
-            raise ValueError("remainder_label and sample_label cannot use reserved label 'pi'.")
-        if {_DOCUMENTS, _STRATA}.intersection({self.remainder_label, self.sample_label}):
+            raise ValueError(
+                "remainder_label and sample_label cannot use reserved label 'pi'."
+            )
+        if {_DOCUMENTS, _STRATA}.intersection(
+            {self.remainder_label, self.sample_label}
+        ):
             raise ValueError(
                 "remainder_label/sample_label cannot use internal source labels "
                 f"{_DOCUMENTS!r} or {_STRATA!r}."
@@ -113,7 +122,7 @@ class ProbabilitySplitTranslator(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> Mapping[str, OutputSpec]:
         _ = request
@@ -141,7 +150,7 @@ class ProbabilitySplitTranslator(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = mode
@@ -155,12 +164,18 @@ class ProbabilitySplitTranslator(BaseTranslator):
         strata = sources.get(_STRATA)
         if strata is None:
             if self.allocation is not None:
-                raise OperatorError("Probability split allocation requires a strata source.")
+                raise OperatorError(
+                    "Probability split allocation requires a strata source."
+                )
         else:
             if self.allocation is None:
-                raise OperatorError("Probability split strata source requires allocation.")
+                raise OperatorError(
+                    "Probability split strata source requires allocation."
+                )
             if strata.artifact_type.value != "table":
-                raise OperatorError("Probability split strata must be a table artifact.")
+                raise OperatorError(
+                    "Probability split strata must be a table artifact."
+                )
             if tuple(strata.primary_key) != tuple(source.primary_key):
                 raise ArtifactError(
                     "Probability split strata must use the same primary-key columns as source."
@@ -176,7 +191,7 @@ class ProbabilitySplitTranslator(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> Mapping[str, SourceRequest]:
@@ -242,7 +257,9 @@ class ProbabilitySplitTranslator(BaseTranslator):
         else:
             strata_packet = inputs[_STRATA]
             strata_frame = _table(strata_packet.data, name="strata")
-            strata_keys = _key_frame(strata_frame, strata_packet.primary_key, name="strata")
+            strata_keys = _key_frame(
+                strata_frame, strata_packet.primary_key, name="strata"
+            )
             _require_unique_keys(strata_keys, strata_packet.primary_key, name="strata")
             data_columns = [
                 column
@@ -318,16 +335,20 @@ class ProbabilitySplitTranslator(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "ProbabilitySplitTranslator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> ProbabilitySplitTranslator:
         raw = state.get("allocation")
         allocation = None
         if raw is not None:
             if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
-                raise OperatorError("Probability split allocation state must be a sequence.")
+                raise OperatorError(
+                    "Probability split allocation state must be a sequence."
+                )
             pairs: list[tuple[Any, float]] = []
             for record in raw:
                 if not isinstance(record, Mapping):
-                    raise OperatorError("Probability split allocation records must be mappings.")
+                    raise OperatorError(
+                        "Probability split allocation records must be mappings."
+                    )
                 pairs.append((record.get("stratum"), float(record["weight"])))
             allocation = pairs
         return cls(
@@ -355,7 +376,9 @@ def _documents_source(sources: Mapping[str, Any]):
 
 def _table(value: Any, *, name: str) -> pd.DataFrame:
     if not isinstance(value, pd.DataFrame):
-        raise ArtifactError(f"Probability split {name} input must materialize as a table.")
+        raise ArtifactError(
+            f"Probability split {name} input must materialize as a table."
+        )
     return value
 
 
@@ -365,24 +388,34 @@ def _sort_source(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def _key_frame(frame: pd.DataFrame, primary_key: Sequence[str], *, name: str) -> pd.DataFrame:
+def _key_frame(
+    frame: pd.DataFrame, primary_key: Sequence[str], *, name: str
+) -> pd.DataFrame:
     columns = [str(value) for value in primary_key]
     missing = [column for column in columns if column not in frame.columns]
     if missing:
-        raise ArtifactError(f"Probability split {name} input is missing key column(s) {missing}.")
+        raise ArtifactError(
+            f"Probability split {name} input is missing key column(s) {missing}."
+        )
     keys = frame.loc[:, columns].copy().reset_index(drop=True)
     if keys.isna().any().any():
         raise ArtifactError(f"Probability split {name} keys contain null values.")
     return keys
 
 
-def _require_unique_keys(frame: pd.DataFrame, primary_key: Sequence[str], *, name: str) -> None:
+def _require_unique_keys(
+    frame: pd.DataFrame, primary_key: Sequence[str], *, name: str
+) -> None:
     columns = [str(value) for value in primary_key]
     if frame.duplicated(subset=columns).any():
-        raise ArtifactError(f"Probability split {name} contains duplicate primary keys.")
+        raise ArtifactError(
+            f"Probability split {name} contains duplicate primary keys."
+        )
 
 
-def _key_tuples(frame: pd.DataFrame, primary_key: Sequence[str]) -> list[tuple[int, ...]]:
+def _key_tuples(
+    frame: pd.DataFrame, primary_key: Sequence[str]
+) -> list[tuple[int, ...]]:
     columns = [str(value) for value in primary_key]
     return [
         tuple(int(value) for value in row)
@@ -410,14 +443,20 @@ def _align_strata(
         )
     by_key = {
         key: _stratum_scalar(value)
-        for key, value in zip(strata_tuples, strata_frame[stratum_column].tolist(), strict=True)
+        for key, value in zip(
+            strata_tuples, strata_frame[stratum_column].tolist(), strict=True
+        )
     }
     return [by_key[key] for key in source_tuples]
 
 
-def _srs_indices(*, N: int, n: int, random_state: int | None) -> tuple[list[int], dict[int, float]]:
+def _srs_indices(
+    *, N: int, n: int, random_state: int | None
+) -> tuple[list[int], dict[int, float]]:
     rng = np.random.default_rng(random_state)
-    selected = sorted(int(value) for value in rng.choice(N, size=n, replace=False).tolist())
+    selected = sorted(
+        int(value) for value in rng.choice(N, size=n, replace=False).tolist()
+    )
     pi = float(n) / float(N)
     return selected, {index: pi for index in selected}
 
@@ -448,18 +487,20 @@ def _stratified_indices(
     missing = observed_tokens - requested_tokens
     unknown = requested_tokens - observed_tokens
     if missing:
-        values = [value_for_token[token] for token in sorted(missing, key=_token_sort_key)]
+        values = [
+            value_for_token[token] for token in sorted(missing, key=_token_sort_key)
+        ]
         raise ValueError(f"allocation is missing observed stratum/strata {values!r}.")
     if unknown:
-        values = [
-            value for value, _ in allocation if _stratum_token(value) in unknown
-        ]
+        values = [value for value, _ in allocation if _stratum_token(value) in unknown]
         raise ValueError(f"allocation contains unknown stratum/strata {values!r}.")
 
     ordered = sorted(observed_tokens, key=_token_sort_key)
     weights = np.asarray([requested[token] for token in ordered], dtype=float)
     if np.any(~np.isfinite(weights)) or np.any(weights <= 0):
-        raise ValueError("Every observed stratum must have a finite positive allocation weight.")
+        raise ValueError(
+            "Every observed stratum must have a finite positive allocation weight."
+        )
     raw = weights / weights.sum() * int(n)
     counts = np.floor(raw).astype(int)
     remainder = int(n - counts.sum())
@@ -507,7 +548,11 @@ def _normalize_allocation(
 ) -> tuple[tuple[Any, float], ...] | None:
     if allocation is None:
         return None
-    items = list(allocation.items()) if isinstance(allocation, Mapping) else list(allocation)
+    items = (
+        list(allocation.items())
+        if isinstance(allocation, Mapping)
+        else list(allocation)
+    )
     if not items:
         raise ValueError("allocation must contain at least one stratum.")
     out: list[tuple[Any, float]] = []

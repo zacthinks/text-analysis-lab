@@ -57,7 +57,9 @@ def _saved_sentencizer_model(tmp_path: Path) -> Path:
     return model_dir
 
 
-def test_real_spacy_saved_pipeline_parallel_two_output_structure_and_reopen(tmp_path: Path) -> None:
+def test_real_spacy_saved_pipeline_parallel_two_output_structure_and_reopen(
+    tmp_path: Path,
+) -> None:
     _external_modules()
     pytest.importorskip("dask.distributed")
     model_dir = _saved_sentencizer_model(tmp_path)
@@ -69,7 +71,7 @@ def test_real_spacy_saved_pipeline_parallel_two_output_structure_and_reopen(tmp_
                 "A second document has one sentence.",
                 "Numbers like 42 are tokens. So is $5.",
                 "Visit https://example.com. Then email test@example.com.",
-                "Punctuation (matters). Quotes \"too\".",
+                'Punctuation (matters). Quotes "too".',
                 "Final document. Final sentence.",
             ],
         }
@@ -94,9 +96,13 @@ def test_real_spacy_saved_pipeline_parallel_two_output_structure_and_reopen(tmp_
         assert sentences.primary_key == ["document_id", "sentence_id"]
         assert tokens.primary_key == ["document_id", "sentence_id", "token_id"]
         assert sentences.descriptor["lineage"]["lineage_mode"] == "extended_key"
-        assert sentences.descriptor["lineage"]["basis_artifact_ids"] == [source.artifact_id]
+        assert sentences.descriptor["lineage"]["basis_artifact_ids"] == [
+            source.artifact_id
+        ]
         assert tokens.descriptor["lineage"]["lineage_mode"] == "extended_key"
-        assert tokens.descriptor["lineage"]["basis_artifact_ids"] == [sentences.artifact_id]
+        assert tokens.descriptor["lineage"]["basis_artifact_ids"] == [
+            sentences.artifact_id
+        ]
 
         sentence_frame = sentences.query(
             key_columns=True,
@@ -113,13 +119,26 @@ def test_real_spacy_saved_pipeline_parallel_two_output_structure_and_reopen(tmp_
         assert len(sentence_frame) == 11
         assert len(token_frame) > len(sentence_frame)
         assert set(TOKEN_DATA_COLUMNS).issubset(token_frame.columns)
-        assert token_frame.groupby(["document_id", "sentence_id"])["token_id"].min().eq(0).all()
-        assert token_frame.groupby(["document_id", "sentence_id"])["token_id"].apply(
-            lambda values: values.astype(int).tolist() == list(range(len(values)))
-        ).all()
-        assert token_frame.groupby(["document_id", "sentence_id"])["head_token_id"].apply(
-            lambda values: set(values.astype(int)).issubset(set(range(len(values))))
-        ).all()
+        assert (
+            token_frame.groupby(["document_id", "sentence_id"])["token_id"]
+            .min()
+            .eq(0)
+            .all()
+        )
+        assert (
+            token_frame.groupby(["document_id", "sentence_id"])["token_id"]
+            .apply(
+                lambda values: values.astype(int).tolist() == list(range(len(values)))
+            )
+            .all()
+        )
+        assert (
+            token_frame.groupby(["document_id", "sentence_id"])["head_token_id"]
+            .apply(
+                lambda values: set(values.astype(int)).issubset(set(range(len(values))))
+            )
+            .all()
+        )
 
         # Character offsets are document-relative and recover exact source substrings.
         text_by_id = rows.set_index("document_id")["text"].to_dict()
@@ -138,12 +157,16 @@ def test_real_spacy_saved_pipeline_parallel_two_output_structure_and_reopen(tmp_
         reopened_tokens = project.get_artifact(token_id)
         assert reopened_sentences.primary_key == ["document_id", "sentence_id"]
         assert reopened_tokens.primary_key == ["document_id", "sentence_id", "token_id"]
-        assert reopened_tokens.descriptor["lineage"]["basis_artifact_ids"] == [sentence_id]
+        assert reopened_tokens.descriptor["lineage"]["basis_artifact_ids"] == [
+            sentence_id
+        ]
     finally:
         project.close()
 
 
-def test_spacy_two_output_resume_after_mid_operation_failure(tmp_path: Path, monkeypatch) -> None:
+def test_spacy_two_output_resume_after_mid_operation_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
     spacy = _external_modules()
     import text_analysis_lab.translators.spacy_translator as module
 

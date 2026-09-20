@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
 import types
-
-import json
 from pathlib import Path
 
 import pytest
@@ -42,7 +41,9 @@ def test_nltk_vader_wrapper_is_lexicon_only_valence(monkeypatch) -> None:
     assert "Lexicon-only" in (dictionary.provenance.notes or "")
 
 
-def test_nltk_sentiwordnet_wrapper_preserves_three_synset_dimensions(monkeypatch) -> None:
+def test_nltk_sentiwordnet_wrapper_preserves_three_synset_dimensions(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         nltk_provider,
         "_read_sentiwordnet",
@@ -136,7 +137,9 @@ def test_external_dictionary_can_be_saved_for_offline_operator_reuse(
     assert restored.dictionary.values["valence"]["good"] == pytest.approx(2.0)
 
 
-def test_external_dictionary_hash_rejects_changed_provider(monkeypatch, tmp_path: Path) -> None:
+def test_external_dictionary_hash_rejects_changed_provider(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         nltk_provider,
         "_read_vader_lexicon",
@@ -157,9 +160,7 @@ def test_external_dictionary_hash_rejects_changed_provider(monkeypatch, tmp_path
 
 def test_dictionary_catalog_lists_supported_external_providers() -> None:
     catalog = dictionaries.catalog()
-    assert {"hu_liu", "vader", "sentiwordnet", "afinn"}.issubset(
-        set(catalog["name"])
-    )
+    assert {"hu_liu", "vader", "sentiwordnet", "afinn"}.issubset(set(catalog["name"]))
     assert set(catalog.columns) == {
         "name",
         "provider",

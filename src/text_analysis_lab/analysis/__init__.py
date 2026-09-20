@@ -7,16 +7,20 @@ hierarchy.
 """
 
 from text_analysis_lab.analysis.accessor import ArtifactAnalysis
+from text_analysis_lab.analysis.classification import (
+    ClassificationEvaluation,
+    classification,
+)
 from text_analysis_lab.analysis.cosine_similarity import cosine_similarity
-from text_analysis_lab.analysis.classification import ClassificationEvaluation, classification
+from text_analysis_lab.analysis.crosstab import crosstab
+from text_analysis_lab.analysis.dictionary_counts import dictionary_counts
+from text_analysis_lab.analysis.dictionary_matches import dictionary_matches
+from text_analysis_lab.analysis.distance import distance
+from text_analysis_lab.analysis.feature_summary import feature_summary
 from text_analysis_lab.analysis.generalized_difference import (
     GeneralizedDifferenceResult,
     generalized_difference,
 )
-from text_analysis_lab.analysis.distance import distance
-from text_analysis_lab.analysis.dictionary_counts import dictionary_counts
-from text_analysis_lab.analysis.dictionary_matches import dictionary_matches
-from text_analysis_lab.analysis.feature_summary import feature_summary
 from text_analysis_lab.analysis.matrix_summary import MatrixSummary, matrix_summary
 from text_analysis_lab.analysis.neighbors import nearest_neighbors
 from text_analysis_lab.analysis.polarity import polarity
@@ -29,7 +33,6 @@ from text_analysis_lab.analysis.polarity_scores import (
 )
 from text_analysis_lab.analysis.row_summary import row_summary
 from text_analysis_lab.analysis.summary import ArtifactSummary, summarize
-from text_analysis_lab.analysis.crosstab import crosstab
 from text_analysis_lab.analysis.valence import valence
 from text_analysis_lab.core.kwic import KWICResult, keyword_in_context
 
@@ -40,17 +43,18 @@ kwic = keyword_in_context
 __all__ = [
     "ArtifactAnalysis",
     "ArtifactSummary",
-    "MatrixSummary",
-    "KWICResult",
     "ClassificationEvaluation",
-    "classification",
     "GeneralizedDifferenceResult",
-    "generalized_difference",
+    "KWICResult",
+    "MatrixSummary",
+    "classification",
     "cosine_similarity",
-    "distance",
+    "crosstab",
     "dictionary_counts",
     "dictionary_matches",
+    "distance",
     "feature_summary",
+    "generalized_difference",
     "kwic",
     "matrix_summary",
     "nearest_neighbors",
@@ -62,6 +66,5 @@ __all__ = [
     "polarity_total_difference",
     "row_summary",
     "summarize",
-    "crosstab",
     "valence",
 ]

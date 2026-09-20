@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from text_analysis_lab.analysis._matrix_utils import require_matrix_artifact, resolve_position
+from text_analysis_lab.analysis._matrix_utils import (
+    require_matrix_artifact,
+    resolve_position,
+)
 from text_analysis_lab.core.errors import UnsupportedArtifactOperationError
 
 if TYPE_CHECKING:
@@ -12,7 +15,7 @@ if TYPE_CHECKING:
 
 
 def distance(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     key: Any | None = None,
     position: int | None = None,

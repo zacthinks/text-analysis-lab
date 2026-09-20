@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from numbers import Real
-import math
 from types import MappingProxyType
 from typing import Any
 
@@ -54,7 +54,7 @@ class ValenceDictionary:
     def __len__(self) -> int:
         return len(self._values)
 
-    def __getitem__(self, dimension: str | Sequence[str]) -> "ValenceDictionary":
+    def __getitem__(self, dimension: str | Sequence[str]) -> ValenceDictionary:
         selected = [dimension] if isinstance(dimension, str) else list(dimension)
         missing = [str(key) for key in selected if str(key) not in self._values]
         if missing:
@@ -88,7 +88,7 @@ class ValenceDictionary:
         case_sensitive: bool = False,
         name: str | None = None,
         provenance: DictionaryProvenance | Mapping[str, Any] | None = None,
-    ) -> "ValenceDictionary":
+    ) -> ValenceDictionary:
         missing = [
             column
             for column in (dimension, pattern, value)

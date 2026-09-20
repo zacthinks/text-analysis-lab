@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, get_args, Any, Literal
-from collections.abc import Sequence, Iterable
+from collections.abc import Iterable, Sequence
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 import numpy as np
 import pandas as pd
@@ -356,7 +356,7 @@ class KWICResult(list[dict[str, Any]]):
 
 
 def keyword_in_context(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     pattern: str,
     *,
     window: int = 5,

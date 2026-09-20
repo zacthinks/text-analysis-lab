@@ -7,9 +7,9 @@ metadata, separate from human-readable :class:`DictionaryProvenance`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
-
+from typing import Any
 
 _JSON_SCALARS = (str, int, float, bool, type(None))
 
@@ -20,18 +20,24 @@ class DictionarySource:
 
     provider: str
     resource: str
-    parameters: Mapping[str, str | int | float | bool | None] = field(default_factory=dict)
+    parameters: Mapping[str, str | int | float | bool | None] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         provider = str(self.provider).strip()
         resource = str(self.resource).strip()
         if not provider or not resource:
-            raise ValueError("DictionarySource provider and resource must be non-empty strings.")
+            raise ValueError(
+                "DictionarySource provider and resource must be non-empty strings."
+            )
         normalized: dict[str, str | int | float | bool | None] = {}
         for key, value in dict(self.parameters).items():
             name = str(key)
             if not name:
-                raise ValueError("DictionarySource parameter names must be non-empty strings.")
+                raise ValueError(
+                    "DictionarySource parameter names must be non-empty strings."
+                )
             if not isinstance(value, _JSON_SCALARS):
                 raise TypeError(
                     "DictionarySource parameters must contain only JSON scalar values; "
@@ -51,8 +57,8 @@ class DictionarySource:
 
     @classmethod
     def from_value(
-        cls, value: "DictionarySource | Mapping[str, Any] | None"
-    ) -> "DictionarySource | None":
+        cls, value: DictionarySource | Mapping[str, Any] | None
+    ) -> DictionarySource | None:
         if value is None:
             return None
         if isinstance(value, cls):

@@ -76,9 +76,7 @@ def test_text_length_artifact_inherits_data_and_supports_query_histogram_crossta
             "text_words", by="record_type", bins=[0, 1, 2, 3], output="data"
         )
         assert compact["count"].sum() == 4
-        table = lengths.analysis.crosstab(
-            "record_type", "text_words", margins=True
-        )
+        table = lengths.analysis.crosstab("record_type", "text_words", margins=True)
         assert table.loc["All", "All"] == 4
     finally:
         project.close()
@@ -132,7 +130,9 @@ def _sample_frame(lengths, **kwargs):
     )
 
 
-def test_filtered_sample_n_samples_after_where_and_is_reproducible(tmp_path: Path) -> None:
+def test_filtered_sample_n_samples_after_where_and_is_reproducible(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="filtered_sampling")
     try:
         lengths = _seed_sampling(project)
@@ -157,13 +157,18 @@ def test_filtered_sample_n_samples_after_where_and_is_reproducible(tmp_path: Pat
 
         assert len(first) == 6
         assert first["text_words"].between(10, 25).all()
-        assert first["row_id"].astype(int).tolist() == repeated["row_id"].astype(int).tolist()
+        assert (
+            first["row_id"].astype(int).tolist()
+            == repeated["row_id"].astype(int).tolist()
+        )
         assert set(first["row_id"].astype(int)) != set(different["row_id"].astype(int))
     finally:
         project.close()
 
 
-def test_filtered_sampling_handles_small_empty_and_positions_populations(tmp_path: Path) -> None:
+def test_filtered_sampling_handles_small_empty_and_positions_populations(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="filtered_sampling_edges")
     try:
         lengths = _seed_sampling(project)
@@ -198,7 +203,9 @@ def test_filtered_sampling_handles_small_empty_and_positions_populations(tmp_pat
         project.close()
 
 
-def test_filtered_sampling_applies_order_and_limit_after_sampling(tmp_path: Path) -> None:
+def test_filtered_sampling_applies_order_and_limit_after_sampling(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="filtered_sampling_order")
     try:
         lengths = _seed_sampling(project)
@@ -230,7 +237,9 @@ def test_filtered_sampling_applies_order_and_limit_after_sampling(tmp_path: Path
         project.close()
 
 
-def test_filtered_sample_frac_uses_eligible_count_and_iter_batches_is_exact(tmp_path: Path) -> None:
+def test_filtered_sample_frac_uses_eligible_count_and_iter_batches_is_exact(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "project", name="filtered_sampling_frac")
     try:
         lengths = _seed_sampling(project)

@@ -12,9 +12,6 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
-from scipy import sparse
-
 from text_analysis_lab.core.artifact_base import BaseArtifact
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.types import ArtifactType
@@ -30,7 +27,7 @@ class TransformLikeError(OperatorError):
 
 
 def can_transform_texts_like(
-    project: "Project",
+    project: Project,
     artifact: BaseArtifact | str,
     *,
     query: bool = False,
@@ -44,7 +41,7 @@ def can_transform_texts_like(
 
 
 def transform_texts_like(
-    project: "Project",
+    project: Project,
     artifact: BaseArtifact | str,
     texts: Sequence[str],
     *,
@@ -86,7 +83,7 @@ def transform_texts_like(
 
 
 def _build_transform_plan(
-    project: "Project",
+    project: Project,
     artifact: BaseArtifact,
     *,
     query: bool,
@@ -144,7 +141,9 @@ def _build_transform_plan(
             raise TransformLikeError(
                 f"Frozen operator {operator.__class__.__name__} cannot transform new raw text."
             )
-        if not _operator_allows_external_transform(operator, query=query, input_kind="texts"):
+        if not _operator_allows_external_transform(
+            operator, query=query, input_kind="texts"
+        ):
             raise TransformLikeError(
                 f"Frozen operator {operator.__class__.__name__} does not support "
                 f"{'query' if query else 'new-text'} replay for this configuration."
@@ -157,7 +156,9 @@ def _build_transform_plan(
             raise TransformLikeError(
                 f"Frozen operator {operator.__class__.__name__} cannot replay new matrix rows."
             )
-        if not _operator_allows_external_transform(operator, query=query, input_kind="matrix"):
+        if not _operator_allows_external_transform(
+            operator, query=query, input_kind="matrix"
+        ):
             raise TransformLikeError(
                 f"Frozen operator {operator.__class__.__name__} does not support "
                 f"{'query' if query else 'new-text'} replay for this configuration."
@@ -186,7 +187,7 @@ def _operator_allows_external_transform(
     return True
 
 
-def _operation_descriptor(project: "Project", operation_id: str) -> Mapping[str, Any]:
+def _operation_descriptor(project: Project, operation_id: str) -> Mapping[str, Any]:
     path = project.storage.operation_descriptor_path(operation_id)
     if not path.exists():
         raise TransformLikeError(
@@ -200,7 +201,9 @@ def _operation_descriptor(project: "Project", operation_id: str) -> Mapping[str,
     return payload
 
 
-def _validate_transformed_rows(values: Any, expected: int, artifact: BaseArtifact) -> None:
+def _validate_transformed_rows(
+    values: Any, expected: int, artifact: BaseArtifact
+) -> None:
     shape = getattr(values, "shape", None)
     if shape is None or len(shape) != 2 or int(shape[0]) != int(expected):
         raise TransformLikeError(

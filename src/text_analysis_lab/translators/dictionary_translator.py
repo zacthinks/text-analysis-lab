@@ -14,8 +14,8 @@ from scipy import sparse
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -26,10 +26,14 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
-from text_analysis_lab.dictionaries import Dictionary, PolarityDictionary, ValenceDictionary
+from text_analysis_lab.dictionaries import (
+    Dictionary,
+    PolarityDictionary,
+    ValenceDictionary,
+)
+from text_analysis_lab.dictionaries.matching import category_membership, valence_vectors
 from text_analysis_lab.dictionaries.provenance import DictionaryProvenance
 from text_analysis_lab.dictionaries.source import DictionarySource
-from text_analysis_lab.dictionaries.matching import category_membership, valence_vectors
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -68,7 +72,9 @@ class DictionaryTranslator(BaseTranslator):
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
-        if not isinstance(dictionary, (Dictionary, PolarityDictionary, ValenceDictionary)):
+        if not isinstance(
+            dictionary, (Dictionary, PolarityDictionary, ValenceDictionary)
+        ):
             raise TypeError(
                 "DictionaryTranslator requires Dictionary, PolarityDictionary, "
                 "or ValenceDictionary."
@@ -78,7 +84,9 @@ class DictionaryTranslator(BaseTranslator):
         self.dictionary: DictionarySpec | None = dictionary
         self.dimension = _resolve_dimension(dictionary, dimension)
         self.save_dictionary = bool(save_dictionary)
-        self._external_reference: dict[str, Any] | None = _dictionary_reference(dictionary)
+        self._external_reference: dict[str, Any] | None = _dictionary_reference(
+            dictionary
+        )
         self._expected_dictionary_hash = _dictionary_content_hash(dictionary)
         self._source_features: tuple[str, ...] | None = None
         self._projection: sparse.csr_matrix | None = None
@@ -104,7 +112,7 @@ class DictionaryTranslator(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -119,7 +127,7 @@ class DictionaryTranslator(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -133,7 +141,7 @@ class DictionaryTranslator(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -170,7 +178,9 @@ class DictionaryTranslator(BaseTranslator):
         info = packet.data.get("info")
         matrix = packet.data.get("matrix")
         if not isinstance(info, pd.DataFrame):
-            raise ArtifactError("DictionaryTranslator native packet is missing info rows.")
+            raise ArtifactError(
+                "DictionaryTranslator native packet is missing info rows."
+            )
         counts = _validated_count_matrix(matrix)
         if len(info) != counts.shape[0]:
             raise ArtifactError(
@@ -187,9 +197,13 @@ class DictionaryTranslator(BaseTranslator):
 
         translated = (counts @ projection).tocsr().astype(np.int64, copy=False)
         total = np.asarray(counts.sum(axis=1)).reshape(-1).astype(np.int64, copy=False)
-        matched = np.asarray(
-            counts @ matched_mask.astype(np.int64, copy=False).reshape(-1, 1)
-        ).reshape(-1).astype(np.int64, copy=False)
+        matched = (
+            np.asarray(
+                counts @ matched_mask.astype(np.int64, copy=False).reshape(-1, 1)
+            )
+            .reshape(-1)
+            .astype(np.int64, copy=False)
+        )
         unmatched = total - matched
         if np.any(unmatched < 0):  # pragma: no cover - defensive invariant
             raise ArtifactError("Dictionary matched count exceeded total source count.")
@@ -252,10 +266,12 @@ class DictionaryTranslator(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "DictionaryTranslator":
+    ) -> DictionaryTranslator:
         _ = request
         if mode != "translate":
-            raise OperatorError("DictionaryTranslator workers support translate mode only.")
+            raise OperatorError(
+                "DictionaryTranslator workers support translate mode only."
+            )
         worker = DictionaryTranslator(
             _clone_dictionary(self._require_dictionary()),
             dimension=self.dimension,
@@ -280,7 +296,9 @@ class DictionaryTranslator(BaseTranslator):
     def __setstate__(self, state: Mapping[str, Any]) -> None:
         raw_dictionary = state.get("dictionary")
         if not isinstance(raw_dictionary, Mapping):
-            raise OperatorError("DictionaryTranslator worker state is missing dictionary data.")
+            raise OperatorError(
+                "DictionaryTranslator worker state is missing dictionary data."
+            )
         restored = DictionaryTranslator(
             _deserialize_dictionary(raw_dictionary),
             dimension=cast(str | None, state.get("dimension")),
@@ -297,7 +315,10 @@ class DictionaryTranslator(BaseTranslator):
         dictionary = self._require_dictionary()
         reference = _dictionary_reference(dictionary)
         if reference is None:
-            stored = {"storage": "embedded", "dictionary": _serialize_dictionary(dictionary)}
+            stored = {
+                "storage": "embedded",
+                "dictionary": _serialize_dictionary(dictionary),
+            }
         else:
             stored = {"storage": "external", "reference": reference}
         return {
@@ -308,10 +329,12 @@ class DictionaryTranslator(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "DictionaryTranslator":
+    def from_json_state(cls, state: Mapping[str, Any]) -> DictionaryTranslator:
         raw_storage = state.get("dictionary")
         if not isinstance(raw_storage, Mapping):
-            raise OperatorError("DictionaryTranslator state is missing dictionary data.")
+            raise OperatorError(
+                "DictionaryTranslator state is missing dictionary data."
+            )
         storage = str(raw_storage.get("storage", ""))
         dimension = cast(str | None, state.get("dimension"))
         save_dictionary = bool(state.get("save_dictionary", False))
@@ -319,20 +342,31 @@ class DictionaryTranslator(BaseTranslator):
         if storage == "embedded":
             raw_dictionary = raw_storage.get("dictionary")
             if not isinstance(raw_dictionary, Mapping):
-                raise OperatorError("Embedded DictionaryTranslator state is missing dictionary data.")
+                raise OperatorError(
+                    "Embedded DictionaryTranslator state is missing dictionary data."
+                )
             obj = cls(
                 _deserialize_dictionary(raw_dictionary),
                 dimension=dimension,
                 save_dictionary=save_dictionary,
             )
-            if expected_hash and _dictionary_content_hash(obj._require_dictionary()) != expected_hash:
-                raise OperatorError("Embedded dictionary content hash does not match operator state.")
+            if (
+                expected_hash
+                and _dictionary_content_hash(obj._require_dictionary()) != expected_hash
+            ):
+                raise OperatorError(
+                    "Embedded dictionary content hash does not match operator state."
+                )
             return obj
         if storage != "external":
-            raise OperatorError(f"Unknown DictionaryTranslator dictionary storage {storage!r}.")
+            raise OperatorError(
+                f"Unknown DictionaryTranslator dictionary storage {storage!r}."
+            )
         reference = raw_storage.get("reference")
         if not isinstance(reference, Mapping):
-            raise OperatorError("External DictionaryTranslator state is missing its provider reference.")
+            raise OperatorError(
+                "External DictionaryTranslator state is missing its provider reference."
+            )
 
         # BaseOperator.load_from_dir() calls load_assets() immediately after this
         # method. Keep the external dictionary unresolved until then so an
@@ -356,7 +390,11 @@ class DictionaryTranslator(BaseTranslator):
         assets_dir.mkdir(parents=True, exist_ok=True)
         path = assets_dir / "dictionary.json"
         path.write_text(
-            json.dumps(_serialize_dictionary(self._require_dictionary()), indent=2, sort_keys=True),
+            json.dumps(
+                _serialize_dictionary(self._require_dictionary()),
+                indent=2,
+                sort_keys=True,
+            ),
             encoding="utf-8",
         )
         return {
@@ -369,14 +407,18 @@ class DictionaryTranslator(BaseTranslator):
         if isinstance(filename, str) and filename:
             raw = json.loads((assets_dir / filename).read_text(encoding="utf-8"))
             if not isinstance(raw, Mapping):
-                raise OperatorError("Saved dictionary asset must contain a JSON object.")
+                raise OperatorError(
+                    "Saved dictionary asset must contain a JSON object."
+                )
             dictionary = _deserialize_dictionary(raw)
             self._install_loaded_dictionary(dictionary, source="operator-local asset")
             return
         if self.dictionary is not None:
             return
         if self._external_reference is None:
-            raise OperatorError("DictionaryTranslator has neither embedded nor external dictionary state.")
+            raise OperatorError(
+                "DictionaryTranslator has neither embedded nor external dictionary state."
+            )
         dictionary = _load_dictionary_reference(self._external_reference)
         self._install_loaded_dictionary(dictionary, source="external provider/cache")
 
@@ -406,15 +448,21 @@ class DictionaryTranslator(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "DictionaryTranslator":
+    ) -> DictionaryTranslator:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         if not isinstance(state, Mapping):
-            raise OperatorError("DictionaryTranslator intermediate state must be a mapping.")
+            raise OperatorError(
+                "DictionaryTranslator intermediate state must be a mapping."
+            )
         obj = cls.from_json_state(state)
         assets = state.get("assets", {})
         if not isinstance(assets, Mapping):
-            raise OperatorError("DictionaryTranslator intermediate assets must be a mapping.")
+            raise OperatorError(
+                "DictionaryTranslator intermediate assets must be a mapping."
+            )
         obj.load_assets(intermediate_dir, assets)
         features = state.get("source_features")
         if not isinstance(features, Sequence) or isinstance(features, (str, bytes)):
@@ -425,7 +473,9 @@ class DictionaryTranslator(BaseTranslator):
         obj.operator_id = str(operator_id)
         return obj
 
-    def _install_loaded_dictionary(self, dictionary: DictionarySpec, *, source: str) -> None:
+    def _install_loaded_dictionary(
+        self, dictionary: DictionarySpec, *, source: str
+    ) -> None:
         expected = self._expected_dictionary_hash
         observed = _dictionary_content_hash(dictionary)
         if expected and observed != expected:
@@ -435,7 +485,9 @@ class DictionaryTranslator(BaseTranslator):
                 "operator snapshot created with save_dictionary=True."
             )
         self.dictionary = dictionary
-        self._external_reference = _dictionary_reference(dictionary) or self._external_reference
+        self._external_reference = (
+            _dictionary_reference(dictionary) or self._external_reference
+        )
 
     def _set_source_features(self, features: Sequence[str]) -> None:
         dictionary = self._require_dictionary()
@@ -459,16 +511,22 @@ class DictionaryTranslator(BaseTranslator):
 
     def _require_source_features(self) -> tuple[str, ...]:
         if self._source_features is None:
-            raise OperatorError("DictionaryTranslator has no resolved source vocabulary.")
+            raise OperatorError(
+                "DictionaryTranslator has no resolved source vocabulary."
+            )
         return self._source_features
 
-    def _require_resolution(self) -> tuple[sparse.csr_matrix, np.ndarray, tuple[str, ...]]:
+    def _require_resolution(
+        self,
+    ) -> tuple[sparse.csr_matrix, np.ndarray, tuple[str, ...]]:
         if (
             self._projection is None
             or self._matched_feature_mask is None
             or self._output_columns is None
         ):
-            raise OperatorError("DictionaryTranslator source vocabulary has not been resolved.")
+            raise OperatorError(
+                "DictionaryTranslator source vocabulary has not been resolved."
+            )
         return self._projection, self._matched_feature_mask, self._output_columns
 
 
@@ -516,7 +574,9 @@ def _resolve_polarity_projection(
     positive = _pole_mask(membership, [key_index[key] for key in dictionary.positive])
     negative = _pole_mask(membership, [key_index[key] for key in dictionary.negative])
     neutral = _pole_mask(membership, [key_index[key] for key in dictionary.neutral])
-    assignment_count = positive.astype(np.int8) + negative.astype(np.int8) + neutral.astype(np.int8)
+    assignment_count = (
+        positive.astype(np.int8) + negative.astype(np.int8) + neutral.astype(np.int8)
+    )
     conflict_indices = np.flatnonzero(assignment_count > 1)
     if conflict_indices.size:
         examples = [features[int(index)] for index in conflict_indices[:10]]
@@ -564,7 +624,9 @@ def _resolve_valence_projection(
     normalized_scores[np.isclose(normalized_scores, 0.0)] = 0.0
     values = np.unique(normalized_scores[matched])
     values.sort()
-    value_to_column = {float(value): index for index, value in enumerate(values.tolist())}
+    value_to_column = {
+        float(value): index for index, value in enumerate(values.tolist())
+    }
     rows = np.flatnonzero(matched).astype(np.int64, copy=False)
     cols = np.asarray(
         [value_to_column[float(normalized_scores[int(index)])] for index in rows],
@@ -576,7 +638,9 @@ def _resolve_valence_projection(
     ).tocsr()
     columns = tuple(_format_score(float(value)) for value in values.tolist())
     if len(set(columns)) != len(columns):  # pragma: no cover - defensive
-        raise OperatorError("Distinct valence values collapsed to duplicate column labels.")
+        raise OperatorError(
+            "Distinct valence values collapsed to duplicate column labels."
+        )
     return projection, matched, columns
 
 
@@ -602,18 +666,24 @@ def _validated_count_matrix(value: Any) -> sparse.csr_matrix:
     else:
         dense = np.asarray(value)
         if dense.ndim != 2:
-            raise ArtifactError("DictionaryTranslator source matrix must be two-dimensional.")
+            raise ArtifactError(
+                "DictionaryTranslator source matrix must be two-dimensional."
+            )
         observed = np.asarray(dense, dtype=float).reshape(-1)
         matrix = sparse.csr_matrix(dense)
         shape = dense.shape
 
     if len(shape) != 2:
-        raise ArtifactError("DictionaryTranslator source matrix must be two-dimensional.")
+        raise ArtifactError(
+            "DictionaryTranslator source matrix must be two-dimensional."
+        )
     if observed.size:
         if not np.all(np.isfinite(observed)):
             raise ArtifactError("DictionaryTranslator requires finite count values.")
         if np.any(observed < 0):
-            raise ArtifactError("DictionaryTranslator requires non-negative count values.")
+            raise ArtifactError(
+                "DictionaryTranslator requires non-negative count values."
+            )
         rounded = np.rint(observed)
         if not np.allclose(observed, rounded, rtol=0.0, atol=1e-9):
             raise ArtifactError(
@@ -649,7 +719,9 @@ def _serialize_dictionary(dictionary: DictionarySpec) -> dict[str, Any]:
         }
     return {
         "kind": "categorical",
-        "entries": {key: list(patterns) for key, patterns in dictionary.entries.items()},
+        "entries": {
+            key: list(patterns) for key, patterns in dictionary.entries.items()
+        },
         "valuetype": dictionary.valuetype,
         "case_sensitive": dictionary.case_sensitive,
         "name": dictionary.name,
@@ -683,10 +755,14 @@ def _deserialize_dictionary(state: Mapping[str, Any]) -> DictionarySpec:
     if kind == "polarity":
         base_state = state.get("dictionary")
         if not isinstance(base_state, Mapping):
-            raise OperatorError("Serialized polarity dictionary is missing its base dictionary.")
+            raise OperatorError(
+                "Serialized polarity dictionary is missing its base dictionary."
+            )
         base = _deserialize_dictionary(base_state)
         if not isinstance(base, Dictionary):
-            raise OperatorError("Serialized polarity dictionary base must be categorical.")
+            raise OperatorError(
+                "Serialized polarity dictionary base must be categorical."
+            )
         return PolarityDictionary(
             base,
             positive=cast(Sequence[str], state.get("positive", ())),
@@ -736,10 +812,14 @@ def _dictionary_reference(dictionary: DictionarySpec) -> dict[str, Any] | None:
 def _load_dictionary_reference(reference: Mapping[str, Any]) -> DictionarySpec:
     raw_source = reference.get("source")
     source = DictionarySource.from_value(
-        cast(Mapping[str, Any] | None, raw_source) if isinstance(raw_source, Mapping) else None
+        cast(Mapping[str, Any] | None, raw_source)
+        if isinstance(raw_source, Mapping)
+        else None
     )
     if source is None:
-        raise OperatorError("External dictionary reference is missing provider/source metadata.")
+        raise OperatorError(
+            "External dictionary reference is missing provider/source metadata."
+        )
     from text_analysis_lab.dictionaries.providers.registry import load_dictionary_source
 
     loaded = load_dictionary_source(source)
@@ -781,7 +861,9 @@ def _load_dictionary_reference(reference: Mapping[str, Any]) -> DictionarySpec:
 
 def _dictionary_content_hash(dictionary: DictionarySpec) -> str:
     payload = _dictionary_semantic_payload(dictionary)
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -806,7 +888,9 @@ def _dictionary_semantic_payload(dictionary: DictionarySpec) -> dict[str, Any]:
         }
     return {
         "kind": "categorical",
-        "entries": {key: list(patterns) for key, patterns in dictionary.entries.items()},
+        "entries": {
+            key: list(patterns) for key, patterns in dictionary.entries.items()
+        },
         "valuetype": dictionary.valuetype,
         "case_sensitive": dictionary.case_sensitive,
     }
@@ -840,11 +924,13 @@ def _deserialize_provenance(value: Any) -> DictionaryProvenance | None:
     if value is None:
         return None
     if not isinstance(value, Mapping):
-        raise OperatorError("Serialized dictionary provenance must be a mapping or null.")
+        raise OperatorError(
+            "Serialized dictionary provenance must be a mapping or null."
+        )
     return DictionaryProvenance.from_value(cast(Mapping[str, Any], value))
 
 
-def _single_source(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
+def _single_source(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     if len(sources) != 1:
         raise OperatorError(
             f"DictionaryTranslator requires exactly one source; got {list(sources)}."

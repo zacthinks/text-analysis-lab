@@ -11,7 +11,12 @@ from text_analysis_lab._linguistics.model_resources import (
     ensure_model_archive,
     project_model_paths,
 )
-from text_analysis_lab._linguistics.srl_bundle import FORMAT_VERSION, METADATA_NAME, WEIGHTS_NAME, convert_archive
+from text_analysis_lab._linguistics.srl_bundle import (
+    FORMAT_VERSION,
+    METADATA_NAME,
+    WEIGHTS_NAME,
+    convert_archive,
+)
 
 
 def _runtime_is_ready(paths: ProjectModelPaths) -> bool:
@@ -52,7 +57,9 @@ def prepare_project_srl_runtime(
     runtime_ready = _runtime_is_ready(paths)
     if runtime_ready and not reconvert and not force_download:
         if show_progress:
-            print(f"Using existing converted SRL runtime: {paths.runtime_dir}", flush=True)
+            print(
+                f"Using existing converted SRL runtime: {paths.runtime_dir}", flush=True
+            )
         return paths
 
     if download:

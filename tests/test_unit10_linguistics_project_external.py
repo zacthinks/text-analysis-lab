@@ -17,7 +17,16 @@ from text_analysis_lab.translators import (
 )
 
 
-def _write_table(project, artifact_id, label, key_frame, data_frame, *, lineage_mode="new_key", basis=()):
+def _write_table(
+    project,
+    artifact_id,
+    label,
+    key_frame,
+    data_frame,
+    *,
+    lineage_mode="new_key",
+    basis=(),
+):
     from text_analysis_lab.core.writer import create_artifact_writer
 
     writer = create_artifact_writer(
@@ -28,7 +37,12 @@ def _write_table(project, artifact_id, label, key_frame, data_frame, *, lineage_
         lineage_mode=lineage_mode,
         basis_artifact_ids=tuple(basis),
     )
-    writer.write({"keys": key_frame.reset_index(drop=True), "data": data_frame.reset_index(drop=True)})
+    writer.write(
+        {
+            "keys": key_frame.reset_index(drop=True),
+            "data": data_frame.reset_index(drop=True),
+        }
+    )
     writer.finalize()
     project.catalog.register_artifact(
         artifact_id=artifact_id,
@@ -62,7 +76,9 @@ class _CachePaths:
     wordnet_mwe_indices: Path
 
 
-def test_unit10_translators_write_teal_native_lineage(monkeypatch, tmp_path: Path) -> None:
+def test_unit10_translators_write_teal_native_lineage(
+    monkeypatch, tmp_path: Path
+) -> None:
     import text_analysis_lab.translators.coreference_resolver as coref_module
     import text_analysis_lab.translators.semantic_role_labeler as srl_module
     import text_analysis_lab.translators.word_sense_disambiguator as wsd_module
@@ -100,7 +116,10 @@ def test_unit10_translators_write_teal_native_lineage(monkeypatch, tmp_path: Pat
         def predict_encoded_batch(self, instances):
             rows = []
             for tokens, predicate in instances:
-                tags = tuple("B-V" if i == predicate else ("B-ARG0" if i == 0 else "O") for i in range(len(tokens)))
+                tags = tuple(
+                    "B-V" if i == predicate else ("B-ARG0" if i == 0 else "O")
+                    for i in range(len(tokens))
+                )
                 spans = [BioSpan("ARG0", 0, 1), BioSpan("V", predicate, predicate + 1)]
                 rows.append(
                     SrlTokenPrediction(
@@ -109,7 +128,9 @@ def test_unit10_translators_write_teal_native_lineage(monkeypatch, tmp_path: Pat
                         predicate=tokens[predicate],
                         wordpieces=tuple(tokens),
                         input_ids=tuple(range(len(tokens))),
-                        predicate_indicator=tuple(1 if i == predicate else 0 for i in range(len(tokens))),
+                        predicate_indicator=tuple(
+                            1 if i == predicate else 0 for i in range(len(tokens))
+                        ),
                         wordpiece_offsets=tuple(range(len(tokens))),
                         wordpiece_tags=tags,
                         raw_tags=tags,
@@ -168,9 +189,14 @@ def test_unit10_translators_write_teal_native_lineage(monkeypatch, tmp_path: Pat
 
         def score_target(self, target, candidate_texts):
             _ = target
-            return {text: (0.8 if index == 0 else 0.2) for index, text in enumerate(candidate_texts)}
+            return {
+                text: (0.8 if index == 0 else 0.2)
+                for index, text in enumerate(candidate_texts)
+            }
 
-    monkeypatch.setattr(coref_module, "_make_runtime", lambda **kwargs: FakeCorefRuntime())
+    monkeypatch.setattr(
+        coref_module, "_make_runtime", lambda **kwargs: FakeCorefRuntime()
+    )
     monkeypatch.setattr(srl_module, "_make_runtime", lambda **kwargs: FakeSrlRuntime())
     monkeypatch.setattr(wsd_module, "user_cache_paths", lambda: cache)
     monkeypatch.setattr(wsd_module, "_make_ontology", lambda **kwargs: FakeOntology())
@@ -232,7 +258,9 @@ def test_unit10_translators_write_teal_native_lineage(monkeypatch, tmp_path: Pat
             CoreferenceResolver(),
             {"documents": documents, "tokens": tokens},
         )
-        assert coref["mentions"].descriptor["lineage"]["basis_artifact_ids"] == [documents.artifact_id]
+        assert coref["mentions"].descriptor["lineage"]["basis_artifact_ids"] == [
+            documents.artifact_id
+        ]
         assert _frame(coref["mentions"])["text"].tolist() == ["Alice", "She"]
         assert _frame(coref["failures"]).empty
 
@@ -240,8 +268,12 @@ def test_unit10_translators_write_teal_native_lineage(monkeypatch, tmp_path: Pat
             SemanticRoleLabeler(mixed_precision=False),
             {"sentences": sentences, "tokens": tokens},
         )
-        assert srl["predicates"].descriptor["lineage"]["basis_artifact_ids"] == [sentences.artifact_id]
-        assert srl["roles"].descriptor["lineage"]["basis_artifact_ids"] == [srl["predicates"].artifact_id]
+        assert srl["predicates"].descriptor["lineage"]["basis_artifact_ids"] == [
+            sentences.artifact_id
+        ]
+        assert srl["roles"].descriptor["lineage"]["basis_artifact_ids"] == [
+            srl["predicates"].artifact_id
+        ]
         assert set(_frame(srl["roles"])["role"]) >= {"ARG0", "V"}
         assert _frame(srl["failures"]).empty
 
@@ -252,8 +284,12 @@ def test_unit10_translators_write_teal_native_lineage(monkeypatch, tmp_path: Pat
             ),
             {"tokens": tokens},
         )
-        assert wsd["senses"].descriptor["lineage"]["basis_artifact_ids"] == [tokens.artifact_id]
-        assert wsd["candidates"].descriptor["lineage"]["basis_artifact_ids"] == [tokens.artifact_id]
+        assert wsd["senses"].descriptor["lineage"]["basis_artifact_ids"] == [
+            tokens.artifact_id
+        ]
+        assert wsd["candidates"].descriptor["lineage"]["basis_artifact_ids"] == [
+            tokens.artifact_id
+        ]
         sense_frame = _frame(wsd["senses"])
         assert set(sense_frame["surface_form"].tolist()) == {"Alice", "left", "slept"}
         assert "She" not in sense_frame["surface_form"].tolist()

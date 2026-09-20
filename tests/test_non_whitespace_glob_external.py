@@ -13,7 +13,6 @@ import text_analysis_lab as teal
 from text_analysis_lab.core.writer import create_artifact_writer
 from text_analysis_lab.translators import DictionaryTranslator
 
-
 FEATURES = [
     "survey",
     "surveys",
@@ -57,7 +56,9 @@ def _register_identity_dtm(project: teal.Project):
     return project.get_artifact(artifact_id)
 
 
-def test_non_whitespace_glob_real_project_audit_and_translation_agree(tmp_path: Path) -> None:
+def test_non_whitespace_glob_real_project_audit_and_translation_agree(
+    tmp_path: Path,
+) -> None:
     project = teal.Project.create(tmp_path / "non_whitespace_glob", name="nwg")
     try:
         dtm = _register_identity_dtm(project)
@@ -97,7 +98,9 @@ def test_non_whitespace_glob_real_project_audit_and_translation_agree(tmp_path: 
         reopened.close()
 
 
-def test_all_pattern_valuetypes_use_python_regex_semantics_with_pyarrow_strings(tmp_path: Path) -> None:
+def test_all_pattern_valuetypes_use_python_regex_semantics_with_pyarrow_strings(
+    tmp_path: Path,
+) -> None:
     """Arrow-backed pandas strings must not switch dictionary matching to RE2."""
     project = teal.Project.create(tmp_path / "glob_regex_backend", name="glob-regex")
     try:

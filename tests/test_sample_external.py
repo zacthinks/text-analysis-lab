@@ -39,7 +39,9 @@ def _rows(artifact):
     )
 
 
-def test_sample_is_exact_reproducible_preserved_key_and_source_order(tmp_path: Path) -> None:
+def test_sample_is_exact_reproducible_preserved_key_and_source_order(
+    tmp_path: Path,
+) -> None:
     project_path = tmp_path / "project"
     project = teal.Project.create(project_path, name="sample")
     try:

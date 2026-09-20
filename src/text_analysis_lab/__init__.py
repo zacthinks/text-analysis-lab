@@ -4,7 +4,6 @@ TeAL provides persistent, lineage-aware artifacts and operators for reproducible
 computational text-analysis workflows.
 """
 
-from text_analysis_lab.core.project import Project
 from text_analysis_lab.core.aggregate import (
     AggregateField,
     ConcatReducer,
@@ -32,33 +31,35 @@ from text_analysis_lab.core.operator import (
     SourceRequest,
     TranslationRequest,
 )
+from text_analysis_lab.core.project import Project
+
 from . import analysis, dictionaries, translators, visualization
 
 __all__ = [
-    "Project",
-    "agg",
-    "literal",
-    "concat",
     "AggregateField",
-    "LiteralValue",
-    "ConcatReducer",
     "BaseArtifact",
-    "TableArtifact",
-    "JsonlArtifact",
-    "SparseMatrixArtifact",
-    "DenseMatrixArtifact",
-    "OtherArtifact",
-    "load_artifact",
     "BaseOperator",
     "BaseTranslator",
-    "ColumnRequest",
-    "SourceRequest",
-    "TranslationRequest",
-    "InputBatch",
     "BatchResult",
+    "ColumnRequest",
+    "ConcatReducer",
+    "DenseMatrixArtifact",
+    "InputBatch",
+    "JsonlArtifact",
+    "LiteralValue",
+    "OtherArtifact",
     "OutputSpec",
+    "Project",
+    "SourceRequest",
+    "SparseMatrixArtifact",
+    "TableArtifact",
+    "TranslationRequest",
+    "agg",
     "analysis",
+    "concat",
     "dictionaries",
+    "literal",
+    "load_artifact",
     "translators",
     "visualization",
 ]

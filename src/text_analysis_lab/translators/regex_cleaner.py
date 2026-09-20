@@ -13,8 +13,8 @@ import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
-    BatchResult,
     BaseTranslator,
+    BatchResult,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -93,7 +93,7 @@ class RegexCleaner(BaseTranslator):
     def output_specs(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
@@ -115,7 +115,7 @@ class RegexCleaner(BaseTranslator):
         self,
         params: Mapping[str, Any],
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
@@ -128,7 +128,7 @@ class RegexCleaner(BaseTranslator):
     def input_request(
         self,
         *,
-        sources: Mapping[str, "BaseArtifact"],
+        sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
@@ -157,9 +157,15 @@ class RegexCleaner(BaseTranslator):
         packet = _single_input(inputs)
         frame = _require_frame(packet.data)
         key_columns = [str(name) for name in packet.primary_key]
-        missing = [name for name in [*key_columns, self.text_field] if name not in frame.columns]
+        missing = [
+            name
+            for name in [*key_columns, self.text_field]
+            if name not in frame.columns
+        ]
         if missing:
-            raise ArtifactError(f"RegexCleaner source batch is missing columns {missing}.")
+            raise ArtifactError(
+                f"RegexCleaner source batch is missing columns {missing}."
+            )
 
         source = frame[self.text_field]
         null_mask = source.isna()
@@ -179,9 +185,7 @@ class RegexCleaner(BaseTranslator):
 
         keys = frame.loc[:, key_columns].reset_index(drop=True)
         data = pd.DataFrame({self.output_field: cleaned.reset_index(drop=True)})
-        return BatchResult(
-            outputs={DEFAULT_OUTPUT_LABEL: {"keys": keys, "data": data}}
-        )
+        return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: {"keys": keys, "data": data}})
 
     def handle_batch_result(
         self,
@@ -208,7 +212,7 @@ class RegexCleaner(BaseTranslator):
         *,
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> "RegexCleaner":
+    ) -> RegexCleaner:
         _ = mode, request
         return self.from_json_state(self.to_json_state())
 
@@ -222,10 +226,12 @@ class RegexCleaner(BaseTranslator):
         }
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> "RegexCleaner":
+    def from_json_state(cls, state: Mapping[str, Any]) -> RegexCleaner:
         return cls(
             text_field=str(state.get("text_field", "text")),
-            output_field=str(state.get("output_field", state.get("text_field", "text"))),
+            output_field=str(
+                state.get("output_field", state.get("text_field", "text"))
+            ),
             rules=cast(Sequence[Mapping[str, Any]], state.get("rules", ())),
             strip=bool(state.get("strip", True)),
             preserve_null=bool(state.get("preserve_null", True)),
@@ -255,9 +261,11 @@ class RegexCleaner(BaseTranslator):
         operator_id: str,
         mode: TranslationMode,
         route: RunRoute,
-    ) -> "RegexCleaner":
+    ) -> RegexCleaner:
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         obj = cls.from_json_state(cast(Mapping[str, Any], state))
         obj.operator_id = operator_id
         return obj
@@ -295,10 +303,14 @@ def _normalize_rule(rule: RuleInput) -> RegexReplaceRule:
             replacement=str(rule.get("replacement", "")),
             flags=_normalize_flags(rule.get("flags", ())),
             count=int(rule.get("count", 0)),
-            description=None if rule.get("description") is None else str(rule["description"]),
+            description=None
+            if rule.get("description") is None
+            else str(rule["description"]),
         )
     else:
-        raise TypeError("RegexCleaner rules must be RegexReplaceRule objects or mappings.")
+        raise TypeError(
+            "RegexCleaner rules must be RegexReplaceRule objects or mappings."
+        )
 
     normalized = RegexReplaceRule(
         pattern=str(normalized.pattern),
@@ -319,12 +331,14 @@ def _compile_flags(flags: Sequence[str]) -> int:
         key = str(flag).upper()
         if key not in _FLAG_MAP:
             supported = sorted(name for name in _FLAG_MAP if len(name) > 1)
-            raise ValueError(f"Unsupported regex flag {flag!r}. Supported flags: {supported}.")
+            raise ValueError(
+                f"Unsupported regex flag {flag!r}. Supported flags: {supported}."
+            )
         compiled |= _FLAG_MAP[key]
     return compiled
 
 
-def _single_source(sources: Mapping[str, "BaseArtifact"]) -> "BaseArtifact":
+def _single_source(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     if set(sources) != {DEFAULT_SOURCE_LABEL}:
         raise OperatorError(
             f"RegexCleaner requires exactly one source under {DEFAULT_SOURCE_LABEL!r}."

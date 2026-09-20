@@ -21,7 +21,7 @@ _MISSING = object()
 
 
 def crosstab(
-    artifact: "BaseArtifact",
+    artifact: BaseArtifact,
     *,
     rows: str,
     columns: str,
