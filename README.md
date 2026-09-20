@@ -40,11 +40,7 @@ Clone the repository, enter the repository directory, and run:
 uv sync
 ```
 
-This installs TeAL and the repository's development tools. To install every optional TeAL feature as well, run:
-
-```bash
-uv sync --all-extras
-```
+The default development environment includes the core test and development dependencies. Optional backends remain extras, and their integration tests skip when those extras are unavailable.
 
 To run Python or Jupyter inside the environment:
 
@@ -84,7 +80,7 @@ Some integrations also require external model or data resources. For example, a 
 python -m spacy download en_core_web_sm
 ```
 
-Word-sense disambiguation uses Open English WordNet (OEWN) as its lexical ontology. TeAL does not bundle a separate WordNet extension or fallback lexicon. Download the OEWN data separately:
+Word-sense disambiguation uses Open English WordNet and requires its data to be downloaded separately:
 
 ```bash
 python -m wn download 'oewn:2025+'
@@ -127,6 +123,8 @@ project.close()
 
 The resulting artifact stores the new length measurements while inheriting source text and earlier metadata through preserved-key lineage.
 
+Excel workbooks are also first-class tabular sources. `read_excel()` and `read_excel_folder()` can ingest one or many `.xlsx` workbooks, select sheets by exact name or zero-based position, or use `sheets=None` to ingest every sheet. Excel imports preserve sheet name/index/row provenance; folder imports also preserve the relative source workbook path.
+
 An existing project can be reopened later:
 
 ```python
@@ -166,7 +164,9 @@ Most substantive transformations in TeAL are implemented as translators. A trans
 
 Built-in translators include count vectorization, TF-IDF, feature trimming, matrix normalization, SVD/LSA, LDA, UMAP, Word2Vec, sentence-transformer encoding, linguistic models, dictionary coding, and fitted prediction.
 
-Structural project operations such as `subset`, `sample`, `split`, `restrict`, `merge`, `join`, and `aggregate` create new keyed artifacts without requiring users to manage row alignment manually.
+Structural project operations such as `subset`, `sample`, `split`, `restrict`, `merge`, `join`, `set_primary_keys`, `collapse_runs`, and `aggregate` create new keyed artifacts without requiring users to manage row alignment manually.
+
+For analyses computed outside TeAL, `Project.register_external(...)` can bring the finished result back as a normal lineage-aware artifact. The canonical interface accepts one or more writer-shaped batches, so large external workflows can checkpoint and resume on their own and then stream their completed output into TeAL without loading it all at once. DataFrames and common tabular files/Parquet datasets are supported as convenience inputs. External registration records declared TeAL provenance sources separately from the artifact basis that defines structural lineage.
 
 ## Dictionaries
 
@@ -199,17 +199,24 @@ TeAL preserves stable key alignment at the integration boundary so labels and fr
 
 ## Development
 
-Install the repository environment and run the test suite with:
+For the normal clean-clone developer check:
 
 ```bash
 uv sync
 uv run pytest -q
 ```
 
-Some tests require optional model stacks or external resources and may be skipped when those dependencies are unavailable.
+Tests for optional backends skip when their extras are not installed. To exercise all installable optional backends in one environment, run:
+
+```bash
+uv sync --all-extras
+uv run pytest -q
+```
+
+Some integration tests can still be skipped when they require external models, data resources, or services that are not available locally.
 
 ## License
 
 TeAL is released under the MIT License. See [LICENSE](LICENSE).
 
-Third-party models, datasets, and lexicons may have their own licenses and usage restrictions. Those licenses continue to apply independently of TeAL's MIT license.
+Third-party models, datasets, lexicons, and vendored components may have their own licenses and usage restrictions. Their licenses continue to apply independently of TeAL's MIT license.

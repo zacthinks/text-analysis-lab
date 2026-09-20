@@ -114,27 +114,63 @@ def is_prefix(
     )
 
 
+def lineage_paths_to_ancestor(
+    project: "Project",
+    descendant: "BaseArtifact",
+    ancestor: "BaseArtifact",
+) -> list[tuple["BaseArtifact", ...]]:
+    """Return all basis-lineage paths from ``descendant`` to ``ancestor``.
+
+    Paths include both endpoints. ``new_key`` lineage is a hard boundary and is
+    never traversed. The helper is intentionally structural: callers remain
+    responsible for deciding whether a particular path supports metadata/data
+    inheritance.
+    """
+    target_id = str(ancestor.artifact_id)
+    paths: list[tuple["BaseArtifact", ...]] = []
+
+    def walk(current: "BaseArtifact", path: tuple["BaseArtifact", ...]) -> None:
+        current_id = str(current.artifact_id)
+        if any(str(item.artifact_id) == current_id for item in path):
+            raise LineageError(
+                f"Cycle detected in artifact lineage at artifact {current_id!r}."
+            )
+        next_path = (*path, current)
+        if current_id == target_id:
+            paths.append(next_path)
+            return
+        if lineage_mode_for_artifact(current) in BREAKING_LINEAGE_MODES:
+            return
+        for basis_id in basis_artifact_ids(current):
+            try:
+                basis = project.get_artifact(basis_id)
+            except Exception as exc:
+                raise LineageError(
+                    f"Artifact {current_id!r} declares basis artifact {basis_id!r}, "
+                    "but that basis artifact could not be loaded."
+                ) from exc
+            walk(basis, next_path)
+
+    walk(descendant, ())
+    return paths
+
+
 def iter_metadata_lineage_sources(
     project: "Project",
     artifact: "BaseArtifact",
 ) -> list["BaseArtifact"]:
     """Return artifacts whose local metadata can attach to ``artifact``.
 
-    The current artifact is included only if it has local metadata.
+    Ordinary lineage keeps the historical key-compatibility rules. A
+    ``rekeyed_key`` edge is the one exception: the immediate basis represents
+    exactly the same rows in the same order under a different key system, so
+    traversal crosses that edge and resets compatibility checks to the basis
+    key space.
 
-    Metadata bubbles through single-basis ``preserved_key`` and ``extended_key``
-    edges. ``reduced_key`` and ``span_key`` are non-bubbling edges: their
-    immediate basis is not included, but traversal may continue upward in
-    compatibility-only mode.
-
-    ``new_key`` stops traversal. ``merged_key`` and ``joined_key`` are deliberate
-    multi-basis exceptions. A merge branches through disjoint same-schema key
-    subsets; a join branches through same-schema sources aligned to the first
-    basis row universe. Common upstream metadata sources are de-duplicated by
-    artifact ID.
+    A prior non-bubbling reduction/span followed by a rekey is deliberately a
+    boundary for older metadata: once row identity has been collapsed, there is
+    no unique positional correspondence back across the rekey.
     """
-    target_key = artifact.primary_key
-
     metadata_sources: list[BaseArtifact] = []
     included_artifact_ids: set[str] = set()
 
@@ -152,6 +188,7 @@ def iter_metadata_lineage_sources(
         current: "BaseArtifact",
         *,
         compatibility_only: bool,
+        target_key: tuple[str, ...],
         path: frozenset[str],
     ) -> None:
         current_id = current.artifact_id
@@ -179,8 +216,6 @@ def iter_metadata_lineage_sources(
                     f"{len(basis_ids)} basis artifact(s)."
                 )
         elif len(basis_ids) != 1:
-            # Preserve the historical defensive boundary for any future
-            # multi-basis mode whose inheritance semantics have not been defined.
             return
 
         for basis_id in basis_ids:
@@ -192,7 +227,22 @@ def iter_metadata_lineage_sources(
                     "but that basis artifact could not be loaded."
                 ) from exc
 
-            basis_key = basis.primary_key
+            basis_key = tuple(str(col) for col in basis.primary_key)
+
+            if mode == "rekeyed_key":
+                if compatibility_only:
+                    # A reduced/span row universe cannot be uniquely translated
+                    # backward through an earlier one-to-one rekey boundary.
+                    continue
+                include_if_has_metadata(basis)
+                walk(
+                    basis,
+                    compatibility_only=False,
+                    target_key=basis_key,
+                    path=next_path,
+                )
+                continue
+
             key_compatible = is_key_subset(basis_key, target_key)
             next_compatibility_only = compatibility_only
 
@@ -204,8 +254,8 @@ def iter_metadata_lineage_sources(
                 if not key_compatible:
                     raise LineageError(
                         f"Artifact {basis_id!r} is reached through {mode!r}, "
-                        f"but its primary key {basis_key} is not compatible with "
-                        f"target artifact {artifact.artifact_id!r} primary key {target_key}."
+                        f"but its primary key {list(basis_key)} is not compatible with "
+                        f"target key space {list(target_key)}."
                     )
                 include_if_has_metadata(basis)
 
@@ -218,11 +268,16 @@ def iter_metadata_lineage_sources(
             walk(
                 basis,
                 compatibility_only=next_compatibility_only,
+                target_key=target_key,
                 path=next_path,
             )
 
-    walk(artifact, compatibility_only=False, path=frozenset())
-
+    walk(
+        artifact,
+        compatibility_only=False,
+        target_key=tuple(str(col) for col in artifact.primary_key),
+        path=frozenset(),
+    )
     return metadata_sources
 
 
@@ -256,6 +311,15 @@ def validate_primary_key_relationship(
         return
 
     basis_pks = tuple(tuple(basis_key) for basis_key in basis_keys)
+
+    if mode == "rekeyed_key":
+        if len(basis_pks) != 1:
+            raise LineageError(
+                f"rekeyed_key lineage requires exactly one basis key; got {len(basis_pks)}."
+            )
+        # Rekeying intentionally replaces the key namespace, so there is no
+        # schema relationship to validate beyond the single-basis invariant.
+        return
 
     if mode in {"merged_key", "joined_key"}:
         if len(basis_pks) < 2:
@@ -321,8 +385,10 @@ def find_data_artifact(artifact: "BaseArtifact") -> "BaseArtifact | None":
     """Return the nearest artifact that can provide representation data.
 
     Representation data inheritance is intentionally stricter than metadata
-    inheritance. Data can only be inherited through single-basis
-    ``preserved_key`` edges and only while artifact type remains unchanged.
+    inheritance. Data can only be inherited through row-preserving single-basis
+    ``preserved_key`` or ``rekeyed_key`` edges and only while artifact type remains
+    unchanged. ``rekeyed_key`` preserves row identity by exact position rather than
+    by key equality.
     A table/JSONL ``merged_key`` artifact is a virtual relational data provider:
     it still owns no physical data component, but QueryEngine can resolve its
     branch data lazily. Returning that merge artifact here lets preserved-key
@@ -348,9 +414,9 @@ def find_data_artifact(artifact: "BaseArtifact") -> "BaseArtifact | None":
                 return current
             return None
 
-        if mode != "preserved_key":
-            # Data is optional. Non-preserved lineage cannot inherit representation
-            # data, so the artifact simply has no available data representation.
+        if mode not in {"preserved_key", "rekeyed_key"}:
+            # Data is optional. Only row-preserving lineage can inherit the same
+            # representation data lazily. Rekeying preserves rows positionally.
             return None
 
         basis_ids = basis_artifact_ids(current)

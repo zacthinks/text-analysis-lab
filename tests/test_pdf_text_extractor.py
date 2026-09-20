@@ -7,6 +7,11 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+pytest.importorskip(
+    "pdfplumber",
+    reason="PdfTextExtractor tests require the optional pdf extra.",
+)
+
 from text_analysis_lab.core.errors import OperatorError
 from text_analysis_lab.core.operator import InputBatch, TranslationRequest
 from text_analysis_lab.core.types import ArtifactType

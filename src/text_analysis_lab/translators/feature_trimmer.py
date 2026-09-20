@@ -1,4 +1,4 @@
-"""Post-hoc feature trimming for fitted matrix representations."""
+"""Post-hoc feature trimming as a lazy positional matrix view."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import numpy as np
 from scipy import sparse
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError, OperatorNotFittedError
+from text_analysis_lab.core.feature_subset import slice_matrix_features
 from text_analysis_lab.core.operator import (
     BatchResult,
     BaseTranslator,
@@ -37,18 +38,21 @@ if TYPE_CHECKING:
 
 
 class FeatureTrimmer(BaseTranslator):
-    """Fit and apply a frozen column mask to a matrix artifact.
+    """Fit and replay a frozen positional feature subset.
 
     ``min_df`` and ``max_df`` are interpreted like scikit-learn document-
     frequency thresholds: integers are row counts and floats are fractions of
     corpus rows. ``max_features`` is applied *after* DF filtering by descending
-    corpus feature sum (term frequency for ordinary count DTMs), with feature
-    name as a deterministic tie-breaker. Retained columns are emitted in their
-    original source order.
+    corpus feature sum (term frequency for ordinary count DTMs), with original
+    feature position as the deterministic tie-breaker. Retained positions stay
+    in their original source order.
 
-    The fitted column mask is durable operator state. Replay on new texts or
-    queries therefore applies the exact feature selection learned from the
-    original corpus rather than recomputing thresholds on the new rows.
+    The fitted state contains only the source width and retained integer
+    positions. Feature labels are not used to establish or validate identity.
+    The caller/upstream frozen vectorizer is responsible for replaying matrices
+    in the same ordered feature space.
+
+    Artifact outputs are lazy feature views: no trimmed matrix is rewritten.
     """
 
     operation_type = "translate"
@@ -64,10 +68,12 @@ class FeatureTrimmer(BaseTranslator):
         super().__init__(operator_id=operator_id)
         self.min_df = _validate_df_threshold(min_df, name="min_df")
         self.max_df = _validate_df_threshold(max_df, name="max_df")
-        if max_features is not None and (isinstance(max_features, bool) or int(max_features) <= 0):
+        if max_features is not None and (
+            isinstance(max_features, bool) or int(max_features) <= 0
+        ):
             raise ValueError("max_features must be a positive integer or None.")
         self.max_features = None if max_features is None else int(max_features)
-        self.source_features_: tuple[str, ...] | None = None
+        self.source_width_: int | None = None
         self.kept_indices_: tuple[int, ...] | None = None
 
     @property
@@ -76,7 +82,7 @@ class FeatureTrimmer(BaseTranslator):
 
     @property
     def is_fitted(self) -> bool:
-        return self.source_features_ is not None and self.kept_indices_ is not None
+        return self.source_width_ is not None and self.kept_indices_ is not None
 
     @property
     def supports_fit_translate(self) -> bool:
@@ -85,14 +91,6 @@ class FeatureTrimmer(BaseTranslator):
     @property
     def supports_parallel_translate(self) -> bool:
         return self.is_fitted
-
-    @property
-    def kept_features_(self) -> tuple[str, ...] | None:
-        if not self.is_fitted:
-            return None
-        assert self.source_features_ is not None
-        assert self.kept_indices_ is not None
-        return tuple(self.source_features_[index] for index in self.kept_indices_)
 
     def supports_resume(self, *, mode: TranslationMode, route: RunRoute) -> bool:
         if mode == "fit_translate":
@@ -108,7 +106,9 @@ class FeatureTrimmer(BaseTranslator):
         _ = request
         source = single_source(sources, name="FeatureTrimmer")
         if source.artifact_type.value not in {"sparse_matrix", "dense_matrix"}:
-            raise OperatorError("FeatureTrimmer requires a sparse_matrix or dense_matrix source.")
+            raise OperatorError(
+                "FeatureTrimmer requires a sparse_matrix or dense_matrix source."
+            )
         return OutputSpec(
             artifact_type=source.artifact_type.value,
             lineage_mode="preserved_key",
@@ -138,22 +138,36 @@ class FeatureTrimmer(BaseTranslator):
     ) -> SourceRequest:
         source = single_source(sources, name="FeatureTrimmer")
         if source.artifact_type.value not in {"sparse_matrix", "dense_matrix"}:
-            raise OperatorError("FeatureTrimmer requires a sparse_matrix or dense_matrix source.")
-        observed = tuple(str(value) for value in source.get_data_columns())
-        if self.is_fitted:
-            if observed != self.source_features_:
-                raise OperatorError(
-                    "FeatureTrimmer requires the same ordered feature schema used during fitting. "
-                    f"Expected {len(self.source_features_ or ())} features, got {len(observed)}."
-                )
-        elif self.source_features_ is None:
-            self.source_features_ = observed
+            raise OperatorError(
+                "FeatureTrimmer requires a sparse_matrix or dense_matrix source."
+            )
+        observed_width = len(source.get_data_columns())
+        if self.source_width_ is None:
+            self.source_width_ = int(observed_width)
+        elif int(observed_width) != int(self.source_width_):
+            raise OperatorError(
+                "FeatureTrimmer replay requires the fitted source width "
+                f"{self.source_width_}; got {observed_width}. TeAL does not infer "
+                "feature alignment from feature labels."
+            )
+
+        if mode == "fit_translate":
+            return SourceRequest(
+                artifact_type=("sparse_matrix", "dense_matrix"),
+                mode="full_artifact",
+                columns=ColumnRequest(keys=True, data=True, metadata=False),
+                batch_size=None,
+                form="native",
+                metadata_mode="none",
+                include_position=False,
+            )
+
         return SourceRequest(
             artifact_type=("sparse_matrix", "dense_matrix"),
-            mode="full_artifact" if mode == "fit_translate" else "batches",
-            columns=ColumnRequest(keys=True, data=True, metadata=False),
-            batch_size=None if mode == "fit_translate" else (request.batch_size or 10_000),
-            form="native",
+            mode="batches",
+            columns=ColumnRequest(keys=True, data=False, metadata=False),
+            batch_size=request.batch_size or 10_000,
+            form="table",
             metadata_mode="none",
             include_position=False,
         )
@@ -167,36 +181,47 @@ class FeatureTrimmer(BaseTranslator):
     ) -> BatchResult:
         _ = request
         packet = single_input(inputs, name="FeatureTrimmer")
-        info, matrix, key_columns = native_matrix_packet(packet, name="FeatureTrimmer")
-        source_features = self._require_source_features()
-        if int(matrix.shape[1]) != len(source_features):
-            raise ArtifactError(
-                "FeatureTrimmer matrix width does not match its source feature schema: "
-                f"{matrix.shape[1]} != {len(source_features)}."
-            )
 
         if mode == "fit_translate":
+            info, matrix, key_columns = native_matrix_packet(
+                packet, name="FeatureTrimmer"
+            )
+            source_width = self._require_source_width()
+            if int(matrix.shape[1]) != source_width:
+                raise ArtifactError(
+                    "FeatureTrimmer matrix width does not match its fitted/source width: "
+                    f"{matrix.shape[1]} != {source_width}."
+                )
             if self.kept_indices_ is not None:
-                raise OperatorError("fit_translate received an already fitted FeatureTrimmer.")
+                raise OperatorError(
+                    "fit_translate received an already fitted FeatureTrimmer."
+                )
             self.kept_indices_ = _fit_feature_mask(
                 matrix,
-                features=source_features,
                 min_df=self.min_df,
                 max_df=self.max_df,
                 max_features=self.max_features,
             )
-        elif mode != "translate":  # pragma: no cover - runner validates mode
+            keys = key_frame(info, key_columns)
+        elif mode == "translate":
+            if not self.is_fitted:
+                raise OperatorNotFittedError(
+                    "FeatureTrimmer must be fitted before translate replay."
+                )
+            frame = packet.data
+            if not hasattr(frame, "loc"):
+                raise ArtifactError(
+                    "FeatureTrimmer replay expected a tabular key packet."
+                )
+            keys = frame.loc[:, list(packet.primary_key)].reset_index(drop=True)
+        else:  # pragma: no cover - runner validates mode
             raise OperatorError(f"Unsupported FeatureTrimmer mode {mode!r}.")
 
-        values = self._slice_matrix(matrix)
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
-                    "keys": key_frame(info, key_columns),
-                    "data": {
-                        "values": values,
-                        "columns": list(self._require_kept_features()),
-                    },
+                    "keys": keys,
+                    "feature_indices": list(self._require_kept_indices()),
                 }
             }
         )
@@ -207,17 +232,17 @@ class FeatureTrimmer(BaseTranslator):
         *,
         query: bool = False,
         params: Mapping[str, Any] | None = None,
-    ):
-        """Apply the exact frozen corpus feature mask to new matrix rows."""
+    ) -> Any:
+        """Apply the exact frozen positional feature subset to new matrix rows."""
         _ = query, params
-        source_features = self._require_source_features()
+        source_width = self._require_source_width()
         shape = getattr(matrix, "shape", None)
-        if shape is None or len(shape) != 2 or int(shape[1]) != len(source_features):
+        if shape is None or len(shape) != 2 or int(shape[1]) != source_width:
             raise OperatorError(
                 "FeatureTrimmer replay requires the fitted source width "
-                f"{len(source_features)}; got shape={shape!r}."
+                f"{source_width}; got shape={shape!r}."
             )
-        return self._slice_matrix(matrix)
+        return slice_matrix_features(matrix, self._require_kept_indices())
 
     def supports_external_transform(self, *, query: bool, input_kind: str) -> bool:
         _ = query
@@ -261,10 +286,10 @@ class FeatureTrimmer(BaseTranslator):
             "min_df": self.min_df,
             "max_df": self.max_df,
             "max_features": self.max_features,
-            "source_features": (
-                None if self.source_features_ is None else list(self.source_features_)
+            "source_width": self.source_width_,
+            "kept_indices": (
+                None if self.kept_indices_ is None else list(self.kept_indices_)
             ),
-            "kept_indices": None if self.kept_indices_ is None else list(self.kept_indices_),
             "is_fitted": self.is_fitted,
         }
 
@@ -274,14 +299,26 @@ class FeatureTrimmer(BaseTranslator):
             min_df=cast(int | float, state.get("min_df", 1)),
             max_df=cast(int | float, state.get("max_df", 1.0)),
             max_features=(
-                None if state.get("max_features") is None else int(state["max_features"])
+                None
+                if state.get("max_features") is None
+                else int(state["max_features"])
             ),
         )
-        raw_features = state.get("source_features")
-        if isinstance(raw_features, Sequence) and not isinstance(raw_features, (str, bytes)):
-            obj.source_features_ = tuple(str(value) for value in raw_features)
+        raw_width = state.get("source_width")
+        if raw_width is not None:
+            obj.source_width_ = int(raw_width)
+        else:
+            # Backward compatibility for snapshots created before positional-only
+            # feature trimming. Old source feature labels establish only width.
+            raw_features = state.get("source_features")
+            if isinstance(raw_features, Sequence) and not isinstance(
+                raw_features, (str, bytes)
+            ):
+                obj.source_width_ = len(raw_features)
         raw_indices = state.get("kept_indices")
-        if isinstance(raw_indices, Sequence) and not isinstance(raw_indices, (str, bytes)):
+        if isinstance(raw_indices, Sequence) and not isinstance(
+            raw_indices, (str, bytes)
+        ):
             obj.kept_indices_ = tuple(int(value) for value in raw_indices)
         return obj
 
@@ -311,37 +348,26 @@ class FeatureTrimmer(BaseTranslator):
         route: RunRoute,
     ) -> "FeatureTrimmer":
         _ = mode, route
-        state = json.loads((intermediate_dir / "state.json").read_text(encoding="utf-8"))
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
         if not isinstance(state, Mapping):
             raise OperatorError("FeatureTrimmer intermediate state must be a mapping.")
         obj = cls.from_json_state(state)
         obj.operator_id = operator_id
         return obj
 
-    def _slice_matrix(self, matrix: Any):
-        indices = list(self._require_kept_indices())
-        if sparse.issparse(matrix):
-            return sparse.csr_matrix(matrix)[:, indices].tocsr()
-        dense = np.asarray(matrix)
-        if dense.ndim != 2:
-            raise ArtifactError("FeatureTrimmer requires a two-dimensional matrix.")
-        return np.asarray(dense[:, indices])
-
-    def _require_source_features(self) -> tuple[str, ...]:
-        if self.source_features_ is None:
-            raise OperatorNotFittedError("FeatureTrimmer has no bound source feature schema.")
-        return self.source_features_
+    def _require_source_width(self) -> int:
+        if self.source_width_ is None:
+            raise OperatorNotFittedError(
+                "FeatureTrimmer has no bound source feature width."
+            )
+        return int(self.source_width_)
 
     def _require_kept_indices(self) -> tuple[int, ...]:
         if self.kept_indices_ is None:
             raise OperatorNotFittedError("FeatureTrimmer has no fitted feature mask.")
         return self.kept_indices_
-
-    def _require_kept_features(self) -> tuple[str, ...]:
-        features = self.kept_features_
-        if features is None:
-            raise OperatorNotFittedError("FeatureTrimmer has no fitted feature mask.")
-        return features
 
 
 def _validate_df_threshold(value: int | float, *, name: str) -> int | float:
@@ -368,7 +394,6 @@ def _resolve_max_df(value: int | float, n_rows: int) -> int:
 def _fit_feature_mask(
     matrix: Any,
     *,
-    features: Sequence[str],
     min_df: int | float,
     max_df: int | float,
     max_features: int | None,
@@ -379,21 +404,23 @@ def _fit_feature_mask(
     n_rows, n_features = (int(value) for value in shape)
     if n_rows <= 0:
         raise ArtifactError("FeatureTrimmer cannot fit on an empty matrix.")
-    if n_features != len(features):
-        raise ArtifactError(
-            f"FeatureTrimmer received {n_features} columns but {len(features)} feature names."
-        )
+    if n_features <= 0:
+        raise ArtifactError("FeatureTrimmer cannot fit on an empty feature axis.")
 
     if sparse.issparse(matrix):
         csr = sparse.csr_matrix(matrix, copy=True)
         csr.eliminate_zeros()
-        document_frequency = np.asarray(csr.getnnz(axis=0), dtype=np.int64).reshape(-1)
+        document_frequency = np.asarray(
+            csr.getnnz(axis=0), dtype=np.int64
+        ).reshape(-1)
         feature_sum = np.asarray(csr.sum(axis=0), dtype=float).reshape(-1)
     else:
         dense = np.asarray(matrix)
         if dense.ndim != 2:
             raise ArtifactError("FeatureTrimmer requires a two-dimensional matrix.")
-        document_frequency = np.count_nonzero(dense, axis=0).astype(np.int64, copy=False)
+        document_frequency = np.count_nonzero(dense, axis=0).astype(
+            np.int64, copy=False
+        )
         feature_sum = np.asarray(np.sum(dense, axis=0, dtype=float)).reshape(-1)
 
     min_count = _resolve_min_df(min_df, n_rows)
@@ -411,10 +438,9 @@ def _fit_feature_mask(
         )
 
     if max_features is not None and candidate.size > max_features:
-        # Python sorting keeps the tie-break rule obvious and deterministic.
         ranked = sorted(
             (int(index) for index in candidate.tolist()),
-            key=lambda index: (-float(feature_sum[index]), str(features[index]), index),
+            key=lambda index: (-float(feature_sum[index]), index),
         )[:max_features]
         candidate = np.asarray(sorted(ranked), dtype=np.int64)
 

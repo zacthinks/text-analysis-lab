@@ -21,6 +21,7 @@ from text_analysis_lab.core.errors import (
     UnsupportedArtifactOperationError,
     UnsupportedArtifactTypeError,
 )
+from text_analysis_lab.core.lineage import artifact_lineage, basis_artifact_ids
 from text_analysis_lab.core.types import ArtifactType, ColumnSelect
 
 try:
@@ -119,6 +120,45 @@ def _group_offsets_by_batch(locations: Sequence[Any]) -> dict[int, dict[int, int
         position = int(location.position)
         wanted.setdefault(batch, {})[offset] = position
     return wanted
+
+
+def _validated_feature_indices(
+    raw_indices: Any,
+    *,
+    source_width: int,
+    artifact_id: str,
+) -> list[int]:
+    if isinstance(raw_indices, np.ndarray):
+        values = raw_indices.tolist()
+    elif isinstance(raw_indices, Sequence) and not isinstance(raw_indices, (str, bytes)):
+        values = list(raw_indices)
+    else:
+        raise ArtifactError(
+            f"Matrix artifact {artifact_id} records invalid feature_indices."
+        )
+    indices: list[int] = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+            raise ArtifactError(
+                f"Matrix artifact {artifact_id} feature_indices must be integers."
+            )
+        index = int(value)
+        if index < 0 or index >= int(source_width):
+            raise ArtifactError(
+                f"Matrix artifact {artifact_id} feature index {index} is outside "
+                f"source width {source_width}."
+            )
+        indices.append(index)
+    if not indices:
+        raise ArtifactError(
+            f"Matrix artifact {artifact_id} feature_indices may not be empty."
+        )
+    if any(right <= left for left, right in zip(indices, indices[1:])):
+        raise ArtifactError(
+            f"Matrix artifact {artifact_id} feature_indices must be unique and "
+            "strictly increasing."
+        )
+    return indices
 
 
 class TableArtifact(BaseArtifact):
@@ -273,15 +313,120 @@ class JsonlArtifact(BaseArtifact):
 
 
 class _MatrixArtifact(BaseArtifact):
-    """Shared matrix representation helpers."""
+    """Shared matrix representation helpers.
+
+    Matrix feature axes are positional. ``get_feature_frame()`` annotates those
+    positions, while lazy feature views store only source-relative integer
+    indices in their preserved-key lineage. Feature labels are therefore
+    descriptive fields, not cross-artifact identifiers.
+    """
 
     value_suffix: ClassVar[str]
 
+    def _own_feature_frame(self) -> pd.DataFrame:
+        """Return the physical feature frame for a matrix that owns its data."""
+        path = self.storage.data_columns_path
+        if path.exists():
+            frame = pd.read_parquet(path).reset_index(drop=True)
+            if "column_index" not in frame.columns:
+                frame.insert(0, "column_index", np.arange(len(frame), dtype="int64"))
+            return frame
+        labels = [str(i) for i in range(self._infer_n_columns())]
+        return pd.DataFrame(
+            {
+                "column_index": np.arange(len(labels), dtype="int64"),
+                "column": labels,
+            }
+        )
+
+    def get_feature_frame(self) -> pd.DataFrame:
+        """Return feature-axis annotations in this artifact's local column order.
+
+        The row position of this frame is the feature position. For lazy feature
+        views, the basis feature frame is projected by the stored integer indices
+        and re-indexed locally. No feature-label matching is performed.
+        """
+        if self.has_own_data():
+            frame = self._own_feature_frame()
+        else:
+            lineage = artifact_lineage(self)
+            if str(lineage.get("lineage_mode")) not in {"preserved_key", "rekeyed_key"}:
+                raise ArtifactError(
+                    f"Matrix artifact {self.artifact_id} has no owned data and cannot "
+                    "inherit a feature frame through this lineage mode."
+                )
+            basis_ids = basis_artifact_ids(self)
+            if len(basis_ids) != 1:
+                raise ArtifactError(
+                    f"Matrix artifact {self.artifact_id} requires exactly one basis "
+                    "artifact for inherited feature access."
+                )
+            basis = self.project.get_artifact(basis_ids[0])
+            if basis.artifact_type != self.artifact_type or not isinstance(basis, _MatrixArtifact):
+                raise ArtifactError(
+                    f"Matrix artifact {self.artifact_id} cannot inherit a feature frame "
+                    f"from {basis.artifact_id}."
+                )
+            frame = basis.get_feature_frame()
+            raw_indices = lineage.get("feature_indices")
+            if raw_indices is not None:
+                indices = _validated_feature_indices(
+                    raw_indices,
+                    source_width=len(frame),
+                    artifact_id=self.artifact_id,
+                )
+                frame = frame.iloc[indices].reset_index(drop=True)
+            else:
+                frame = frame.reset_index(drop=True)
+
+        frame = frame.copy()
+        if "column_index" in frame.columns:
+            frame["column_index"] = np.arange(len(frame), dtype="int64")
+        else:
+            frame.insert(0, "column_index", np.arange(len(frame), dtype="int64"))
+        return frame
+
     def get_data_columns(self) -> list[str]:
-        labels = _matrix_column_labels(self.storage.data_columns_path)
-        if labels:
-            return labels
-        return [str(i) for i in range(self._infer_n_columns())]
+        frame = self.get_feature_frame()
+        if frame.empty:
+            return []
+        if "column" in frame.columns:
+            return [str(value) for value in frame["column"].tolist()]
+        return [str(value) for value in frame.iloc[:, -1].tolist()]
+
+    def _feature_indices_to_data_artifact(self) -> list[int]:
+        """Map this local feature axis onto the physical data owner's columns."""
+        if self.has_own_data():
+            return list(range(self._infer_n_columns()))
+
+        lineage = artifact_lineage(self)
+        if str(lineage.get("lineage_mode")) not in {"preserved_key", "rekeyed_key"}:
+            raise ArtifactError(
+                f"Matrix artifact {self.artifact_id} cannot inherit matrix features "
+                "through this lineage mode."
+            )
+        basis_ids = basis_artifact_ids(self)
+        if len(basis_ids) != 1:
+            raise ArtifactError(
+                f"Matrix artifact {self.artifact_id} requires exactly one basis artifact "
+                "for inherited matrix data."
+            )
+        basis = self.project.get_artifact(basis_ids[0])
+        if basis.artifact_type != self.artifact_type or not isinstance(basis, _MatrixArtifact):
+            raise ArtifactError(
+                f"Matrix artifact {self.artifact_id} cannot inherit matrix features "
+                f"from {basis.artifact_id}."
+            )
+        basis_indices = basis._feature_indices_to_data_artifact()
+        raw_indices = lineage.get("feature_indices")
+        if raw_indices is None:
+            return basis_indices
+        local = _validated_feature_indices(
+            raw_indices,
+            source_width=len(basis_indices),
+            artifact_id=self.artifact_id,
+        )
+        return [basis_indices[index] for index in local]
 
     @property
     def has_row_names(self) -> bool:
@@ -374,6 +519,88 @@ class _MatrixArtifact(BaseArtifact):
         index_by_name = {name: index for index, name in enumerate(available)}
         return selected, [index_by_name[name] for name in selected]
 
+    def _physical_column_indices(
+        self, data_columns: ColumnSelect
+    ) -> tuple[list[str], list[int]]:
+        """Resolve a local column request to physical data-owner positions."""
+        selected, local_indices = self._column_indices(data_columns)
+        physical_map = self._feature_indices_to_data_artifact()
+        if len(physical_map) != len(self.get_data_columns()):
+            raise ArtifactError(
+                f"Matrix artifact {self.artifact_id} feature projection width is inconsistent."
+            )
+        return selected, [physical_map[index] for index in local_indices]
+
+    def _resolve_external_data_columns(
+        self, data_columns: ColumnSelect
+    ) -> list[str]:
+        if data_columns is False:
+            return []
+        return _requested_data_columns(self.get_data_columns(), data_columns)
+
+    def _data_native_for_positions(
+        self,
+        positions: Sequence[int],
+        *,
+        data_columns: ColumnSelect = True,
+    ) -> Any:
+        if data_columns is False:
+            return None
+        _, physical_indices = self._physical_column_indices(data_columns)
+        data_positions = self._resolve_data_positions(positions)
+        data_artifact = self._require_data_artifact()
+        if not isinstance(data_artifact, _MatrixArtifact):
+            raise ArtifactError(
+                f"Matrix artifact {self.artifact_id} resolved a non-matrix data owner."
+            )
+        return data_artifact._own_data_native_for_positions_by_indices(
+            data_positions,
+            column_indices=physical_indices,
+        )
+
+    def _data_frame_for_positions(
+        self,
+        positions: Sequence[int],
+        *,
+        data_columns: ColumnSelect = True,
+    ) -> pd.DataFrame:
+        selected, _ = self._physical_column_indices(data_columns)
+        matrix = self._data_native_for_positions(positions, data_columns=data_columns)
+        if self.artifact_type == ArtifactType.SPARSE_MATRIX:
+            return pd.DataFrame.sparse.from_spmatrix(
+                matrix,
+                columns=selected,
+            ).reset_index(drop=True)
+        return pd.DataFrame(matrix, columns=selected).reset_index(drop=True)
+
+    def _data_records_for_positions(
+        self,
+        positions: Sequence[int],
+        *,
+        data_columns: ColumnSelect = True,
+    ) -> list[dict[str, Any]]:
+        selected, _ = self._physical_column_indices(data_columns)
+        matrix = self._data_native_for_positions(positions, data_columns=data_columns)
+        if self.artifact_type == ArtifactType.SPARSE_MATRIX:
+            csr = matrix.tocsr()
+            records: list[dict[str, Any]] = []
+            for row_index in range(int(csr.shape[0])):
+                row = csr.getrow(row_index)
+                records.append(
+                    {
+                        selected[int(col_index)]: (
+                            value.item() if hasattr(value, "item") else value
+                        )
+                        for col_index, value in zip(row.indices, row.data, strict=True)
+                    }
+                )
+            return records
+        dense = np.asarray(matrix)
+        return [
+            {selected[index]: row[index] for index in range(len(selected))}
+            for row in dense
+        ]
+
     def _native_from_info_and_data(
         self, info: pd.DataFrame, data: Any
     ) -> dict[str, Any]:
@@ -416,16 +643,16 @@ class DenseMatrixArtifact(_MatrixArtifact):
         values = np.load(path, mmap_mode="r")
         return np.asarray(values[[int(offset) for offset in row_offsets], :])
 
-    def _own_data_native_for_positions(
+    def _own_data_native_for_positions_by_indices(
         self,
         positions: Sequence[int],
         *,
-        data_columns: ColumnSelect = True,
+        column_indices: Sequence[int],
     ) -> np.ndarray:
         positions = _positions_as_list(positions)
-        _, column_indices = self._column_indices(data_columns)
+        resolved_columns = [int(index) for index in column_indices]
         if not positions:
-            return np.empty((0, len(column_indices)))
+            return np.empty((0, len(resolved_columns)))
 
         locations = _locations_for_positions(self, positions)
         wanted_by_batch = _group_offsets_by_batch(locations)
@@ -434,15 +661,27 @@ class DenseMatrixArtifact(_MatrixArtifact):
         for batch, offset_to_position in wanted_by_batch.items():
             offsets = list(offset_to_position)
             rows = self._load_batch_rows(batch, offsets)
-            rows = rows[:, column_indices] if column_indices else rows[:, []]
+            rows = rows[:, resolved_columns] if resolved_columns else rows[:, []]
             for row_index, offset in enumerate(offsets):
                 rows_by_position[offset_to_position[offset]] = np.asarray(
                     rows[row_index]
                 )
 
         if not rows_by_position:
-            return np.empty((0, len(column_indices)))
+            return np.empty((0, len(resolved_columns)))
         return np.vstack([rows_by_position[position] for position in positions])
+
+    def _own_data_native_for_positions(
+        self,
+        positions: Sequence[int],
+        *,
+        data_columns: ColumnSelect = True,
+    ) -> np.ndarray:
+        _, column_indices = self._column_indices(data_columns)
+        return self._own_data_native_for_positions_by_indices(
+            positions,
+            column_indices=column_indices,
+        )
 
     def _own_data_frame_for_positions(
         self,
@@ -517,17 +756,17 @@ class SparseMatrixArtifact(_MatrixArtifact):
         matrix = self._sparse_module().load_npz(path).tocsr()
         return matrix[[int(offset) for offset in row_offsets], :]
 
-    def _own_data_native_for_positions(
+    def _own_data_native_for_positions_by_indices(
         self,
         positions: Sequence[int],
         *,
-        data_columns: ColumnSelect = True,
+        column_indices: Sequence[int],
     ) -> "scipy_sparse.csr_matrix":
         sparse = self._sparse_module()
         positions = _positions_as_list(positions)
-        _, column_indices = self._column_indices(data_columns)
+        resolved_columns = [int(index) for index in column_indices]
         if not positions:
-            return sparse.csr_matrix((0, len(column_indices)))
+            return sparse.csr_matrix((0, len(resolved_columns)))
 
         locations = _locations_for_positions(self, positions)
         wanted_by_batch = _group_offsets_by_batch(locations)
@@ -536,12 +775,12 @@ class SparseMatrixArtifact(_MatrixArtifact):
         for batch, offset_to_position in wanted_by_batch.items():
             offsets = list(offset_to_position)
             rows = self._load_batch_rows(batch, offsets)
-            rows = rows[:, column_indices] if column_indices else rows[:, []]
+            rows = rows[:, resolved_columns] if resolved_columns else rows[:, []]
             for row_index, offset in enumerate(offsets):
                 rows_by_position[offset_to_position[offset]] = rows[row_index]
 
         if not rows_by_position:
-            return sparse.csr_matrix((0, len(column_indices)))
+            return sparse.csr_matrix((0, len(resolved_columns)))
 
         return cast(
             "scipy_sparse.csr_matrix",
@@ -549,6 +788,18 @@ class SparseMatrixArtifact(_MatrixArtifact):
                 [rows_by_position[position] for position in positions],
                 format="csr",
             ),
+        )
+
+    def _own_data_native_for_positions(
+        self,
+        positions: Sequence[int],
+        *,
+        data_columns: ColumnSelect = True,
+    ) -> "scipy_sparse.csr_matrix":
+        _, column_indices = self._column_indices(data_columns)
+        return self._own_data_native_for_positions_by_indices(
+            positions,
+            column_indices=column_indices,
         )
 
     def _own_data_frame_for_positions(

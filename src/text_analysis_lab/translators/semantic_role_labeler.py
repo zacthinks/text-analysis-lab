@@ -1,4 +1,4 @@
-"""Sentence-level semantic-role labeling for TeAL."""
+"""TeAL-native semantic-role labeling using the validated Bag of Ideas runtime."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 import pandas as pd
 
-from text_analysis_lab.linguistics.srl.resources import prepare_project_srl_runtime
-from text_analysis_lab.linguistics.srl.runtime import AllenNlpSrlRuntime
-from text_analysis_lab.linguistics.srl.structures import content_head_indices
-from text_analysis_lab.linguistics.cache import user_cache_paths
+from text_analysis_lab._linguistics.srl.resources import prepare_project_srl_runtime
+from text_analysis_lab._linguistics.srl.runtime import AllenNlpSrlRuntime
+from text_analysis_lab._linguistics.srl.structures import content_head_indices
+from text_analysis_lab._linguistics.cache import user_cache_paths
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
     BatchResult,
@@ -61,7 +61,7 @@ class SemanticRoleLabeler(BaseTranslator):
     """Run predicate-conditioned AllenNLP BERT SRL over TeAL sentences.
 
     The published 2020 AllenNLP checkpoint is converted once into the lightweight runtime
-    from a published AllenNLP BERT SRL checkpoint. TeAL owns the sentence/token artifacts and writes
+    already validated in Bag of Ideas.  TeAL owns the sentence/token artifacts and writes
     normalized predicate/role tables suitable for later semantic-head analysis.
     """
 

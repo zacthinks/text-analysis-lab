@@ -388,3 +388,204 @@ def test_read_csv_folder_combines_files_in_sorted_order_and_preserves_provenance
         assert payload["external_source"]["matched_file_count"] == 2
     finally:
         project.close()
+
+
+def _write_excel_workbook(path: Path, sheets: list[tuple[str, list[list[object]], bool]]) -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    workbook = openpyxl.Workbook()
+    workbook.remove(workbook.active)
+    for name, rows, hidden in sheets:
+        worksheet = workbook.create_sheet(name)
+        for row in rows:
+            worksheet.append(row)
+        if hidden:
+            worksheet.sheet_state = "hidden"
+    workbook.save(path)
+    workbook.close()
+
+
+def test_read_excel_multiple_sheets_by_name_and_index_preserves_sheet_provenance(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "student.xlsx"
+    _write_excel_workbook(
+        source,
+        [
+            (
+                "Conversation A",
+                [
+                    ["title row"],
+                    ["speaker", "content", "notes"],
+                    ["child", "A1", "n1"],
+                    ["parent", "A2", None],
+                ],
+                False,
+            ),
+            (
+                "Conversation B",
+                [
+                    ["title row"],
+                    ["speaker", "content", "notes"],
+                    ["child", "B1", "n2"],
+                ],
+                False,
+            ),
+        ],
+    )
+
+    project_path = tmp_path / "project"
+    project = teal.Project.create(project_path, name="excel_import")
+    try:
+        artifact = project.read_excel(
+            source,
+            sheets=["Conversation B", 0],
+            header_row=1,
+            text_fields="content",
+            metadata_fields=["speaker", "notes"],
+            batch_size=2,
+            output_label="turn_rows",
+        )
+        frame = _query_full(artifact)
+        assert frame["row_id"].astype(int).tolist() == [0, 1, 2]
+        assert frame["content"].tolist() == ["B1", "A1", "A2"]
+        assert frame["source_sheet"].tolist() == [
+            "Conversation B",
+            "Conversation A",
+            "Conversation A",
+        ]
+        assert frame["source_sheet_index"].astype(int).tolist() == [1, 0, 0]
+        assert frame["source_row"].astype(int).tolist() == [0, 0, 1]
+
+        operation = project.operation_for_artifact(artifact)
+        payload = json.loads(
+            (project.storage.operation_dir(operation["operation_id"]) / "operation.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert payload["import_kind"] == "read_excel"
+        assert payload["request"]["sheets"] == ["Conversation B", 0]
+        assert payload["request"]["header_row"] == 1
+        assert payload["request"]["formula_policy"] == "cached_values"
+        assert payload["request"]["reader_engine"]["data_only"] is True
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(project_path)
+    try:
+        artifact = reopened.get_artifact("art_000001")
+        frame = _query_full(artifact)
+        assert frame["content"].tolist() == ["B1", "A1", "A2"]
+    finally:
+        reopened.close()
+
+
+def test_read_excel_all_sheets_includes_hidden_and_missing_fields_policy(tmp_path: Path) -> None:
+    source = tmp_path / "student.xlsx"
+    _write_excel_workbook(
+        source,
+        [
+            (
+                "Visible",
+                [
+                    ["speaker", "content", "notes"],
+                    ["child", "visible", "note"],
+                ],
+                False,
+            ),
+            (
+                "Hidden",
+                [
+                    ["speaker", "content"],
+                    ["child", "hidden"],
+                ],
+                True,
+            ),
+        ],
+    )
+
+    project = teal.Project.create(tmp_path / "strict_project", name="excel_strict")
+    try:
+        with pytest.raises(ArtifactError, match="missing requested field") as exc_info:
+            project.read_excel(
+                source,
+                sheets=None,
+                text_fields="content",
+                metadata_fields=["speaker", "notes"],
+            )
+        assert "missing_fields=None" in str(exc_info.value)
+        assert project.list_operations(operation_type="import") == []
+    finally:
+        project.close()
+
+    project = teal.Project.create(tmp_path / "fill_project", name="excel_fill")
+    try:
+        artifact = project.read_excel(
+            source,
+            sheets=None,
+            text_fields="content",
+            metadata_fields=["speaker", "notes"],
+            missing_fields=None,
+        )
+        frame = _query_full(artifact)
+        assert frame["content"].tolist() == ["visible", "hidden"]
+        assert frame["source_sheet"].tolist() == ["Visible", "Hidden"]
+        assert frame["notes"].iloc[0] == "note"
+        assert pd.isna(frame["notes"].iloc[1])
+    finally:
+        project.close()
+
+
+def test_read_excel_folder_orders_files_then_sheets_and_can_fill_default(tmp_path: Path) -> None:
+    root = tmp_path / "workbooks"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    _write_excel_workbook(
+        root / "B.xlsx",
+        [
+            ("First", [["speaker", "content", "rating"], ["child", "B1", 4]], False),
+            ("Second", [["speaker", "content"], ["parent", "B2"]], False),
+        ],
+    )
+    _write_excel_workbook(
+        nested / "A.xlsx",
+        [
+            ("First", [["speaker", "content", "rating"], ["child", "A1", 5]], False),
+            ("Second", [["speaker", "content"], ["parent", "A2"]], False),
+        ],
+    )
+
+    project = teal.Project.create(tmp_path / "project", name="excel_folder")
+    try:
+        artifact = project.read_excel_folder(
+            root,
+            sheets=None,
+            text_fields="content",
+            metadata_fields=["speaker", "rating"],
+            missing_fields=0,
+            recursive=True,
+            batch_size=1,
+        )
+        frame = _query_full(artifact)
+        assert frame["content"].tolist() == ["B1", "B2", "A1", "A2"]
+        assert frame["source_file"].tolist() == [
+            "B.xlsx",
+            "B.xlsx",
+            "nested/A.xlsx",
+            "nested/A.xlsx",
+        ]
+        assert frame["source_sheet"].tolist() == ["First", "Second", "First", "Second"]
+        assert frame["source_sheet_index"].astype(int).tolist() == [0, 1, 0, 1]
+        assert frame["source_row"].astype(int).tolist() == [0, 0, 0, 0]
+        assert frame["rating"].tolist() == [4, 0, 5, 0]
+
+        operation = project.operation_for_artifact(artifact)
+        payload = json.loads(
+            (project.storage.operation_dir(operation["operation_id"]) / "operation.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert payload["import_kind"] == "read_excel_folder"
+        assert payload["request"]["matched_files"] == ["B.xlsx", "nested/A.xlsx"]
+        assert payload["request"]["missing_fields"] == {"mode": "fill", "value": 0}
+    finally:
+        project.close()

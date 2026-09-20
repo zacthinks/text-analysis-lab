@@ -47,17 +47,25 @@ from text_analysis_lab.core.types import (
 )
 from text_analysis_lab.core.subset import FunctionSpec, subset as _subset
 from text_analysis_lab.core.select_keys import select_keys as _select_keys
+from text_analysis_lab.core.set_primary_keys import set_primary_keys as _set_primary_keys
+from text_analysis_lab.core.collapse_runs import collapse_runs as _collapse_runs
+from text_analysis_lab.core.feature_subset import (
+    FeatureSubsetFunction,
+    feature_subset as _feature_subset,
+)
 from text_analysis_lab.core.sample import sample as _sample
 from text_analysis_lab.core.restrict import restrict as _restrict
 from text_analysis_lab.core.aggregate import (
     AggregateField,
     ConcatReducer,
     LiteralValue,
+    FieldAggregationSpec,
     aggregate as _aggregate,
 )
 from text_analysis_lab.core.split import split as _split
 from text_analysis_lab.core.probability_split import probability_split as _probability_split
 from text_analysis_lab.core.keyed_frame import from_keyed_frame as _from_keyed_frame
+from text_analysis_lab.core.register_external import register_external as _register_external
 from text_analysis_lab.core.keyed_metadata import attach_metadata as _attach_metadata
 from text_analysis_lab.core.binary_code import binary_code as _binary_code
 from text_analysis_lab.core.transform_like import (
@@ -69,6 +77,8 @@ from text_analysis_lab.core.join import join as _join
 from text_analysis_lab.core.importers import (
     read_csv as _read_csv,
     read_csv_folder as _read_csv_folder,
+    read_excel as _read_excel,
+    read_excel_folder as _read_excel_folder,
     read_jsonl as _read_jsonl,
     read_parquet as _read_parquet,
     folder_inventory as _folder_inventory,
@@ -570,6 +580,88 @@ class Project:
         finalize_alias_plan(self, plan, {output_label: result})
         return result
 
+    def read_excel(
+        self,
+        path: str | Path,
+        *,
+        text_fields: str | Sequence[str],
+        metadata_fields: str | Sequence[str] | None,
+        sheets: int | str | Sequence[int | str] | None = None,
+        header_row: int = 0,
+        missing_fields: Any = ...,
+        batch_size: int = 10_000,
+        output_label: str = DEFAULT_OUTPUT_LABEL,
+        memo: str | None = None,
+        alias: str | None = None,
+        overwrite: bool = False,
+    ) -> BaseArtifact:
+        """Import selected fields from one XLSX workbook.
+
+        ``sheets=None`` imports all workbook sheets. Sheet selectors may mix exact
+        names and zero-based integer positions. Excel source provenance is attached
+        as sheet name, sheet index, and zero-based source row metadata.
+        """
+        plan = prepare_alias_plan(self, (output_label,), alias, overwrite=overwrite)
+        if plan is not None and plan.reuse:
+            return reused_outputs(self, plan)[output_label]
+        kwargs: dict[str, Any] = {
+            "text_fields": text_fields,
+            "metadata_fields": metadata_fields,
+            "sheets": sheets,
+            "header_row": header_row,
+            "batch_size": batch_size,
+            "output_label": output_label,
+            "memo": memo,
+        }
+        if missing_fields is not ...:
+            kwargs["missing_fields"] = missing_fields
+        result = _read_excel(self, path, **kwargs)
+        finalize_alias_plan(self, plan, {output_label: result})
+        return result
+
+    def read_excel_folder(
+        self,
+        root: str | Path,
+        *,
+        text_fields: str | Sequence[str],
+        metadata_fields: str | Sequence[str] | None,
+        sheets: int | str | Sequence[int | str] | None = None,
+        header_row: int = 0,
+        missing_fields: Any = ...,
+        pattern: str = "*.xlsx",
+        recursive: bool = True,
+        batch_size: int = 10_000,
+        output_label: str = DEFAULT_OUTPUT_LABEL,
+        memo: str | None = None,
+        alias: str | None = None,
+        overwrite: bool = False,
+    ) -> BaseArtifact:
+        """Import selected sheets from a deterministic folder of XLSX workbooks.
+
+        Adds ``source_file``, ``source_sheet``, ``source_sheet_index``, and
+        zero-based ``source_row`` metadata. Workbooks are visited in sorted
+        relative-path order and selected sheets in requested/workbook order.
+        """
+        plan = prepare_alias_plan(self, (output_label,), alias, overwrite=overwrite)
+        if plan is not None and plan.reuse:
+            return reused_outputs(self, plan)[output_label]
+        kwargs: dict[str, Any] = {
+            "text_fields": text_fields,
+            "metadata_fields": metadata_fields,
+            "sheets": sheets,
+            "header_row": header_row,
+            "pattern": pattern,
+            "recursive": recursive,
+            "batch_size": batch_size,
+            "output_label": output_label,
+            "memo": memo,
+        }
+        if missing_fields is not ...:
+            kwargs["missing_fields"] = missing_fields
+        result = _read_excel_folder(self, root, **kwargs)
+        finalize_alias_plan(self, plan, {output_label: result})
+        return result
+
     def read_jsonl(
         self,
         path: str | Path,
@@ -744,6 +836,90 @@ class Project:
             overwrite=overwrite,
         )
 
+    def feature_subset(
+        self,
+        source: "BaseArtifact | str",
+        function: "FeatureSubsetFunction",
+        *,
+        output_label: str = DEFAULT_OUTPUT_LABEL,
+        batch_size: int = 10_000,
+        memo: str | None = None,
+        alias: str | None = None,
+        overwrite: bool = False,
+    ) -> BaseArtifact:
+        """Create a lazy positional feature view of a matrix artifact."""
+        plan = prepare_alias_plan(self, (output_label,), alias, overwrite=overwrite)
+        if plan is not None and plan.reuse:
+            return reused_outputs(self, plan)[output_label]
+        result = _feature_subset(
+            self,
+            source,
+            function,
+            output_label=output_label,
+            batch_size=batch_size,
+            memo=memo,
+        )
+        finalize_alias_plan(self, plan, {output_label: result})
+        return result
+
+    def set_primary_keys(
+        self,
+        source: "BaseArtifact | str",
+        *,
+        levels: Mapping[str, str],
+        leaf_key: str,
+        output_label: str = DEFAULT_OUTPUT_LABEL,
+        batch_size: int = 10_000,
+        memo: str | None = None,
+        alias: str | None = None,
+        overwrite: bool = False,
+    ) -> BaseArtifact:
+        """Replace the primary-key namespace without copying data or metadata."""
+        plan = prepare_alias_plan(self, (output_label,), alias, overwrite=overwrite)
+        if plan is not None and plan.reuse:
+            return reused_outputs(self, plan)[output_label]
+        result = _set_primary_keys(
+            self,
+            source,
+            levels=levels,
+            leaf_key=leaf_key,
+            output_label=output_label,
+            batch_size=batch_size,
+            memo=memo,
+        )
+        finalize_alias_plan(self, plan, {output_label: result})
+        return result
+
+    def collapse_runs(
+        self,
+        source: "BaseArtifact | str",
+        *,
+        by: str | Sequence[str],
+        data: FieldAggregationSpec | None = None,
+        metadata: FieldAggregationSpec | None = None,
+        output_label: str = DEFAULT_OUTPUT_LABEL,
+        batch_size: int = 10_000,
+        memo: str | None = None,
+        alias: str | None = None,
+        overwrite: bool = False,
+    ) -> BaseArtifact:
+        """Collapse maximal adjacent runs into a span-key table artifact."""
+        plan = prepare_alias_plan(self, (output_label,), alias, overwrite=overwrite)
+        if plan is not None and plan.reuse:
+            return reused_outputs(self, plan)[output_label]
+        result = _collapse_runs(
+            self,
+            source,
+            by=by,
+            data=data,
+            metadata=metadata,
+            output_label=output_label,
+            batch_size=batch_size,
+            memo=memo,
+        )
+        finalize_alias_plan(self, plan, {output_label: result})
+        return result
+
     def select_keys(
         self,
         source: "BaseArtifact | str",
@@ -915,6 +1091,54 @@ class Project:
             overwrite=overwrite,
         )
 
+    def register_external(
+        self,
+        external: Any,
+        *,
+        artifact_type: ArtifactType | str = ArtifactType.TABLE,
+        primary_key: str | Sequence[str],
+        data_fields: str | Sequence[str] | None = None,
+        metadata_fields: str | Sequence[str] | None = None,
+        format: str | None = None,
+        batch_size: int = 10_000,
+        duckdb_options: Mapping[str, Any] | None = None,
+        sources: Mapping[str, "BaseArtifact | str"] | None = None,
+        lineage_mode: LineageMode | str = "new_key",
+        basis_labels: str | Sequence[str] | None = None,
+        output_label: str = DEFAULT_OUTPUT_LABEL,
+        memo: str | None = None,
+        alias: str | None = None,
+        overwrite: bool = False,
+    ) -> "BaseArtifact":
+        """Register an externally produced result as a durable TeAL artifact.
+
+        ``external`` may be a DataFrame, a supported tabular path/dataset, one
+        writer-shaped payload, or an iterable/generator of payload batches.
+        External computations own their own execution/checkpointing; TeAL owns
+        registration, lineage/provenance, serialization, and sealing.
+        """
+        plan = prepare_alias_plan(self, (output_label,), alias, overwrite=overwrite)
+        if plan is not None and plan.reuse:
+            return reused_outputs(self, plan)[output_label]
+        result = _register_external(
+            self,
+            external,
+            artifact_type=artifact_type,
+            primary_key=primary_key,
+            data_fields=data_fields,
+            metadata_fields=metadata_fields,
+            format=format,
+            batch_size=batch_size,
+            duckdb_options=duckdb_options,
+            sources=sources,
+            lineage_mode=lineage_mode,
+            basis_labels=basis_labels,
+            output_label=output_label,
+            memo=memo,
+        )
+        finalize_alias_plan(self, plan, {output_label: result})
+        return result
+
     def from_keyed_frame(
         self,
         source: "BaseArtifact | str",
@@ -1031,7 +1255,7 @@ class Project:
         alias: str | None = None,
         overwrite: bool = False,
     ) -> "BaseArtifact":
-        """Merge compatible disjoint table artifacts into a keys-only artifact."""
+        """N-way merge compatible disjoint table artifacts into a flat keys-only artifact."""
         plan = prepare_alias_plan(self, (output_label,), alias, overwrite=overwrite)
         if plan is not None and plan.reuse:
             return reused_outputs(self, plan)[output_label]

@@ -120,7 +120,7 @@ def test_transform_texts_like_replays_frozen_feature_trim_mask(tmp_path: Path) -
     _record(project, "countop", table, count_matrix, count)
 
     trim = FeatureTrimmer(min_df=2)
-    trim.source_features_ = ("alpha", "beta", "gamma")
+    trim.source_width_ = 3
     trim.kept_indices_ = (0, 2)
     trimmed = _Artifact(project, "trimmed", ArtifactType.SPARSE_MATRIX, ["alpha", "gamma"])
     _record(project, "trimop", count_matrix, trimmed, trim)

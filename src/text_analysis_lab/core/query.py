@@ -21,6 +21,8 @@ from text_analysis_lab.core.errors import MissingDependencyError, QueryError
 from text_analysis_lab.core.lineage import (
     basis_artifact_ids,
     iter_metadata_lineage_sources,
+    lineage_mode_for_artifact,
+    lineage_paths_to_ancestor,
 )
 from text_analysis_lab.core.types import (
     ArtifactType,
@@ -215,6 +217,7 @@ class QueryEngine:
         self._artifact_view_cache: dict[
             tuple[str, MetadataMode, bool], ArtifactViewSQL
         ] = {}
+        self._lineage_mapping_cache: dict[tuple[str, str], str] = {}
 
     @property
     def con(self):
@@ -231,6 +234,7 @@ class QueryEngine:
     def clear_cache(self) -> None:
         self._relation_columns_cache.clear()
         self._artifact_view_cache.clear()
+        self._lineage_mapping_cache.clear()
 
     def close(self) -> None:
         if self._con is not None:
@@ -637,6 +641,221 @@ class QueryEngine:
                 except Exception:
                     pass
 
+    def _lineage_paths_between(
+        self,
+        descendant: "BaseArtifact",
+        ancestor: "BaseArtifact",
+    ) -> list[tuple["BaseArtifact", ...]]:
+        paths = lineage_paths_to_ancestor(self.project, descendant, ancestor)
+        if not paths:
+            raise QueryError(
+                f"Artifact {ancestor.artifact_id!r} is not an ancestor of "
+                f"artifact {descendant.artifact_id!r}."
+            )
+        return paths
+
+    @staticmethod
+    def _path_crosses_rekey(path: Sequence["BaseArtifact"]) -> bool:
+        return any(
+            lineage_mode_for_artifact(artifact) == "rekeyed_key"
+            for artifact in path[:-1]
+        )
+
+    def _requires_rekey_mapping(
+        self,
+        descendant: "BaseArtifact",
+        ancestor: "BaseArtifact",
+    ) -> bool:
+        return any(
+            self._path_crosses_rekey(path)
+            for path in self._lineage_paths_between(descendant, ancestor)
+        )
+
+    def _mapping_sql_for_path(
+        self,
+        path: Sequence["BaseArtifact"],
+    ) -> str | None:
+        """Return target-position -> source-position SQL for one lineage path.
+
+        Ordinary key-space segments are collapsed into direct primary-key joins.
+        Only ``rekeyed_key`` edges are crossed positionally. A path that cannot
+        be resolved without reversing a reduced key domain returns ``None``; such
+        paths do not contribute to a cross-key-space mapping.
+        """
+        if not path:
+            return None
+        descendant = path[0]
+        ancestor = path[-1]
+        current_pk = [str(col) for col in descendant.primary_key]
+        target_keys_sql = _parquet_dataset_expr(descendant.keys_dir)
+        select_keys = ", ".join(
+            f"tk.{quote_identifier(col)} AS {quote_identifier(col)}"
+            for col in current_pk
+        )
+        relation = (
+            "SELECT tk._position AS _target_position"
+            + (f", {select_keys}" if select_keys else "")
+            + f" FROM {target_keys_sql} tk"
+        )
+
+        for index, child in enumerate(path[:-1]):
+            if lineage_mode_for_artifact(child) != "rekeyed_key":
+                continue
+            basis = path[index + 1]
+            child_pk = [str(col) for col in child.primary_key]
+            basis_pk = [str(col) for col in basis.primary_key]
+            missing = [col for col in child_pk if col not in current_pk]
+            if missing:
+                # A downstream reduction discarded key fields needed to locate
+                # the exact rows on the rekeyed side. There is no unique bridge.
+                return None
+            if child.artifact_type != basis.artifact_type:
+                raise QueryError(
+                    f"Malformed rekeyed lineage {child.artifact_id} -> {basis.artifact_id}: "
+                    f"artifact types differ ({child.artifact_type!r} vs {basis.artifact_type!r})."
+                )
+            if child.n_rows != basis.n_rows:
+                raise QueryError(
+                    f"Malformed rekeyed lineage {child.artifact_id} -> {basis.artifact_id}: "
+                    f"row counts differ ({child.n_rows} vs {basis.n_rows})."
+                )
+
+            child_keys_sql = _parquet_dataset_expr(child.keys_dir)
+            basis_keys_sql = _parquet_dataset_expr(basis.keys_dir)
+            predicates = " AND ".join(
+                f"m.{quote_identifier(col)} = rk.{quote_identifier(col)}"
+                for col in child_pk
+            )
+            basis_select = ", ".join(
+                f"bk.{quote_identifier(col)} AS {quote_identifier(col)}"
+                for col in basis_pk
+            )
+            relation = (
+                "SELECT m._target_position"
+                + (f", {basis_select}" if basis_select else "")
+                + f" FROM ({relation}) m "
+                + f"LEFT JOIN {child_keys_sql} rk ON {predicates} "
+                + f"LEFT JOIN {basis_keys_sql} bk ON bk._position = rk._position"
+            )
+            current_pk = basis_pk
+
+        ancestor_pk = [str(col) for col in ancestor.primary_key]
+        missing = [col for col in ancestor_pk if col not in current_pk]
+        if missing:
+            return None
+        source_keys_sql = _parquet_dataset_expr(ancestor.keys_dir)
+        predicates = " AND ".join(
+            f"m.{quote_identifier(col)} = sk.{quote_identifier(col)}"
+            for col in ancestor_pk
+        )
+        return (
+            "SELECT m._target_position, sk._position AS _source_position "
+            f"FROM ({relation}) m LEFT JOIN {source_keys_sql} sk ON {predicates}"
+        )
+
+    def lineage_position_mapping_sql(
+        self,
+        descendant: "BaseArtifact",
+        ancestor: "BaseArtifact",
+    ) -> str:
+        """Return SQL mapping descendant positions to one ancestor's positions.
+
+        The result has ``_target_position`` and ``_source_position``. Multiple
+        lineage branches are unioned; duplicated paths to the same source row are
+        de-duplicated. Ambiguous mappings are rejected rather than guessed.
+        """
+        cache_key = (str(descendant.artifact_id), str(ancestor.artifact_id))
+        cached = self._lineage_mapping_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        path_sql: list[str] = []
+        for path in self._lineage_paths_between(descendant, ancestor):
+            sql = self._mapping_sql_for_path(path)
+            if sql is not None:
+                path_sql.append(sql)
+        if not path_sql:
+            raise QueryError(
+                f"Cannot map artifact {descendant.artifact_id!r} to ancestor "
+                f"{ancestor.artifact_id!r}; no lineage path preserves enough key "
+                "information to reach every rekey boundary."
+            )
+
+        union_sql = " UNION ALL ".join(f"({sql})" for sql in path_sql)
+        mapping_sql = (
+            "SELECT DISTINCT _target_position, _source_position "
+            f"FROM ({union_sql}) _teal_lineage_paths"
+        )
+
+        ambiguous_sql = (
+            "SELECT _target_position FROM ("
+            f"{mapping_sql}"
+            ") m WHERE _source_position IS NOT NULL "
+            "GROUP BY _target_position "
+            "HAVING COUNT(DISTINCT _source_position) > 1 LIMIT 1"
+        )
+        row = self.con.execute(ambiguous_sql).fetchone()
+        if row is not None:
+            raise QueryError(
+                f"Lineage mapping from {descendant.artifact_id!r} to "
+                f"{ancestor.artifact_id!r} is ambiguous at target position {int(row[0])}."
+            )
+
+        self._lineage_mapping_cache[cache_key] = mapping_sql
+        return mapping_sql
+
+    def map_descendant_positions_to_ancestor_positions(
+        self,
+        descendant: "BaseArtifact",
+        ancestor: "BaseArtifact",
+        positions: Sequence[int],
+    ) -> list[int]:
+        """Resolve descendant positions to an ancestor, crossing rekeys safely."""
+        if not positions:
+            return []
+        if not self._requires_rekey_mapping(descendant, ancestor):
+            return self.map_left_positions_to_right_positions(
+                descendant, ancestor, positions
+            )
+
+        mapping_sql = self.lineage_position_mapping_sql(descendant, ancestor)
+        temp = pd.DataFrame(
+            {
+                "_position": [int(pos) for pos in positions],
+                "_request_order": list(range(len(positions))),
+            }
+        )
+        temp_name = _temp_name("lineage_positions")
+        self.con.register(temp_name, temp)
+        try:
+            sql = (
+                "SELECT p._request_order, p._position AS left_position, "
+                "m._source_position AS right_position "
+                f"FROM {quote_identifier(temp_name)} p "
+                f"LEFT JOIN ({mapping_sql}) m ON m._target_position = p._position "
+                "ORDER BY p._request_order"
+            )
+            records = _records_from_result(self.con.execute(sql))
+        finally:
+            self.con.unregister(temp_name)
+
+        if len(records) != len(positions):
+            raise QueryError(
+                "Lineage position mapping did not preserve row count: "
+                f"expected {len(positions)}, got {len(records)}."
+            )
+        missing = [
+            int(record["left_position"])
+            for record in records
+            if record.get("right_position") is None
+        ]
+        if missing:
+            raise QueryError(
+                f"Could not map every position from {descendant.artifact_id!r} to "
+                f"{ancestor.artifact_id!r}; missing target positions: {missing[:20]}."
+            )
+        return [int(record["right_position"]) for record in records]
+
     def map_left_positions_to_right_positions(
         self,
         left_artifact: "BaseArtifact",
@@ -939,35 +1158,6 @@ class QueryEngine:
                     ctes.append(f"data AS (SELECT {selected} FROM {data_sql})")
                     joins.append("LEFT JOIN data d USING (_position)")
                 else:
-                    if current_pk != owner_pk:
-                        raise QueryError(
-                            "Inherited table data requires identical preserved primary keys: "
-                            f"{artifact.artifact_id} has {current_pk!r}, "
-                            f"{data_artifact.artifact_id} has {owner_pk!r}."
-                        )
-                    owner_key_sql = _parquet_dataset_expr(data_artifact.keys_dir)
-                    owner_key_select = ", ".join(
-                        [
-                            "_position AS _data_position",
-                            *[quote_identifier(col) for col in owner_pk],
-                        ]
-                    )
-                    ctes.append(
-                        f"data_keys AS (SELECT {owner_key_select} FROM {owner_key_sql})"
-                    )
-                    data_select = ", ".join(
-                        [
-                            "k._position AS _position",
-                            *[
-                                f"raw.{quote_identifier(col)} AS {quote_identifier(col)}"
-                                for col in data_raw_columns
-                            ],
-                        ]
-                    )
-                    predicates = " AND ".join(
-                        f"k.{quote_identifier(col)} = dk.{quote_identifier(col)}"
-                        for col in owner_pk
-                    )
                     raw_selected = ", ".join(
                         [
                             "_position",
@@ -975,13 +1165,74 @@ class QueryEngine:
                         ]
                     )
                     ctes.append(f"data_raw AS (SELECT {raw_selected} FROM {data_sql})")
-                    ctes.append(
-                        "data AS ("
-                        f"SELECT {data_select} FROM keys k "
-                        f"LEFT JOIN data_keys dk ON {predicates} "
-                        "LEFT JOIN data_raw raw ON raw._position = dk._data_position"
-                        ")"
-                    )
+                    if self._requires_rekey_mapping(artifact, data_artifact):
+                        mapping_sql = self.lineage_position_mapping_sql(artifact, data_artifact)
+                        missing_sql = (
+                            "SELECT COUNT(*) FROM "
+                            f"{_parquet_dataset_expr(artifact.keys_dir)} tk "
+                            f"LEFT JOIN ({mapping_sql}) lm ON lm._target_position = tk._position "
+                            "WHERE lm._source_position IS NULL"
+                        )
+                        missing_count = int(self.con.execute(missing_sql).fetchone()[0])
+                        if missing_count:
+                            raise QueryError(
+                                f"Inherited data from {data_artifact.artifact_id!r} cannot be "
+                                f"mapped to all rows of {artifact.artifact_id!r}; "
+                                f"{missing_count} target row(s) are unmapped."
+                            )
+                        ctes.append(f"data_map AS ({mapping_sql})")
+                        data_select = ", ".join(
+                            [
+                                "dm._target_position AS _position",
+                                *[
+                                    f"raw.{quote_identifier(col)} AS {quote_identifier(col)}"
+                                    for col in data_raw_columns
+                                ],
+                            ]
+                        )
+                        ctes.append(
+                            "data AS ("
+                            f"SELECT {data_select} FROM data_map dm "
+                            "LEFT JOIN data_raw raw ON raw._position = dm._source_position"
+                            ")"
+                        )
+                    else:
+                        if current_pk != owner_pk:
+                            raise QueryError(
+                                "Inherited table data requires identical preserved primary keys: "
+                                f"{artifact.artifact_id} has {current_pk!r}, "
+                                f"{data_artifact.artifact_id} has {owner_pk!r}."
+                            )
+                        owner_key_sql = _parquet_dataset_expr(data_artifact.keys_dir)
+                        owner_key_select = ", ".join(
+                            [
+                                "_position AS _data_position",
+                                *[quote_identifier(col) for col in owner_pk],
+                            ]
+                        )
+                        ctes.append(
+                            f"data_keys AS (SELECT {owner_key_select} FROM {owner_key_sql})"
+                        )
+                        data_select = ", ".join(
+                            [
+                                "k._position AS _position",
+                                *[
+                                    f"raw.{quote_identifier(col)} AS {quote_identifier(col)}"
+                                    for col in data_raw_columns
+                                ],
+                            ]
+                        )
+                        predicates = " AND ".join(
+                            f"k.{quote_identifier(col)} = dk.{quote_identifier(col)}"
+                            for col in owner_pk
+                        )
+                        ctes.append(
+                            "data AS ("
+                            f"SELECT {data_select} FROM keys k "
+                            f"LEFT JOIN data_keys dk ON {predicates} "
+                            "LEFT JOIN data_raw raw ON raw._position = dk._data_position"
+                            ")"
+                        )
                     joins.append("LEFT JOIN data d USING (_position)")
 
                 for col in data_raw_columns:
@@ -1019,17 +1270,6 @@ class QueryEngine:
             else:
                 source_artifact = self.project.get_artifact(spec.artifact_id)
                 source_pk = [str(col) for col in source_artifact.primary_key]
-                missing = [col for col in source_pk if col not in current_pk]
-                if missing:
-                    raise QueryError(
-                        f"Cannot join metadata from {spec.artifact_id}; current artifact "
-                        f"does not contain source key columns: {missing}."
-                    )
-                source_keys_sql = _parquet_dataset_expr(source_artifact.keys_dir)
-                key_select = ", ".join(
-                    f"sk.{quote_identifier(col)} AS {quote_identifier(col)}"
-                    for col in source_pk
-                )
                 metadata_select_parts: list[str] = []
                 for index, col in enumerate(spec.source_columns):
                     internal = f"_teal_{spec.alias}_metadata_{index}"
@@ -1038,19 +1278,44 @@ class QueryEngine:
                         f"sm.{quote_identifier(col)} AS {quote_identifier(internal)}"
                     )
                 metadata_select = ", ".join(metadata_select_parts)
-                ctes.append(
-                    f"{spec.alias} AS ("
-                    "SELECT "
-                    f"{key_select}, {metadata_select} "
-                    f"FROM {source_keys_sql} sk "
-                    f"LEFT JOIN {spec.metadata_sql} sm USING (_position)"
-                    ")"
-                )
-                predicates = " AND ".join(
-                    f"k.{quote_identifier(col)} = {spec.alias}.{quote_identifier(col)}"
-                    for col in source_pk
-                )
-                joins.append(f"LEFT JOIN {spec.alias} ON {predicates}")
+
+                if self._requires_rekey_mapping(artifact, source_artifact):
+                    mapping_sql = self.lineage_position_mapping_sql(artifact, source_artifact)
+                    ctes.append(
+                        f"{spec.alias} AS ("
+                        "SELECT lm._target_position AS _position, "
+                        f"{metadata_select} "
+                        f"FROM ({mapping_sql}) lm "
+                        f"LEFT JOIN {spec.metadata_sql} sm "
+                        "ON sm._position = lm._source_position"
+                        ")"
+                    )
+                    joins.append(f"LEFT JOIN {spec.alias} USING (_position)")
+                else:
+                    missing = [col for col in source_pk if col not in current_pk]
+                    if missing:
+                        raise QueryError(
+                            f"Cannot join metadata from {spec.artifact_id}; current artifact "
+                            f"does not contain source key columns: {missing}."
+                        )
+                    source_keys_sql = _parquet_dataset_expr(source_artifact.keys_dir)
+                    key_select = ", ".join(
+                        f"sk.{quote_identifier(col)} AS {quote_identifier(col)}"
+                        for col in source_pk
+                    )
+                    ctes.append(
+                        f"{spec.alias} AS ("
+                        "SELECT "
+                        f"{key_select}, {metadata_select} "
+                        f"FROM {source_keys_sql} sk "
+                        f"LEFT JOIN {spec.metadata_sql} sm USING (_position)"
+                        ")"
+                    )
+                    predicates = " AND ".join(
+                        f"k.{quote_identifier(col)} = {spec.alias}.{quote_identifier(col)}"
+                        for col in source_pk
+                    )
+                    joins.append(f"LEFT JOIN {spec.alias} ON {predicates}")
             seen_metadata_aliases.add(spec.alias)
 
         for spec in metadata_specs:
@@ -1212,17 +1477,6 @@ class QueryEngine:
             else:
                 source_artifact = self.project.get_artifact(spec.artifact_id)
                 source_pk = [str(col) for col in source_artifact.primary_key]
-                missing = [col for col in source_pk if col not in current_pk]
-                if missing:
-                    raise QueryError(
-                        f"Cannot join metadata from {spec.artifact_id}; joined artifact "
-                        f"does not contain source key columns: {missing}."
-                    )
-                source_keys_sql = _parquet_dataset_expr(source_artifact.keys_dir)
-                key_select = ", ".join(
-                    f"sk.{quote_identifier(col)} AS {quote_identifier(col)}"
-                    for col in source_pk
-                )
                 metadata_select_parts: list[str] = []
                 for col_index, col in enumerate(spec.source_columns):
                     internal = f"_teal_{spec.alias}_metadata_{col_index}"
@@ -1231,15 +1485,37 @@ class QueryEngine:
                         f"sm.{quote_identifier(col)} AS {quote_identifier(internal)}"
                     )
                 metadata_select = ", ".join(metadata_select_parts)
-                ctes.append(
-                    f"{spec.alias} AS (SELECT {key_select}, {metadata_select} "
-                    f"FROM {source_keys_sql} sk LEFT JOIN {spec.metadata_sql} sm USING (_position))"
-                )
-                predicates = " AND ".join(
-                    f"k.{quote_identifier(col)} = {spec.alias}.{quote_identifier(col)}"
-                    for col in source_pk
-                )
-                joins.append(f"LEFT JOIN {spec.alias} ON {predicates}")
+
+                if self._requires_rekey_mapping(artifact, source_artifact):
+                    mapping_sql = self.lineage_position_mapping_sql(artifact, source_artifact)
+                    ctes.append(
+                        f"{spec.alias} AS (SELECT lm._target_position AS _position, "
+                        f"{metadata_select} FROM ({mapping_sql}) lm "
+                        f"LEFT JOIN {spec.metadata_sql} sm "
+                        "ON sm._position = lm._source_position)"
+                    )
+                    joins.append(f"LEFT JOIN {spec.alias} USING (_position)")
+                else:
+                    missing = [col for col in source_pk if col not in current_pk]
+                    if missing:
+                        raise QueryError(
+                            f"Cannot join metadata from {spec.artifact_id}; joined artifact "
+                            f"does not contain source key columns: {missing}."
+                        )
+                    source_keys_sql = _parquet_dataset_expr(source_artifact.keys_dir)
+                    key_select = ", ".join(
+                        f"sk.{quote_identifier(col)} AS {quote_identifier(col)}"
+                        for col in source_pk
+                    )
+                    ctes.append(
+                        f"{spec.alias} AS (SELECT {key_select}, {metadata_select} "
+                        f"FROM {source_keys_sql} sk LEFT JOIN {spec.metadata_sql} sm USING (_position))"
+                    )
+                    predicates = " AND ".join(
+                        f"k.{quote_identifier(col)} = {spec.alias}.{quote_identifier(col)}"
+                        for col in source_pk
+                    )
+                    joins.append(f"LEFT JOIN {spec.alias} ON {predicates}")
             seen_metadata_aliases.add(spec.alias)
 
         for spec in metadata_specs:
@@ -1334,12 +1610,15 @@ class QueryEngine:
                     f"keys {list(branch.key_columns)}."
                 )
 
-        def signature(view: ArtifactViewSQL) -> tuple[tuple[str, str, str, str], ...]:
+        def signature(view: ArtifactViewSQL) -> tuple[tuple[str, str, str], ...]:
+            # Qualified metadata names include the owning artifact ID, which may
+            # legitimately differ between disjoint branches. The UNION requires
+            # matching logical namespaces/base names and matching resolved output
+            # names; the latter still catches ambiguity-induced incompatibility.
             return tuple(
                 (
                     column.namespace,
                     column.base_name,
-                    column.qualified_name,
                     column.output_name,
                 )
                 for column in view.columns

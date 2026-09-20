@@ -65,11 +65,9 @@ def test_feature_trimmer_fits_df_mask_and_preserves_original_column_order() -> N
     result = trimmer.translate_batch(
         {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
     )
-    assert trimmer.kept_features_ == ("beta", "delta")
-    values = result.outputs["output"]["data"]["values"]
-    assert sparse.isspmatrix_csr(values)
-    assert result.outputs["output"]["data"]["columns"] == ["beta", "delta"]
-    assert np.array_equal(values.toarray(), COUNTS[:, [1, 3]].toarray())
+    assert trimmer.kept_indices_ == (1, 3)
+    assert result.outputs["output"]["feature_indices"] == [1, 3]
+    assert "data" not in result.outputs["output"]
 
 
 def test_feature_trimmer_fractional_max_df_and_max_features_are_deterministic() -> None:
@@ -80,7 +78,7 @@ def test_feature_trimmer_fractional_max_df_and_max_features_are_deterministic() 
     low_df.translate_batch(
         {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
     )
-    assert low_df.kept_features_ == ("alpha", "gamma", "epsilon")
+    assert low_df.kept_indices_ == (0, 2, 4)
 
     top_one = FeatureTrimmer(min_df=4, max_features=1)
     top_one.input_request(
@@ -89,8 +87,8 @@ def test_feature_trimmer_fractional_max_df_and_max_features_are_deterministic() 
     top_one.translate_batch(
         {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
     )
-    # beta and delta tie on corpus sum; feature name is the deterministic tie-breaker.
-    assert top_one.kept_features_ == ("beta",)
+    # beta and delta tie on corpus sum; original position is the deterministic tie-breaker.
+    assert top_one.kept_indices_ == (1,)
 
 
 def test_feature_trimmer_replays_exact_frozen_mask_and_round_trips(tmp_path: Path) -> None:
@@ -110,14 +108,15 @@ def test_feature_trimmer_replays_exact_frozen_mask_and_round_trips(tmp_path: Pat
     trimmer.save_to_dir(path, operator_id="op_trim")
     restored = BaseOperator.load_from_dir(path)
     assert isinstance(restored, FeatureTrimmer)
-    assert restored.kept_features_ == ("beta", "delta")
+    assert restored.source_width_ == 5
+    assert restored.kept_indices_ == (1, 3)
     assert np.array_equal(
         restored.transform_external_matrix(new_rows).toarray(),
         new_rows[:, [1, 3]].toarray(),
     )
 
 
-def test_feature_trimmer_dense_input_stays_dense() -> None:
+def test_feature_trimmer_dense_external_replay_stays_dense() -> None:
     dense = COUNTS.toarray()
     trimmer = FeatureTrimmer(min_df=4)
     trimmer.input_request(
@@ -128,9 +127,10 @@ def test_feature_trimmer_dense_input_stays_dense() -> None:
     result = trimmer.translate_batch(
         {"source": _packet(dense)}, mode="fit_translate", request=TranslationRequest()
     )
-    values = result.outputs["output"]["data"]["values"]
-    assert isinstance(values, np.ndarray)
-    assert np.array_equal(values, dense[:, [1, 3]])
+    assert result.outputs["output"]["feature_indices"] == [1, 3]
+    replayed = trimmer.transform_external_matrix(dense)
+    assert isinstance(replayed, np.ndarray)
+    assert np.array_equal(replayed, dense[:, [1, 3]])
 
 
 def test_feature_trimmer_rejects_empty_or_mismatched_schema() -> None:
@@ -150,9 +150,18 @@ def test_feature_trimmer_rejects_empty_or_mismatched_schema() -> None:
     fitted.translate_batch(
         {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
     )
-    with pytest.raises(OperatorError, match="same ordered feature schema"):
+    # Same width is accepted even when labels differ: feature identity is positional.
+    replay_request = fitted.input_request(
+        sources={"source": _source(features=[*FEATURES[:-1], "changed"])},
+        mode="translate",
+        request=TranslationRequest(),
+    )
+    assert replay_request.columns.data is False
+    assert replay_request.form == "table"
+
+    with pytest.raises(OperatorError, match="fitted source width"):
         fitted.input_request(
-            sources={"source": _source(features=[*FEATURES[:-1], "changed"])},
+            sources={"source": _source(features=FEATURES[:-1])},
             mode="translate",
             request=TranslationRequest(),
         )

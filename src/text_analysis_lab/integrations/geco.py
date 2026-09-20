@@ -530,7 +530,7 @@ class LinkedGeCoWorkspace:
         resolved = _require_predictor_ref(ref)
         method = getattr(self._coder, "export_predictor", None)
         if callable(method):
-            # GeCo 0.8.14+ requires the exact native GeCoPredictorRef returned by
+            # Current GeCo requires the exact native predictor reference returned by
             # coder.predictors(); it intentionally does not accept decomposed
             # kind/id keyword arguments. Resolve a fresh native reference so the
             # bridge also catches renamed/deleted predictors before export.
@@ -1357,8 +1357,9 @@ def _geco_predictor_from_export(frozen: Any) -> GeCoPredictor:
             f"Unsupported GeCo frozen predictor format_version={format_version}; expected 1."
         )
 
-    # GeCo 0.8.14 names the ordered unique source tuple ``sources``. Accept the
-    # earlier proposal-era ``source_specs`` spelling only as a compatibility read.
+    # The current frozen-predictor contract names the ordered unique source tuple
+    # ``sources``. Accept the earlier proposal-era ``source_specs`` spelling only
+    # as a compatibility read.
     raw_sources = _export_value(
         frozen, "sources", _export_value(frozen, "source_specs", None)
     )
@@ -1401,7 +1402,7 @@ def _geco_predictor_from_export(frozen: Any) -> GeCoPredictor:
         aggregation = str(aggregation_raw)
 
     stacker = _export_value(frozen, "stacker", None)
-    # GeCo 0.8.14 exposes one positive_class for the frozen predictor/stacker.
+    # The current contract exposes one positive_class for the frozen predictor/stacker.
     stacker_positive_class = _export_value(
         frozen, "stacker_positive_class", _export_value(frozen, "positive_class", 1)
     )

@@ -34,6 +34,7 @@ def test_ground_truth_lineage_modes_include_structural_merge() -> None:
         "span_key",
         "merged_key",
         "joined_key",
+        "rekeyed_key",
         "new_key",
     )
 

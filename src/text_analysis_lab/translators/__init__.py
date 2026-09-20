@@ -24,6 +24,7 @@ from text_analysis_lab.translators.text_length import TextLength
 from text_analysis_lab.translators.lda import LDA, LDA_TOPICS_LABEL
 from text_analysis_lab.translators.matrix_normalizer import MatrixNormalizer
 from text_analysis_lab.translators.matrix_row_aggregator import MatrixRowAggregator
+from text_analysis_lab.translators.matrix_transpose import MatrixTranspose
 from text_analysis_lab.translators.svd import LSA, SVD, LatentSemanticAnalysis, SVD_COMPONENTS_LABEL
 from text_analysis_lab.translators.tfidf_transformer import TfidfTransformer
 from text_analysis_lab.translators.umap import UMAP
@@ -56,6 +57,7 @@ __all__ = [
     "LDA_TOPICS_LABEL",
     "MatrixNormalizer",
     "MatrixRowAggregator",
+    "MatrixTranspose",
     "SVD",
     "LSA",
     "LatentSemanticAnalysis",

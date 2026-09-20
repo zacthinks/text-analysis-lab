@@ -46,7 +46,9 @@ class MatrixTranspose(BaseTranslator):
 
     Output columns identify source rows. If the source already has unique named
     rows, those names are reused. Otherwise TeAL derives deterministic labels
-    from the source primary-key values.
+    from the source primary-key values. The source feature frame is promoted to
+    local row metadata, excluding only ``column_index`` because the output's fresh
+    primary key now carries positional row identity.
     """
 
     operation_type = "translate"
@@ -63,6 +65,7 @@ class MatrixTranspose(BaseTranslator):
         self.row_name = _validate_axis_name(row_name, label="row_name", reserved=False)
         self._source_type: str | None = None
         self._source_features: tuple[str, ...] | None = None
+        self._source_feature_metadata: pd.DataFrame | None = None
         self._source_has_row_names: bool = False
 
     def output_specs(
@@ -114,7 +117,26 @@ class MatrixTranspose(BaseTranslator):
                 "MatrixTranspose requires a sparse_matrix or dense_matrix source."
             )
         self._source_type = source.artifact_type.value
+        feature_getter = getattr(source, "get_feature_frame", None)
+        if callable(feature_getter):
+            feature_frame = feature_getter()
+            if not isinstance(feature_frame, pd.DataFrame):
+                raise OperatorError(
+                    "MatrixTranspose source get_feature_frame() must return a pandas DataFrame."
+                )
+            feature_frame = feature_frame.reset_index(drop=True).copy()
+        else:
+            feature_frame = pd.DataFrame(
+                {"column": [str(value) for value in source.get_data_columns()]}
+            )
+
         self._source_features = tuple(str(value) for value in source.get_data_columns())
+        if len(feature_frame) != len(self._source_features):
+            raise OperatorError(
+                "MatrixTranspose source feature frame length does not match source "
+                f"feature width: {len(feature_frame)} != {len(self._source_features)}."
+            )
+        self._source_feature_metadata = _transpose_feature_metadata(feature_frame)
         self._source_has_row_names = bool(getattr(source, "has_row_names", False))
         return SourceRequest(
             artifact_type=("sparse_matrix", "dense_matrix"),
@@ -142,6 +164,7 @@ class MatrixTranspose(BaseTranslator):
             packet, name="MatrixTranspose"
         )
         source_features = self._require_source_features()
+        feature_metadata = self._require_source_feature_metadata()
         if int(matrix.shape[1]) != len(source_features):
             raise ArtifactError(
                 "MatrixTranspose source feature count changed between planning and "
@@ -166,19 +189,19 @@ class MatrixTranspose(BaseTranslator):
         keys = pd.DataFrame(
             {self.key_name: np.arange(len(source_features), dtype=np.int64)}
         )
-        return BatchResult(
-            outputs={
-                DEFAULT_OUTPUT_LABEL: {
-                    "keys": keys,
-                    "data": {
-                        "values": values,
-                        "columns": row_labels,
-                        "row_names": list(source_features),
-                        "row_name": self.row_name,
-                    },
-                }
-            }
-        )
+        output: dict[str, Any] = {
+            "keys": keys,
+            "data": {
+                "values": values,
+                "columns": row_labels,
+                "row_names": list(source_features),
+                "row_name": self.row_name,
+            },
+        }
+        if len(feature_metadata.columns) > 0:
+            output["metadata"] = feature_metadata.copy()
+
+        return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: output})
 
     def handle_batch_result(
         self,
@@ -215,6 +238,13 @@ class MatrixTranspose(BaseTranslator):
             raise OperatorError("MatrixTranspose has no bound source feature schema.")
         return self._source_features
 
+    def _require_source_feature_metadata(self) -> pd.DataFrame:
+        if self._source_feature_metadata is None:
+            raise OperatorError(
+                "MatrixTranspose has no bound source feature metadata."
+            )
+        return self._source_feature_metadata
+
     def _source_row_labels(
         self,
         packet: InputBatch,
@@ -249,6 +279,19 @@ class MatrixTranspose(BaseTranslator):
                 )
             )
         return labels
+
+
+def _transpose_feature_metadata(feature_frame: pd.DataFrame) -> pd.DataFrame:
+    """Promote feature-axis annotations to row metadata after transpose.
+
+    ``column_index`` is local positional structure rather than feature metadata,
+    so the new artifact's fresh integer primary key replaces it. All other
+    feature-frame columns are preserved verbatim and in feature-axis order.
+    """
+    metadata = feature_frame.reset_index(drop=True).copy()
+    if "column_index" in metadata.columns:
+        metadata = metadata.drop(columns=["column_index"])
+    return metadata
 
 
 def _scalar_key(value: Any) -> str:

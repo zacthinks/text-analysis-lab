@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
-from text_analysis_lab.linguistics.cache import user_cache_paths
+from text_analysis_lab._linguistics.cache import user_cache_paths
 
 DEFAULT_WSL_READER_MODEL = "Babelscape/wsl-reader-deberta-v3-base"
 DEFAULT_WSL_READER_REVISION = "809d05bd12f261d26b42e28dc2b31db430c1585c"
@@ -90,7 +90,8 @@ class WordSenseDisambiguator(BaseTranslator):
 
     This translator intentionally has no artificial token cap.  Unit 10 should run it on a
     sentence or another tiny subset so students can see the computational cost of modern
-    lexical-semantic models.
+    lexical-semantic models.  The same artifact contract can later support the TeAL-native
+    Bag-of-Ideas rewrite, including semantic-head targets.
     """
 
     operation_type = "translate"
@@ -114,8 +115,6 @@ class WordSenseDisambiguator(BaseTranslator):
         super().__init__(operator_id=operator_id)
         if not lexicon:
             raise ValueError("lexicon must be non-empty.")
-        if not str(lexicon).strip().lower().startswith("oewn:"):
-            raise ValueError("WordSenseDisambiguator currently supports Open English WordNet lexicons only (for example, 'oewn:2025+').")
         if not model_name:
             raise ValueError("model_name must be non-empty.")
         if not sentence_key or not token_key or sentence_key == token_key:
@@ -250,7 +249,7 @@ class WordSenseDisambiguator(BaseTranslator):
             key_record = {name: int(row[name]) for name in token_keys}
             target_keys[target_id] = key_record
             target_context[target_id] = (surface, parser_lemma, str(raw_pos or ""))
-            from text_analysis_lab.linguistics.wsd.types import WSDTarget
+            from text_analysis_lab._linguistics.wsd.types import WSDTarget
             targets.append(
                 WSDTarget(
                     target_id=target_id,
@@ -299,7 +298,7 @@ class WordSenseDisambiguator(BaseTranslator):
             precision=self.precision,
             local_files_only=self.local_files_only,
         )
-        from text_analysis_lab.linguistics.wsd.scoring import score_wsd_targets
+        from text_analysis_lab._linguistics.wsd.experiment import score_wsd_targets
         rows, unresolved, _cache_stats = score_wsd_targets(
             targets,
             ontology=ontology,
@@ -414,8 +413,8 @@ class WordSenseDisambiguator(BaseTranslator):
 
 
 def _make_ontology(*, lexicon: str, include_multiword_candidates: bool):
-    from text_analysis_lab.linguistics.wsd.ontology import OpenEnglishWordNetProvider
-    return OpenEnglishWordNetProvider(
+    from text_analysis_lab._linguistics.wsd.ontology import WnOntologyProvider
+    return WnOntologyProvider(
         lexicon,
         include_multiword_candidates=include_multiword_candidates,
         mwe_cache_dir=user_cache_paths().wordnet_mwe_indices,
@@ -423,7 +422,7 @@ def _make_ontology(*, lexicon: str, include_multiword_candidates: bool):
 
 
 def _make_backend(*, model_name, model_revision, device, precision, local_files_only):
-    from text_analysis_lab.linguistics.wsd.wsl_backend import BabelscapeWSLBackend
+    from text_analysis_lab._linguistics.wsd.wsl_backend import BabelscapeWSLBackend
     return BabelscapeWSLBackend(
         model_name,
         revision=model_revision,

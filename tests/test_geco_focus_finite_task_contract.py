@@ -12,6 +12,18 @@ from geometric_coder import GeometricCoder
 from text_analysis_lab.integrations.geco import GeCoManager
 
 
+_FINITE_FOCUS_API = all(
+    callable(getattr(GeometricCoder, name, None))
+    for name in ("configure_focus", "focus_task", "focus_progress")
+)
+
+
+pytestmark = pytest.mark.skipif(
+    not _FINITE_FOCUS_API,
+    reason="Installed GeCo does not expose the finite Focus task API.",
+)
+
+
 class FakeArtifact:
     def __init__(self, artifact_id: str, frame: pd.DataFrame, *, keys=("row_id",)) -> None:
         self.artifact_id = artifact_id
@@ -59,14 +71,14 @@ class FakeProject:
         return {"documents": documents, "frame": frame.copy(), **kwargs}
 
 
-def test_teal_focus_bridge_matches_geco_0815_finite_task_contract(tmp_path: Path, monkeypatch) -> None:
+def test_teal_focus_bridge_matches_installed_geco_finite_task_contract(tmp_path: Path, monkeypatch) -> None:
     import text_analysis_lab.integrations.geco as bridge
 
     monkeypatch.setattr(bridge, "_load_geometric_coder", lambda: GeometricCoder)
     monkeypatch.setattr(
         bridge,
         "_installed_geco_version",
-        lambda: getattr(geometric_coder, "__version__", "0.8.15"),
+        lambda: getattr(geometric_coder, "__version__", "unknown"),
     )
 
     audit = FakeArtifact("audit", pd.DataFrame({"row_id": [3, 1]}))
@@ -97,7 +109,7 @@ def test_teal_focus_bridge_matches_geco_0815_finite_task_contract(tmp_path: Path
     assert [row["code_id"] for row in task["required_codes"]] == [1, 2]
     assert task["allow_unsure"] is False
 
-    # GeCo 0.8.15's public Focus protocol treats Unsure as unresolved when forbidden.
+    # The finite Focus protocol treats Unsure as unresolved when forbidden.
     first = linked.coder.units()[0]
     linked.coder.annotate(
         int(first["observation_id"]), 1, "unsure", origin="human_focus_coder"

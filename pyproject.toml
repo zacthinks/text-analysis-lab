@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77.0.3", "wheel"]
+requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,37 +8,18 @@ version = "0.1.0"
 description = "Persistent, lineage-aware workflows for reproducible text analysis"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
-license-files = ["LICENSE"]
-authors = [
-    { name = "Zachary Lim" },
-]
-keywords = ["text analysis", "computational social science", "NLP", "qualitative research"]
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Science/Research",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Scientific/Engineering :: Information Analysis",
-]
 dependencies = [
     "cloudpickle>=3.1.2",
     "duckdb>=1.5.3",
     "pandas>=1.4",
     "nltk>=3.9.2",
+    "openpyxl>=3.1",
     "pyarrow",
     "scikit-learn>=1.6.1",
     "scipy",
     "tqdm>=4.68.2",
     "umap-learn>=0.5.8,<0.6",
 ]
-
-[project.urls]
-Homepage = "https://github.com/zacthinks/text-analysis-lab"
-Repository = "https://github.com/zacthinks/text-analysis-lab"
-Issues = "https://github.com/zacthinks/text-analysis-lab/issues"
 
 [project.optional-dependencies]
 pdf = [
@@ -69,14 +50,16 @@ lexicons = [
 ]
 transformers = [
     "torch>=2.0",
-    "transformers>=4.41,<5",
+    "transformers>=4.40",
     "sentence-transformers>=5.0",
+]
+umap = [
 ]
 parallel = [
     "dask[distributed]>=2026.7.0",
 ]
 spacy = [
-    "spacy>=3.8.14,<3.9",
+    "spacy>=3.8.14",
 ]
 word2vec = [
     "gensim>=4.4.0",
@@ -88,7 +71,7 @@ llm = [
 linguistics = [
     "torch>=2.0",
     "transformers>=4.41,<5",
-    "spacy>=3.8.14,<3.9",
+    "spacy>=3.8,<3.9",
     "pydantic>=2.8",
     "wn>=1.1,<2",
     "safetensors>=0.4",
@@ -98,6 +81,8 @@ linguistics = [
     "datasets==2.14.4",
     "pyarrow<21",
 ]
+
+[tool.uv]
 
 [tool.uv.sources]
 geometric-coder = { git = "https://github.com/zacthinks/GeCo.git", branch = "master" }
@@ -117,3 +102,5 @@ dev = [
 testpaths = ["tests"]
 pythonpath = ["src"]
 
+[tool.setuptools.package-data]
+"text_analysis_lab._linguistics" = ["resources/*.json", "NOTICE.md"]

@@ -838,7 +838,7 @@ class BaseArtifact(ABC):
         if data_artifact is self:
             return resolved
 
-        return self.project.query.map_left_positions_to_right_positions(
+        return self.project.query.map_descendant_positions_to_ancestor_positions(
             self,
             data_artifact,
             resolved,

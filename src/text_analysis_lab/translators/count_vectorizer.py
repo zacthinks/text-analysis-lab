@@ -48,6 +48,7 @@ class CountVectorizer(BaseTranslator):
         max_df: int | float = 1.0,
         stop_words: str | Sequence[str] | None = None,
         lowercase: bool = True,
+        analyzer: str = "word",
         token_pattern: str = r"(?u)\b\w\w+\b",
         ngram_range: tuple[int, int] = (1, 1),
         max_features: int | None = None,
@@ -72,12 +73,18 @@ class CountVectorizer(BaseTranslator):
         self.max_df = max_df
         self.stop_words = _normalize_stop_words(stop_words)
         self.lowercase = bool(lowercase)
+        analyzer = str(analyzer)
+        if analyzer not in {"word", "char", "char_wb"}:
+            raise ValueError("analyzer must be 'word', 'char', or 'char_wb'.")
+        self.analyzer = analyzer
         self.token_pattern = str(token_pattern)
         self.ngram_range = (ngram_min, ngram_max)
         self.max_features = None if max_features is None else int(max_features)
         self.binary = bool(binary)
         if stemmer not in {None, "porter"}:
             raise ValueError("stemmer must be None or 'porter'.")
+        if stemmer is not None and self.analyzer != "word":
+            raise ValueError("stemmer is supported only with analyzer='word'.")
         self.stemmer = stemmer
         self.vocabulary_: dict[str, int] | None = (
             None if vocabulary is None else _normalize_vocabulary(vocabulary)
@@ -255,6 +262,7 @@ class CountVectorizer(BaseTranslator):
             "max_df": self.max_df,
             "stop_words": self.stop_words,
             "lowercase": self.lowercase,
+            "analyzer": self.analyzer,
             "token_pattern": self.token_pattern,
             "ngram_range": list(self.ngram_range),
             "max_features": self.max_features,
@@ -275,6 +283,7 @@ class CountVectorizer(BaseTranslator):
             max_df=cast(int | float, state.get("max_df", 1.0)),
             stop_words=cast(str | Sequence[str] | None, state.get("stop_words")),
             lowercase=bool(state.get("lowercase", True)),
+            analyzer=str(state.get("analyzer", "word")),
             token_pattern=str(state.get("token_pattern", r"(?u)\b\w\w+\b")),
             ngram_range=tuple(cast(Sequence[int], state.get("ngram_range", (1, 1)))),
             max_features=cast(int | None, state.get("max_features")),
@@ -369,7 +378,7 @@ class CountVectorizer(BaseTranslator):
             max_df=self.max_df,
             stop_words=stop_words,
             lowercase=lowercase,
-            analyzer=analyzer if analyzer is not None else "word",
+            analyzer=analyzer if analyzer is not None else self.analyzer,
             token_pattern=token_pattern,
             ngram_range=ngram_range,
             max_features=self.max_features,

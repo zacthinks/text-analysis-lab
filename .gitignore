@@ -26,4 +26,6 @@ Thumbs.db
 # Local TeAL projects and caches
 *.teal/
 .teal/
-docs/
+
+# Local dependency resolution
+uv.lock

@@ -22,7 +22,11 @@ from typing import TYPE_CHECKING, Any
 
 from text_analysis_lab.core.errors import ArtifactError
 from text_analysis_lab.core.ids import next_id
-from text_analysis_lab.core.lineage import validate_primary_key_relationship
+from text_analysis_lab.core.lineage import (
+    basis_artifact_ids,
+    lineage_mode_for_artifact,
+    validate_primary_key_relationship,
+)
 from text_analysis_lab.core.operator import (
     BaseOperator,
     OutputSpec,
@@ -69,9 +73,12 @@ def merge(
     batch_size: int = 10_000,
     memo: str | None = None,
 ) -> "BaseArtifact":
-    """Merge compatible, disjoint table artifacts into a keys-only artifact.
+    """Merge compatible, disjoint table artifacts into a flat keys-only artifact.
 
-    Source order is durable and defines merged row order. Within each source,
+    Any number of sources may be supplied. Native TeAL merge sources are
+    recursively flattened to their leaf basis branches so repeated accumulation
+    stays N-way rather than forming nested merge trees. Source order is durable
+    and defines merged row order. Within each source,
     existing artifact order is preserved. The operation writes only the merged
     key component; representation data and metadata are never copied.
 
@@ -230,10 +237,71 @@ def _resolve_sources(
 ) -> list["BaseArtifact"]:
     if isinstance(sources, (str, bytes)):
         raise ArtifactError("merge sources must be a sequence of artifact refs.")
-    resolved = [project.get_artifact(source) for source in sources]
-    if len(resolved) < 2:
+    requested = [project.get_artifact(source) for source in sources]
+    if len(requested) < 2:
         raise ArtifactError("merge requires at least two source artifacts.")
-    return resolved
+
+    # Native merge artifacts are structural keys-only unions.  Flatten them
+    # recursively so repeated Development accumulation remains one N-way merge
+    # rather than a nested merge tree such as merge(merge(D1, D2), D3).  Source
+    # order is preserved transitively: a prior merge's basis order occupies the
+    # position where that merge was supplied in the new request.
+    flattened: list[BaseArtifact] = []
+    for source in requested:
+        flattened.extend(_flatten_native_merge_source(project, source, seen=set()))
+
+    if len(flattened) < 2:
+        raise ArtifactError("merge requires at least two source artifacts.")
+    return flattened
+
+
+def _flatten_native_merge_source(
+    project: "Project",
+    source: "BaseArtifact",
+    *,
+    seen: set[str],
+) -> list["BaseArtifact"]:
+    """Return leaf branches for a native keys-only merge source.
+
+    Only artifacts actually created by TeAL's native ``merge`` operation are
+    flattened.  An externally registered or future custom artifact that happens
+    to use ``merged_key`` lineage remains an explicit basis, because TeAL cannot
+    assume that replacing it with its ancestors preserves user-defined local
+    semantics.
+    """
+    artifact_id = str(source.artifact_id)
+    if artifact_id in seen:
+        raise ArtifactError(
+            f"merge lineage contains a cycle involving artifact {artifact_id}."
+        )
+
+    if lineage_mode_for_artifact(source) != "merged_key":
+        return [source]
+
+    operation = project.operation_for_artifact(source)
+    is_native_merge = (
+        operation is not None
+        and operation.get("operation_type") == "merge"
+        and set(source.components) == {"keys"}
+    )
+    if not is_native_merge:
+        return [source]
+
+    basis_ids = basis_artifact_ids(source)
+    if len(basis_ids) < 2:
+        raise ArtifactError(
+            f"Native merge artifact {artifact_id} must have at least two basis artifacts."
+        )
+
+    next_seen = set(seen)
+    next_seen.add(artifact_id)
+    flattened: list[BaseArtifact] = []
+    for basis_id in basis_ids:
+        basis = project.get_artifact(basis_id)
+        flattened.extend(
+            _flatten_native_merge_source(project, basis, seen=next_seen)
+        )
+    return flattened
 
 
 def _validate_sources(project: "Project", sources: Sequence["BaseArtifact"]) -> None:
@@ -284,11 +352,16 @@ def _effective_schema(
     project: "Project", artifact: "BaseArtifact"
 ) -> tuple[tuple[str, str, str], ...]:
     columns = project.query.query_columns(artifact, metadata_mode="full")["columns"]
+    # Metadata qualified names encode the concrete owning artifact ID. Disjoint
+    # merge branches may therefore expose the same logical metadata field under
+    # different qualified names. Compatibility is about the effective logical
+    # schema and the resolved output names needed for UNION alignment, not owner
+    # identity. Output names still preserve ambiguity-induced qualification.
     return tuple(
         (
             str(column["namespace"]),
             str(column["base_name"]),
-            str(column["qualified_name"]),
+            str(column["output_name"]),
         )
         for column in columns
         if str(column["namespace"]) != "key"

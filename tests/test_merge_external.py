@@ -347,3 +347,129 @@ def test_merge_validates_public_api_compatibility_before_creating_operation(tmp_
         assert project.list_operations(operation_type="merge") == []
     finally:
         project.close()
+
+
+def test_merge_accepts_arbitrary_n_sources_in_one_flat_operation(tmp_path: Path) -> None:
+    project = teal.Project.create(tmp_path / "project", name="merge_n_way_test")
+    try:
+        branches = []
+        for index, key in enumerate([10, 20, 30, 40]):
+            branches.append(
+                _register_table(
+                    project,
+                    artifact_id=f"art_branch_{index}",
+                    label=f"branch_{index}",
+                    keys=pd.DataFrame({"row_id": [key]}),
+                    data=pd.DataFrame({"text": [f"row-{key}"]}),
+                    metadata=pd.DataFrame({"group": [f"g{index}"]}),
+                )
+            )
+
+        merged = project.merge(branches, batch_size=1)
+
+        assert merged.descriptor["lineage"] == {
+            "lineage_mode": "merged_key",
+            "basis_artifact_ids": [branch.artifact_id for branch in branches],
+        }
+        frame = merged.query(
+            key_columns=True,
+            data_columns=True,
+            metadata_columns=True,
+            metadata_mode="full",
+            form="table",
+            include_position=True,
+            order_by="_position",
+        )
+        assert frame["_position"].tolist() == [0, 1, 2, 3]
+        assert frame["row_id"].astype(int).tolist() == [10, 20, 30, 40]
+        assert frame["text"].tolist() == ["row-10", "row-20", "row-30", "row-40"]
+        assert frame["group"].tolist() == ["g0", "g1", "g2", "g3"]
+
+        operation = project.operation_for_artifact(merged)
+        assert operation is not None
+        sources = project.catalog.operation_sources(merged.operation_id)
+        source_map = {row["source_label"]: row["source_artifact_id"] for row in sources}
+        assert source_map == {
+            f"source_{index:04d}": branch.artifact_id
+            for index, branch in enumerate(branches)
+        }
+    finally:
+        project.close()
+
+
+def test_merge_of_merges_flattens_native_structural_branches(tmp_path: Path) -> None:
+    project_path = tmp_path / "project"
+    project = teal.Project.create(project_path, name="merge_flatten_test")
+    try:
+        branches = []
+        for index, key in enumerate([0, 1, 2, 3]):
+            branches.append(
+                _register_table(
+                    project,
+                    artifact_id=f"art_leaf_{index}",
+                    label=f"leaf_{index}",
+                    keys=pd.DataFrame({"row_id": [key]}),
+                    data=pd.DataFrame({"text": [f"leaf-{key}"]}),
+                    metadata=pd.DataFrame({"batch": [index]}),
+                )
+            )
+
+        left = project.merge([branches[0], branches[1]], output_label="left")
+        right = project.merge([branches[2], branches[3]], output_label="right")
+        combined = project.merge([left, right], output_label="combined")
+
+        # The new merge records the four leaf branches directly rather than
+        # building a merge(merge(...), merge(...)) lineage tree.
+        expected_basis = [branch.artifact_id for branch in branches]
+        assert combined.descriptor["lineage"] == {
+            "lineage_mode": "merged_key",
+            "basis_artifact_ids": expected_basis,
+        }
+
+        descriptor = project.operation_for_artifact(combined)
+        assert descriptor is not None
+        source_rows = project.catalog.operation_sources(combined.operation_id)
+        source_map = {
+            row["source_label"]: row["source_artifact_id"] for row in source_rows
+        }
+        assert source_map == {
+            f"source_{index:04d}": artifact_id
+            for index, artifact_id in enumerate(expected_basis)
+        }
+
+        frame = combined.query(
+            key_columns=True,
+            data_columns=True,
+            metadata_columns=True,
+            metadata_mode="full",
+            form="table",
+            include_position=True,
+            order_by="_position",
+        )
+        assert frame["row_id"].astype(int).tolist() == [0, 1, 2, 3]
+        assert frame["text"].tolist() == ["leaf-0", "leaf-1", "leaf-2", "leaf-3"]
+        assert frame["batch"].astype(int).tolist() == [0, 1, 2, 3]
+        combined_id = combined.artifact_id
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(project_path)
+    try:
+        combined = reopened.get_artifact(combined_id)
+        assert combined.descriptor["lineage"]["basis_artifact_ids"] == [
+            "art_leaf_0",
+            "art_leaf_1",
+            "art_leaf_2",
+            "art_leaf_3",
+        ]
+        frame = combined.query(
+            key_columns=True,
+            data_columns=True,
+            metadata_columns=True,
+            metadata_mode="full",
+            form="table",
+            order_by="_position",
+        )
+        assert frame["row_id"].astype(int).tolist() == [0, 1, 2, 3]
+    finally:
+        reopened.close()

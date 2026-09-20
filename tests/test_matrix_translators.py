@@ -18,6 +18,7 @@ from text_analysis_lab.translators import (
     SVD,
     UMAP,
     MatrixNormalizer,
+    MatrixTranspose,
     TfidfTransformer,
 )
 
@@ -60,6 +61,49 @@ def _packet(matrix=COUNTS) -> InputBatch:
         is_first=True,
         is_last=True,
     )
+
+
+def test_matrix_transpose_promotes_feature_frame_to_row_metadata() -> None:
+    feature_frame = pd.DataFrame(
+        {
+            "column_index": np.arange(len(FEATURES), dtype=np.int64),
+            "column": FEATURES,
+            "family": ["a", "a", "b", "b", "c"],
+            "score": [1.0, 2.0, 3.0, 4.0, 5.0],
+        }
+    )
+    source = SimpleNamespace(
+        artifact_type=ArtifactType.SPARSE_MATRIX,
+        primary_key=["doc_id"],
+        get_data_columns=lambda: list(FEATURES),
+        get_feature_frame=lambda: feature_frame.copy(),
+        has_row_names=False,
+    )
+    translator = MatrixTranspose()
+    request = translator.input_request(
+        sources={"source": source},
+        mode="translate",
+        request=TranslationRequest(),
+    )
+    assert request.mode == "full_artifact"
+
+    result = translator.translate_batch(
+        {"source": _packet()},
+        mode="translate",
+        request=TranslationRequest(),
+    )
+    output = result.outputs["output"]
+    assert output["keys"]["feature_id"].tolist() == list(range(len(FEATURES)))
+    assert output["data"]["row_names"] == FEATURES
+    assert output["data"]["row_name"] == "feature"
+    assert sparse.isspmatrix_csr(output["data"]["values"])
+    assert output["data"]["values"].shape == (len(FEATURES), COUNTS.shape[0])
+
+    metadata = output["metadata"]
+    assert metadata.columns.tolist() == ["column", "family", "score"]
+    assert metadata["column"].tolist() == FEATURES
+    assert metadata["family"].tolist() == ["a", "a", "b", "b", "c"]
+    assert metadata["score"].tolist() == [1.0, 2.0, 3.0, 4.0, 5.0]
 
 
 def test_tfidf_defaults_to_weighting_without_implicit_normalization() -> None:

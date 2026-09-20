@@ -13,6 +13,7 @@ LineageMode = Literal[
     "span_key",
     "merged_key",
     "joined_key",
+    "rekeyed_key",
     "new_key",
 ]
 
@@ -22,7 +23,7 @@ StreamingMode = Literal["auto", "arrow", "paged"]
 
 ArtifactStatus = Literal["incomplete", "complete", "failed"]
 
-OperationType = Literal["import", "split", "subset", "merge", "join", "translate"]
+OperationType = Literal["import", "register", "split", "subset", "merge", "join", "rekey", "translate"]
 
 OperationStatus = Literal["incomplete", "complete", "failed"]
 

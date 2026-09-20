@@ -539,6 +539,9 @@ class ArtifactWriter:
                 part_index=part_index,
             )
 
+        if "feature_indices" in payload and payload.get("feature_indices") is not None:
+            self._record_feature_projection(payload["feature_indices"])
+
         if "data" in payload and payload.get("data") is not None:
             self._write_data(
                 payload["data"],
@@ -555,6 +558,60 @@ class ArtifactWriter:
     # ------------------------------------------------------------------
     # Channel writers
     # ------------------------------------------------------------------
+
+    def _record_feature_projection(self, raw_indices: Any) -> None:
+        """Record one positional matrix-feature projection on this artifact.
+
+        The projection is intentionally positional. TeAL does not infer feature
+        identity from column labels or other feature metadata. A producer that
+        replays a fitted feature-space operation is responsible for supplying a
+        matrix with the same ordered feature axis used when these indices were
+        learned.
+        """
+        if self.artifact_type not in {
+            ArtifactType.SPARSE_MATRIX,
+            ArtifactType.DENSE_MATRIX,
+        }:
+            raise ArtifactError(
+                "feature_indices are supported only for sparse_matrix or "
+                "dense_matrix artifacts."
+            )
+        if isinstance(raw_indices, np.ndarray):
+            if raw_indices.ndim != 1:
+                raise ArtifactError("feature_indices must be one-dimensional.")
+            values = raw_indices.tolist()
+        elif isinstance(raw_indices, (list, tuple)):
+            values = list(raw_indices)
+        else:
+            raise ArtifactError(
+                "feature_indices must be a list, tuple, or one-dimensional numpy array."
+            )
+
+        indices: list[int] = []
+        for value in values:
+            if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+                raise ArtifactError("feature_indices must contain only integers.")
+            index = int(value)
+            if index < 0:
+                raise ArtifactError("feature_indices may not contain negative values.")
+            indices.append(index)
+
+        if not indices:
+            raise ArtifactError("feature_indices must retain at least one feature.")
+        if any(right <= left for left, right in zip(indices, indices[1:])):
+            raise ArtifactError(
+                "feature_indices must be unique and strictly increasing so the "
+                "derived feature axis preserves source order."
+            )
+
+        existing = self.lineage.get("feature_indices")
+        if existing is None:
+            self.lineage["feature_indices"] = indices
+            return
+        if [int(value) for value in existing] != indices:
+            raise ArtifactError(
+                "feature_indices changed after the feature view was established."
+            )
 
     def _validate_final_keys(self) -> None:
         """Run artifact-wide key checks before a writer may become complete.

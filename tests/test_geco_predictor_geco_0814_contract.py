@@ -3,35 +3,31 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 from sklearn.linear_model import LogisticRegression
-
-geometric_coder = pytest.importorskip("geometric_coder")
-from geometric_coder import GeCoPredictorRef as NativeGeCoPredictorRef
-from geometric_coder.predictors import (
-    FrozenPredictorExport,
-    FrozenPredictorMember,
-    PredictorSourceSpec,
-)
 
 from text_analysis_lab.integrations.geco import LinkedGeCoWorkspace
 from text_analysis_lab.translators import GeCoPredictor
 
 
-def test_bridge_matches_geco_0814_native_ref_and_frozen_export_contract() -> None:
+def test_bridge_forwards_opaque_native_ref_and_frozen_export_contract() -> None:
     X = np.asarray([[0.0], [0.2], [0.8], [1.0]], dtype=float)
     y = np.asarray([0, 0, 1, 1], dtype=int)
     model = LogisticRegression(random_state=0).fit(X, y)
 
-    native_ref = NativeGeCoPredictorRef(
+    # TeAL deliberately treats GeCo's native predictor reference as opaque.
+    # The only contract we rely on is that predictors() returns an object whose
+    # public fields can be normalized, and export_predictor() receives that exact
+    # native object back. Do not import a concrete GeCo reference class here:
+    # current GeCo builds need not re-export it from the package root.
+    native_ref = SimpleNamespace(
         kind="committee", id=5, code_id=1, name="qualitative_classifier"
     )
-    frozen = FrozenPredictorExport(
+    frozen = SimpleNamespace(
         format_version=1,
         ref=native_ref,
         code_name="qualitative methods",
         sources=(
-            PredictorSourceSpec(
+            SimpleNamespace(
                 source_index=0,
                 geometry_id=7,
                 geometry_name="sentence_lsa100",
@@ -41,7 +37,7 @@ def test_bridge_matches_geco_0814_native_ref_and_frozen_export_contract() -> Non
             ),
         ),
         members=(
-            FrozenPredictorMember(
+            SimpleNamespace(
                 classifier_spec_id=2,
                 classifier_fit_id=9,
                 classifier_name="member",
@@ -61,7 +57,7 @@ def test_bridge_matches_geco_0814_native_ref_and_frozen_export_contract() -> Non
         threshold=0.5,
         output_fields=("prediction", "probability"),
         stale_at_export=False,
-        provenance={"geco_version": getattr(geometric_coder, "__version__", "unknown")},
+        provenance={"geco_version": "test"},
     )
 
     class Coder:

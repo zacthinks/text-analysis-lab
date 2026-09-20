@@ -130,6 +130,35 @@ def test_count_vectorizer_fit_translate_and_frozen_transform_match_sklearn_seman
     assert transformed["columns"] == columns
 
 
+@pytest.mark.parametrize("analyzer", ["word", "char", "char_wb"])
+def test_count_vectorizer_public_analyzer_modes_round_trip(analyzer: str) -> None:
+    frame = pd.DataFrame(
+        {
+            "doc_id": [1, 2],
+            "text": ["alpha beta", "beta gamma"],
+        }
+    )
+    translator = CountVectorizer(analyzer=analyzer, ngram_range=(1, 2))
+    payload = translator.translate_batch(
+        {"source": _packet(frame)}, mode="fit_translate", request=TranslationRequest()
+    ).outputs["output"]["data"]
+    assert payload["values"].shape[0] == 2
+    assert payload["values"].shape[1] == len(payload["columns"])
+    assert payload["columns"]
+
+    frozen = CountVectorizer.from_json_state(
+        translator.to_json_state(include_vocabulary=True)
+    )
+    assert frozen.analyzer == analyzer
+    replay = frozen.translate_batch(
+        {"source": _packet(frame)}, mode="translate", request=TranslationRequest()
+    ).outputs["output"]["data"]
+    np.testing.assert_array_equal(
+        replay["values"].toarray(), payload["values"].toarray()
+    )
+    assert replay["columns"] == payload["columns"]
+
+
 def test_count_vectorizer_feature_trimming_and_binary_counts() -> None:
     frame = pd.DataFrame(
         {

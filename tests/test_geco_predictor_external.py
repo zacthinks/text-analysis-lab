@@ -286,7 +286,16 @@ def test_batch_size_equivalence(tmp_path: Path) -> None:
         source = _seed_matrix(
             project,
             "g0",
-            np.array([[0.05], [0.15], [0.35], [0.55], [0.75], [0.95]]),
+            np.array(
+                [
+                    [0.05, 0.0],
+                    [0.15, 0.0],
+                    [0.35, 0.0],
+                    [0.55, 0.0],
+                    [0.75, 0.0],
+                    [0.95, 0.0],
+                ]
+            ),
         )
         p1 = _single_predictor(_ColumnProbability(0))
         first = project.translate(p1, [source], batch_size=1)["output"]

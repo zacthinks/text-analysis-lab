@@ -1,0 +1,193 @@
+{
+    "lemmas": {
+        "be": ["be.v.x.0", "be.v.x.1"],
+        "have": ["have.v.x.0", "must.v.x.0"],
+        "will": ["will.v.x.0", "will.v.x.1", "will.v.x.2"],
+        "would": ["will.v.x.0", "will.v.x.1", "will.v.x.2", "would.v.x.0"],
+        "can": ["can.v.x.0", "can.v.x.1"],
+        "could": ["can.v.x.0","can.v.x.1", "could.v.x.0"],
+        "may": ["can.v.x.1", "could.v.x.0"],
+        "might": ["can.v.x.1", "could.v.x.0"],
+        "must": ["must.v.x.0", "must.v.x.1"],
+        "should": ["must.v.x.0", "must.v.x.1"],
+        "we": ["we.n.x.0", "we.n.x.1", "we.n.x.2"],
+        "ourselves": ["we.n.x.0", "we.n.x.1", "we.n.x.2"],
+        "it": ["it.n.x.0", "it.n.x.1", "it.n.x.2", "it.n.x.3"],
+        "itself": ["it.n.x.0", "it.n.x.1", "it.n.x.2", "it.n.x.3"],
+        "they": ["it.n.x.0", "it.n.x.1", "it.n.x.2", "they.n.x.0"],
+        "themselves": ["it.n.x.0", "it.n.x.1", "it.n.x.2", "they.n.x.0"],
+        "i": ["i.n.x.0"],
+        "myself": ["i.n.x.0"],
+        "you": ["you.n.x.0"],
+        "yourself": ["you.n.x.0"],
+        "he": ["he.n.x.0", "he.n.x.1"],
+        "himself": ["he.n.x.0", "he.n.x.1"],
+        "she": ["she.n.x.0", "she.n.x.1"],
+        "herself": ["she.n.x.0", "she.n.x.1"],
+        "something": ["entity.n.01"],
+        "what": ["entity.n.01"],
+        "this": ["entity.n.01"],
+        "these": ["entity.n.01"],
+        "that": ["entity.n.01"],
+        "those": ["entity.n.01", "people.n.01"],
+        "which": ["entity.n.01"],
+        "one": ["person.n.01"],
+        "anybody": ["person.n.01"],
+        "anyone": ["person.n.01"],
+        "everybody": ["people.n.01"],
+        "everyone": ["people.n.01"],
+        "who": ["person.n.01"],
+        "some": ["person.n.01", "social_group.n.01"],
+        "each": ["person.n.01", "it.n.x.0", "it.n.x.1", "it.n.x.2", "it.n.x.3"],
+        "board": ["board.n.x.0"]
+    },
+    "synsets": {
+        "be.v.x.0": {
+            "pos": "v",
+            "definition": "have the quality of being in the process of doing something (progressive auxiliary verb)"
+        },
+        "be.v.x.1": {
+            "pos": "v",
+            "definition": "have the quality of having something be done to one (passive auxiliary verb)"
+        },
+        "have.v.x.0": {
+            "pos": "v",
+            "definition": "have the quality of having done something (perfect aspect auxiliary verb)"
+        },
+        "will.v.x.0": {
+            "pos": "v",
+            "definition": "have the quality of being expected to do something in the future"
+        },
+        "will.v.x.1": {
+            "pos": "v",
+            "definition": "have the quality of habitually doing or having the tendency to do something"
+        },
+        "will.v.x.2": {
+            "pos": "v",
+            "definition": "have the quality of having the intention to do something"
+        },
+        "would.v.x.0": {
+            "pos": "v",
+            "definition": "have the quality of do something under a hypotherical or counterfactual scenario"
+        },
+        "can.v.x.0": {
+            "pos": "v",
+            "definition": "have the quality of being able or having the potential to do something"
+        },
+        "can.v.x.1": {
+            "pos": "v",
+            "definition": "have the quality of being permitted or allowed to do something"
+        },
+        "could.v.x.0": {
+            "pos": "v",
+            "definition": "have the quality of being possible for something to happen"
+        },
+        "must.v.x.0": {
+            "pos": "v",
+            "definition": "have the quality of being required, obliged, or instructed to do something"
+        },
+        "must.v.x.1": {
+            "pos": "v",
+            "definition": "have the quality of being likely for something to happen"
+        },
+        "other.n.x.0": {
+            "pos": "n",
+            "definition": "a different or additional thing",
+            "examples": ["the others came later"],
+            "hypernyms": ["entity.n.01"]
+        },
+        "other.n.x.1": {
+            "pos": "n",
+            "definition": "one considered by members of a dominant group as alien, exotic, threatening, or inferior (as because of different racial, sexual, or cultural characteristics)",
+            "examples": ["Prejudice comes from fear of the other"],
+            "hypernyms": ["person.n.01"]
+        },
+        "other.n.x.2": {
+            "pos": "n",
+            "definition": "someone that is psychologically differentiated from the self",
+            "examples": ["You should have empathy for others"],
+            "hypernyms": ["person.n.01"]
+        },
+        "other.v.x.0": {
+            "pos": "v",
+            "definition": "to treat or consider (a person or a group of people) as alien to oneself or one's group",
+            "examples": ["we trace how in small rural communities these processes of othering the poor are racialized"],
+            "hypernyms": ["treat.v.01"]
+        },
+        "we.n.x.0": {
+            "pos": "n",
+            "definition": "referring to oneself and others engaging in a common activity",
+            "hypernyms": ["team.n.01", "people.n.01"]
+        },
+        "we.n.x.1": {
+            "pos": "n",
+            "definition": "referring to a social (racial, religious, etc.) group on is part of",
+            "hypernyms": ["social_group.n.01", "people.n.01", "community.n.06"]
+        },
+        "we.n.x.2": {
+            "pos": "n",
+            "definition": "referring to a people in general",
+            "hypernyms": ["people.n.01", "world.n.08"]
+        },
+        "it.n.x.0": {
+            "pos": "n",
+            "definition": "an understood or previously mentioned animal",
+            "hypernyms": ["animal.n.01"]
+        },
+        "it.n.x.1": {
+            "pos": "n",
+            "definition": "an understood or previously mentioned inanimate object",
+            "hypernyms": ["thing.n.04"]
+        },
+        "it.n.x.2": {
+            "pos": "n",
+            "definition": "an understood or previously mentioned abstract object such as a theory, field, statement, action, or number",
+            "hypernyms": ["abstraction.n.06"]
+        },
+        "it.n.x.3": {
+            "pos": "n",
+            "definition": "an understood or previously mentioned situation",
+            "hypernyms": ["situation.n.01"]
+        },
+        "they.n.x.0": {
+            "pos": "n",
+            "definition": "an understood or previously mentioned group of people",
+            "hypernyms": ["people.n.01"]
+        },
+        "i.n.x.0": {
+            "pos": "n",
+            "definition": "the person speaking or writing",
+            "hypernyms": ["person.n.01"]
+        },
+        "you.n.x.0": {
+            "pos": "n",
+            "definition": "the person being spoken or written to",
+            "hypernyms": ["person.n.01"]
+        },
+        "he.n.x.0": {
+            "pos": "n",
+            "definition": "an understood or previously mentioned man or boy",
+            "hypernyms": ["male.n.02"]
+        },
+        "he.n.x.1": {
+            "pos": "n",
+            "definition": "an understood or previously mentioned male animal",
+            "hypernyms": ["male.n.01"]
+        },
+        "she.n.x.0": {
+            "pos": "n",
+            "definition": "an understood or previously mentioned woman or girl",
+            "hypernyms": ["female.n.02"]
+        },
+        "she.n.x.1": {
+            "pos": "n",
+            "definition": "an understood or previously mentioned female animal",
+            "hypernyms": ["female.n.01"]
+        },
+        "board.n.x.0": {
+            "pos": "n",
+            "definition": "a surface, frame, or device for writing or posting notices"
+        }
+    },
+    "blacklisted_lemmas": []
+}

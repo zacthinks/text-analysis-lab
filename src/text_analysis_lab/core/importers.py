@@ -43,7 +43,17 @@ if TYPE_CHECKING:
 
 
 TabularFormat = Literal["csv", "jsonl", "parquet"]
-_IMPORT_KINDS = frozenset({"read_csv", "read_csv_folder", "read_jsonl", "read_parquet", "folder_inventory"})
+ExcelSheetSelector = int | str
+_MISSING_FIELDS_ERROR = object()
+_IMPORT_KINDS = frozenset({
+    "read_csv",
+    "read_csv_folder",
+    "read_excel",
+    "read_excel_folder",
+    "read_jsonl",
+    "read_parquet",
+    "folder_inventory",
+})
 _OPTION_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -160,6 +170,99 @@ def read_csv_folder(
         batch_size=batch_size,
         output_label=output_label,
         duckdb_options=duckdb_options,
+        memo=memo,
+    )
+
+
+def read_excel(
+    project: "Project",
+    path: str | Path,
+    *,
+    text_fields: str | Sequence[str],
+    metadata_fields: str | Sequence[str] | None,
+    sheets: ExcelSheetSelector | Sequence[ExcelSheetSelector] | None = None,
+    header_row: int = 0,
+    missing_fields: Any = _MISSING_FIELDS_ERROR,
+    batch_size: int = 10_000,
+    output_label: str = DEFAULT_OUTPUT_LABEL,
+    memo: str | None = None,
+) -> "BaseArtifact":
+    """Import selected rows from one XLSX workbook into a TeAL table artifact.
+
+    ``sheets`` may be a sheet name, zero-based sheet position, a sequence mixing
+    names and positions, or ``None`` for every workbook sheet in workbook order.
+    Every emitted row receives ``source_sheet``, ``source_sheet_index``, and
+    zero-based ``source_row`` metadata. TeAL always assigns one generated global
+    ``row_id`` across all selected sheets.
+
+    Requested fields must exist on every selected sheet by default. Supplying
+    ``missing_fields`` fills any absent requested field with that scalar value;
+    explicitly passing ``None`` therefore fills missing fields with nulls.
+    """
+    source_path = _validate_excel_source_file(path)
+    return _read_excel_files(
+        project,
+        root=None,
+        paths=[source_path],
+        text_fields=text_fields,
+        metadata_fields=metadata_fields,
+        sheets=sheets,
+        header_row=header_row,
+        missing_fields=missing_fields,
+        pattern=None,
+        recursive=False,
+        batch_size=batch_size,
+        output_label=output_label,
+        memo=memo,
+    )
+
+
+def read_excel_folder(
+    project: "Project",
+    root: str | Path,
+    *,
+    text_fields: str | Sequence[str],
+    metadata_fields: str | Sequence[str] | None,
+    sheets: ExcelSheetSelector | Sequence[ExcelSheetSelector] | None = None,
+    header_row: int = 0,
+    missing_fields: Any = _MISSING_FIELDS_ERROR,
+    pattern: str = "*.xlsx",
+    recursive: bool = True,
+    batch_size: int = 10_000,
+    output_label: str = DEFAULT_OUTPUT_LABEL,
+    memo: str | None = None,
+) -> "BaseArtifact":
+    """Import a deterministic folder of XLSX workbooks as one TeAL artifact.
+
+    Workbooks are traversed in sorted relative-path order. Within each workbook,
+    selected sheets are traversed in caller-requested order, or workbook order
+    when ``sheets=None``. Generic provenance metadata are ``source_file``,
+    ``source_sheet``, ``source_sheet_index``, and zero-based ``source_row``.
+    """
+    root_path = _validate_folder_root(root)
+    if not isinstance(pattern, str) or not pattern:
+        raise ValueError("pattern must be a non-empty glob string.")
+    paths = _inventory_paths(root_path, (pattern,), recursive=recursive)
+    if not paths:
+        raise ArtifactError(
+            f"read_excel_folder matched no files under {str(root_path)!r} "
+            f"for pattern {pattern!r}."
+        )
+    for path in paths:
+        _validate_excel_source_file(path)
+    return _read_excel_files(
+        project,
+        root=root_path,
+        paths=paths,
+        text_fields=text_fields,
+        metadata_fields=metadata_fields,
+        sheets=sheets,
+        header_row=header_row,
+        missing_fields=missing_fields,
+        pattern=pattern,
+        recursive=recursive,
+        batch_size=batch_size,
+        output_label=output_label,
         memo=memo,
     )
 
@@ -444,6 +547,422 @@ def _read_csv_files(
         con.close()
 
 
+
+
+def _read_excel_files(
+    project: "Project",
+    *,
+    root: Path | None,
+    paths: Sequence[Path],
+    text_fields: str | Sequence[str],
+    metadata_fields: str | Sequence[str] | None,
+    sheets: ExcelSheetSelector | Sequence[ExcelSheetSelector] | None,
+    header_row: int,
+    missing_fields: Any,
+    pattern: str | None,
+    recursive: bool,
+    batch_size: int,
+    output_label: str,
+    memo: str | None,
+) -> "BaseArtifact":
+    batch_size = _validate_batch_size(batch_size)
+    output_label = validate_output_label(output_label)
+    header_row = _validate_header_row(header_row)
+    sheet_selectors = _normalize_sheet_selectors(sheets)
+    missing_policy = _validate_missing_fields_policy(missing_fields)
+
+    text = _normalize_column_names(text_fields, name="text_fields")
+    if not text:
+        raise ValueError("text_fields must contain at least one source column.")
+    metadata = _normalize_column_names(metadata_fields, name="metadata_fields")
+    _validate_selected_field_names(text, metadata)
+
+    provenance_fields = ["source_sheet", "source_sheet_index", "source_row"]
+    if root is not None:
+        provenance_fields.insert(0, "source_file")
+    collisions = sorted(set((*text, *metadata)).intersection(provenance_fields))
+    if collisions:
+        raise ArtifactError(
+            "Excel provenance field name(s) collide with requested source fields: "
+            f"{collisions}. Rename/remove the colliding source field before import."
+        )
+
+    openpyxl = _import_openpyxl()
+    inspections: list[dict[str, Any]] = []
+    workbook_plans: list[dict[str, Any]] = []
+    for path in paths:
+        workbook = openpyxl.load_workbook(
+            filename=path,
+            read_only=True,
+            data_only=True,
+        )
+        try:
+            resolved_sheets = _resolve_excel_sheets(
+                workbook.sheetnames,
+                sheet_selectors,
+                source_path=path,
+            )
+            sheet_plans: list[dict[str, Any]] = []
+            for sheet_index, sheet_name in resolved_sheets:
+                worksheet = workbook[sheet_name]
+                columns = _excel_header_columns(worksheet, header_row=header_row)
+                available = tuple(columns)
+                requested = (*text, *metadata)
+                missing = tuple(field for field in requested if field not in set(available))
+                if missing and missing_policy["mode"] == "error":
+                    relative = (
+                        path.relative_to(root).as_posix() if root is not None else str(path)
+                    )
+                    raise ArtifactError(
+                        f"Excel source {relative!r}, sheet {sheet_name!r} is missing "
+                        f"requested field(s) {list(missing)}; available columns are "
+                        f"{list(available)}. Pass missing_fields=None to fill missing "
+                        "requested fields with nulls, or pass another scalar default value."
+                    )
+                discarded = tuple(field for field in available if field not in set(requested))
+                plan = {
+                    "sheet_name": sheet_name,
+                    "sheet_index": int(sheet_index),
+                    "columns": available,
+                    "missing_fields": missing,
+                    "discarded_fields": discarded,
+                }
+                sheet_plans.append(plan)
+                inspections.append(
+                    {
+                        **({"source_file": path.relative_to(root).as_posix()} if root is not None else {}),
+                        "sheet": sheet_name,
+                        "sheet_index": int(sheet_index),
+                        "columns": list(available),
+                        "missing_fields": list(missing),
+                        "discarded_fields": list(discarded),
+                    }
+                )
+            workbook_plans.append({"path": path, "sheets": sheet_plans})
+        finally:
+            workbook.close()
+
+    requested_sheets: list[int | str] | None
+    if sheet_selectors is None:
+        requested_sheets = None
+    else:
+        requested_sheets = list(sheet_selectors)
+
+    common_request: dict[str, Any] = {
+        "format": "xlsx",
+        "primary_key": ["row_id"],
+        "generated_primary_key": True,
+        "text_fields": list(text),
+        "metadata_fields": [*metadata, *provenance_fields],
+        "source_metadata_fields": list(metadata),
+        "provenance_fields": provenance_fields,
+        "sheets": requested_sheets,
+        "header_row": header_row,
+        "missing_fields": missing_policy,
+        "batch_size": batch_size,
+        "output_label": output_label,
+        "reader_engine": {
+            "name": "openpyxl",
+            "version": str(openpyxl.__version__),
+            "read_only": True,
+            "data_only": True,
+        },
+        "formula_policy": "cached_values",
+        "detected_sheets": inspections,
+    }
+    if root is None:
+        source_path = paths[0]
+        request = {"path": str(source_path), **common_request}
+        stat = source_path.stat()
+        external_source = {
+            "kind": "file",
+            "path": str(source_path),
+            "format": "xlsx",
+            "size_bytes": int(stat.st_size),
+            "modified_ns": int(stat.st_mtime_ns),
+        }
+        kind = "read_excel"
+    else:
+        matched_files = [path.relative_to(root).as_posix() for path in paths]
+        request = {
+            "root": str(root),
+            "pattern": pattern,
+            "recursive": bool(recursive),
+            "matched_files": matched_files,
+            **common_request,
+        }
+        external_source = {
+            "kind": "folder",
+            "path": str(root),
+            "format": "xlsx",
+            "matched_file_count": len(paths),
+            "matched_files": matched_files,
+        }
+        kind = "read_excel_folder"
+
+    def payloads() -> Iterable[Mapping[str, Any]]:
+        next_row_id = 0
+        for workbook_plan in workbook_plans:
+            path = workbook_plan["path"]
+            workbook = openpyxl.load_workbook(
+                filename=path,
+                read_only=True,
+                data_only=True,
+            )
+            try:
+                for sheet_plan in workbook_plan["sheets"]:
+                    sheet_name = str(sheet_plan["sheet_name"])
+                    sheet_index = int(sheet_plan["sheet_index"])
+                    columns = tuple(str(column) for column in sheet_plan["columns"])
+                    column_positions = {column: index for index, column in enumerate(columns)}
+                    worksheet = workbook[sheet_name]
+                    row_iter = worksheet.iter_rows(
+                        min_row=header_row + 2,
+                        values_only=True,
+                    )
+                    source_row = 0
+                    batch_rows: list[dict[str, Any]] = []
+                    batch_source_rows: list[int] = []
+
+                    def flush() -> Mapping[str, Any] | None:
+                        nonlocal next_row_id, batch_rows, batch_source_rows
+                        if not batch_rows:
+                            return None
+                        frame = pd.DataFrame(batch_rows, columns=[*text, *metadata])
+                        count = len(frame)
+                        keys = pd.DataFrame(
+                            {
+                                "row_id": np.arange(
+                                    next_row_id,
+                                    next_row_id + count,
+                                    dtype="int64",
+                                )
+                            }
+                        )
+                        next_row_id += count
+                        out_metadata = frame.loc[:, list(metadata)].copy()
+                        if root is not None:
+                            out_metadata["source_file"] = path.relative_to(root).as_posix()
+                        out_metadata["source_sheet"] = sheet_name
+                        out_metadata["source_sheet_index"] = np.full(
+                            count, sheet_index, dtype="int64"
+                        )
+                        out_metadata["source_row"] = np.asarray(
+                            batch_source_rows, dtype="int64"
+                        )
+                        payload: dict[str, Any] = {
+                            "keys": keys,
+                            "data": frame.loc[:, list(text)].copy(),
+                            "metadata": out_metadata,
+                        }
+                        batch_rows = []
+                        batch_source_rows = []
+                        return payload
+
+                    for raw_values in row_iter:
+                        values = tuple(raw_values)
+                        if _excel_row_is_blank(values, width=len(columns)):
+                            continue
+                        row: dict[str, Any] = {}
+                        for field in (*text, *metadata):
+                            position = column_positions.get(field)
+                            if position is None:
+                                row[field] = missing_policy["value"]
+                            elif position < len(values):
+                                row[field] = values[position]
+                            else:
+                                row[field] = None
+                        batch_rows.append(row)
+                        batch_source_rows.append(source_row)
+                        source_row += 1
+                        if len(batch_rows) >= batch_size:
+                            payload = flush()
+                            if payload is not None:
+                                yield payload
+                    payload = flush()
+                    if payload is not None:
+                        yield payload
+            finally:
+                workbook.close()
+
+    return _execute_import(
+        project,
+        kind=kind,
+        output_label=output_label,
+        request=request,
+        external_source=external_source,
+        payloads=payloads(),
+        memo=memo,
+    )
+
+
+def _normalize_sheet_selectors(
+    sheets: ExcelSheetSelector | Sequence[ExcelSheetSelector] | None,
+) -> tuple[ExcelSheetSelector, ...] | None:
+    if sheets is None:
+        return None
+    if isinstance(sheets, bool):
+        raise TypeError("sheets entries must be sheet names or zero-based integer positions.")
+    if isinstance(sheets, (str, int)):
+        values: tuple[Any, ...] = (sheets,)
+    elif isinstance(sheets, Sequence):
+        values = tuple(sheets)
+    else:
+        raise TypeError(
+            "sheets must be a sheet name, integer position, sequence of names/positions, or None."
+        )
+    if not values:
+        raise ValueError("sheets cannot be an empty sequence; use None to import all sheets.")
+    normalized: list[ExcelSheetSelector] = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise TypeError(
+                "sheets entries must be sheet names or zero-based integer positions."
+            )
+        if isinstance(value, int) and value < 0:
+            raise ValueError("Excel sheet positions must be zero-based non-negative integers.")
+        if isinstance(value, str) and not value:
+            raise ValueError("Excel sheet names cannot be empty.")
+        normalized.append(value)
+    return tuple(normalized)
+
+
+def _resolve_excel_sheets(
+    sheet_names: Sequence[str],
+    selectors: tuple[ExcelSheetSelector, ...] | None,
+    *,
+    source_path: Path,
+) -> tuple[tuple[int, str], ...]:
+    names = tuple(str(name) for name in sheet_names)
+    if not names:
+        raise ArtifactError(f"Excel workbook exposes no sheets: {source_path}.")
+    if selectors is None:
+        return tuple(enumerate(names))
+
+    resolved: list[tuple[int, str]] = []
+    seen_indices: set[int] = set()
+    for selector in selectors:
+        if isinstance(selector, int):
+            if selector >= len(names):
+                raise ArtifactError(
+                    f"Excel workbook {str(source_path)!r} has {len(names)} sheet(s); "
+                    f"requested sheet position {selector} does not exist."
+                )
+            index = selector
+            name = names[index]
+        else:
+            if selector not in names:
+                raise ArtifactError(
+                    f"Excel workbook {str(source_path)!r} has no sheet {selector!r}; "
+                    f"available sheets are {list(names)}."
+                )
+            index = names.index(selector)
+            name = names[index]
+        if index in seen_indices:
+            raise ArtifactError(
+                f"Excel workbook {str(source_path)!r} resolves the sheets selection "
+                f"to duplicate sheet {name!r} (position {index})."
+            )
+        seen_indices.add(index)
+        resolved.append((index, name))
+    return tuple(resolved)
+
+
+def _excel_header_columns(worksheet: Any, *, header_row: int) -> tuple[str, ...]:
+    iterator = worksheet.iter_rows(
+        min_row=header_row + 1,
+        max_row=header_row + 1,
+        values_only=True,
+    )
+    raw = tuple(next(iterator, ()))
+    while raw and raw[-1] is None:
+        raw = raw[:-1]
+    if not raw:
+        return ()
+    columns: list[str] = []
+    for index, value in enumerate(raw):
+        if value is None or str(value) == "":
+            columns.append(f"Unnamed: {index}")
+        else:
+            columns.append(str(value))
+    if len(set(columns)) != len(columns):
+        duplicates = sorted({name for name in columns if columns.count(name) > 1})
+        raise ArtifactError(
+            f"Excel sheet contains duplicate header names after normalization: {duplicates}."
+        )
+    return tuple(columns)
+
+
+def _excel_row_is_blank(values: Sequence[Any], *, width: int) -> bool:
+    if width <= 0:
+        return all(value is None for value in values)
+    considered = values[:width]
+    if len(considered) < width:
+        considered = (*considered, *((None,) * (width - len(considered))))
+    return all(value is None for value in considered)
+
+
+def _validate_selected_field_names(
+    text_fields: Sequence[str],
+    metadata_fields: Sequence[str],
+) -> None:
+    overlap = sorted(set(text_fields).intersection(metadata_fields))
+    if overlap:
+        raise ArtifactError(
+            f"Source columns cannot be both text_fields and metadata_fields: {overlap}."
+        )
+    selected = set(text_fields).union(metadata_fields)
+    reserved = sorted(selected.intersection(STRUCTURAL_COLUMNS))
+    if reserved:
+        raise ArtifactError(
+            f"Selected source field(s) use TeAL-reserved structural names: {reserved}."
+        )
+    if "row_id" in selected:
+        raise ArtifactError(
+            "Source field 'row_id' cannot be imported because TeAL reserves row_id "
+            "for the generated primary key of tabular imports. Rename that source "
+            "field before import or leave it unselected."
+        )
+
+
+def _validate_header_row(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("header_row must be a zero-based non-negative integer.")
+    return int(value)
+
+
+def _validate_missing_fields_policy(value: Any) -> dict[str, Any]:
+    if value is _MISSING_FIELDS_ERROR:
+        return {"mode": "error"}
+    if isinstance(value, np.generic):
+        value = value.item()
+    if value is not None and not isinstance(value, (str, bool, int, float)):
+        raise TypeError(
+            "missing_fields must be omitted to raise on missing requested fields, "
+            "or be a scalar string/boolean/number/None used as the fill value."
+        )
+    if isinstance(value, float) and not np.isfinite(value):
+        raise ValueError("missing_fields numeric fill values must be finite.")
+    return {"mode": "fill", "value": value}
+
+
+def _validate_excel_source_file(path: str | Path) -> Path:
+    resolved = _validate_source_file(path)
+    if resolved.suffix.lower() != ".xlsx":
+        raise ArtifactError(
+            f"Excel import currently supports .xlsx workbooks only: {resolved}."
+        )
+    return resolved
+
+
+def _import_openpyxl():
+    try:
+        import openpyxl
+    except ImportError as exc:  # pragma: no cover - required package in real env
+        raise RuntimeError(
+            "openpyxl is required for TeAL Excel imports. Install project dependencies."
+        ) from exc
+    return openpyxl
 
 def _read_tabular(
     project: "Project",
