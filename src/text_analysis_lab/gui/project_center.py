@@ -407,6 +407,58 @@ def _operator_label(catalog: ProjectCatalog, row: Mapping[str, Any]) -> str:
     return f"{preferred} · {operator_id}"
 
 
+def _operation_graph_label(
+    catalog: ProjectCatalog,
+    operation: Mapping[str, Any],
+    operation_dir: Path,
+) -> str:
+    """Return the most useful short human label for a provenance operation."""
+
+    operator_id = str(operation["operator_id"])
+    aliases = catalog.aliases_for_operator(operator_id)
+    if aliases:
+        return aliases[0]
+
+    descriptor_path = operation_dir / "operation.json"
+    if descriptor_path.is_file():
+        try:
+            descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            descriptor = None
+        if isinstance(descriptor, Mapping):
+            translator_class = descriptor.get("translator_class")
+            if isinstance(translator_class, Mapping):
+                qualname = translator_class.get("qualname")
+                if isinstance(qualname, str) and qualname.strip():
+                    return qualname.rsplit(".", 1)[-1]
+
+    return str(operation["operation_type"])
+
+
+def _overview_edge_label(
+    operation_label: str,
+    source_label: str,
+    output_label: str,
+) -> str:
+    generic_source = {"source", "input"}
+    generic_output = {"output"}
+    source_role = "" if source_label in generic_source else source_label
+    output_role = "" if output_label in generic_output else output_label
+    # User-facing output aliases can also be stored as port labels. Those are
+    # already visible on the Artifact node and make poor edge annotations.
+    if len(source_role) > 24:
+        source_role = ""
+    if len(output_role) > 24:
+        output_role = ""
+    if source_role and output_role:
+        return f"{operation_label} · {source_role}→{output_role}"
+    if source_role:
+        return f"{operation_label} · {source_role}"
+    if output_role:
+        return f"{operation_label} · {output_role}"
+    return operation_label
+
+
 def _artifact_graph_payload(
     catalog_dir: Path,
     manifest_path: Path,
@@ -452,17 +504,23 @@ def _artifact_graph_payload(
 
         operation_nodes = []
         provenance_edges = []
+        overview_edges = []
         operator_ids: set[str] = set()
         for operation in catalog.list_operations():
             operation_id = str(operation["operation_id"])
             operator_id = str(operation["operator_id"])
             operator_ids.add(operator_id)
             size_bytes = _directory_size(operations_dir / operation_id)
+            operation_label = _operation_graph_label(
+                catalog,
+                operation,
+                operations_dir / operation_id,
+            )
             operation_nodes.append(
                 {
                     "id": operation_id,
                     "node_type": "operation",
-                    "label": str(operation["operation_type"]),
+                    "label": operation_label,
                     "operation_type": str(operation["operation_type"]),
                     "operator_id": operator_id,
                     "status": str(operation["status"]),
@@ -470,7 +528,9 @@ def _artifact_graph_payload(
                     "size_display": _format_bytes(size_bytes),
                 }
             )
-            for source_row in catalog.operation_sources(operation_id):
+            source_rows = catalog.operation_sources(operation_id)
+            output_rows = catalog.operation_outputs(operation_id)
+            for source_row in source_rows:
                 source = str(source_row["source_artifact_id"])
                 if source in live_ids:
                     provenance_edges.append(
@@ -480,7 +540,7 @@ def _artifact_graph_payload(
                             "label": str(source_row["source_label"]),
                         }
                     )
-            for output_row in catalog.operation_outputs(operation_id):
+            for output_row in output_rows:
                 output = str(output_row["artifact_id"])
                 if output in live_ids:
                     provenance_edges.append(
@@ -488,6 +548,32 @@ def _artifact_graph_payload(
                             "source": operation_id,
                             "target": output,
                             "label": str(output_row["output_label"]),
+                        }
+                    )
+
+            for source_row in source_rows:
+                source = str(source_row["source_artifact_id"])
+                if source not in live_ids:
+                    continue
+                for output_row in output_rows:
+                    output = str(output_row["artifact_id"])
+                    if output not in live_ids:
+                        continue
+                    source_label = str(source_row["source_label"])
+                    output_label = str(output_row["output_label"])
+                    overview_edges.append(
+                        {
+                            "source": source,
+                            "target": output,
+                            "operation_id": operation_id,
+                            "operation_label": operation_label,
+                            "source_label": source_label,
+                            "output_label": output_label,
+                            "label": _overview_edge_label(
+                                operation_label,
+                                source_label,
+                                output_label,
+                            ),
                         }
                     )
 
@@ -518,6 +604,7 @@ def _artifact_graph_payload(
         "artifact_nodes": artifact_nodes,
         "operation_nodes": operation_nodes,
         "lineage_edges": lineage_edges,
+        "overview_edges": overview_edges,
         "provenance_edges": provenance_edges,
         "storage": storage,
     }
@@ -596,6 +683,8 @@ def _operation_detail_payload(
     manifest_path: Path,
     operation_id: str,
 ) -> dict[str, Any]:
+    teal_dir = manifest_path.parent
+    operation_dir = teal_dir / "operations" / operation_id
     with _catalog(catalog_dir) as catalog:
         operation = catalog.get_operation(operation_id)
         sources = catalog.operation_sources(operation_id)
@@ -604,14 +693,14 @@ def _operation_detail_payload(
         operator = catalog.resolve_operator(operator_id, include_deleted=True)
         operator_aliases = catalog.aliases_for_operator(operator_id)
         operator_use_count = len(catalog.operations_using_operator(operator_id))
+        display_label = _operation_graph_label(catalog, operation, operation_dir)
 
-    teal_dir = manifest_path.parent
-    operation_dir = teal_dir / "operations" / operation_id
     operator_dir = teal_dir / "operators" / operator_id
     operation_size = _directory_size(operation_dir)
     operator_size = _directory_size(operator_dir)
     return {
         "operation": operation,
+        "display_label": display_label,
         "sources": sources,
         "outputs": outputs,
         "size_bytes": operation_size,
@@ -945,15 +1034,29 @@ textarea.memo-body { width: 100%; min-height: 54vh; resize: vertical; line-heigh
 .graph-toolbar { background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 14px; display: flex; gap: 8px; align-items: center; }
 .graph-toolbar input { min-width: 220px; }
 .graph-toolbar .spacer { flex: 1; }
+.graph-legend { display: inline-flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.graph-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.graph-legend-shape { display: inline-block; width: 18px; height: 12px; border: 1.5px solid var(--muted); background: var(--panel); }
+.graph-legend-shape.artifact { border-radius: 2px; clip-path: polygon(0 0, 72% 0, 100% 35%, 100% 100%, 0 100%); }
+.graph-legend-shape.operation { width: 20px; clip-path: polygon(10% 0, 90% 0, 100% 50%, 90% 100%, 10% 100%, 0 50%); }
+.graph-legend-shape.transformation { width: 24px; height: 14px; border-radius: 999px; background: var(--accent-soft); }
 .graph-wrap { overflow: auto; padding: 16px; }
 .graph-canvas { min-width: 100%; min-height: 100%; }
-.node rect { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; rx: 7; }
-.node.operation rect { stroke-dasharray: 5 3; }
-.node:hover rect, .node.selected rect { stroke: var(--accent); stroke-width: 2.5; }
+.node-shape { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+.node.operation .node-shape { fill: var(--accent-soft); }
+.node:hover .node-shape, .node.selected .node-shape { stroke: var(--accent); stroke-width: 2.5; }
+.node-fold { fill: none; stroke: var(--line); stroke-width: 1.2; pointer-events: none; }
+.node:hover .node-fold, .node.selected .node-fold { stroke: var(--accent); }
 .node text { fill: var(--text); pointer-events: none; }
 .node .node-sub { fill: var(--muted); font-size: 11px; }
-.edge { stroke: var(--muted); stroke-width: 1.4; fill: none; opacity: .72; }
-.edge-label { fill: var(--muted); font-size: 10px; }
+.edge { stroke: var(--muted); stroke-width: 1.4; fill: none; opacity: .64; }
+.edge.selected { stroke: var(--accent); stroke-width: 2.5; opacity: 1; }
+.edge-label { fill: var(--muted); font-size: 10px; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+.edge-badge { cursor: pointer; }
+.edge-badge rect { fill: var(--accent-soft); stroke: var(--line); stroke-width: 1; }
+.edge-badge:hover rect, .edge-badge.selected rect { stroke: var(--accent); stroke-width: 2; }
+.edge-badge text { fill: var(--text); font-size: 10px; font-weight: 600; pointer-events: none; }
+.graph-focus-note { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .artifact-detail { border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 16px; }
 .artifact-detail h2 { margin: 0 0 4px; }
 .badges { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 14px; }
@@ -1061,10 +1164,16 @@ textarea.memo-body { width: 100%; min-height: 54vh; resize: vertical; line-heigh
     <div class="artifact-shell">
       <div class="graph-pane">
         <div class="graph-toolbar">
-          <label for="graphMode">Links</label>
-          <select id="graphMode"><option value="provenance">Provenance</option><option value="lineage">Lineage</option></select>
-          <input id="artifactSearch" type="search" placeholder="Find artifact or operation">
+          <label for="graphMode">View</label>
+          <select id="graphMode"><option value="lineage">Lineage</option><option value="provenance">Provenance</option></select>
+          <button id="focusSelected" disabled>Focus selected</button>
+          <span class="graph-focus-note" id="focusNote"></span>
+          <input id="artifactSearch" type="search" placeholder="Find artifact or transformation">
           <span class="target-note" id="storageSummary"></span>
+          <span class="graph-legend" aria-label="Graph node legend">
+            <span class="graph-legend-item"><span class="graph-legend-shape artifact"></span>Artifact</span>
+            <span class="graph-legend-item" id="legendOperation" hidden><span class="graph-legend-shape operation"></span>Operation</span>
+          </span>
           <div class="spacer"></div><button id="refreshArtifacts">Refresh</button>
         </div>
         <div class="graph-wrap"><svg class="graph-canvas" id="artifactGraph"></svg></div>
@@ -1117,6 +1226,7 @@ const app = {
   operationDescriptor: null,
   operatorDescriptor: null,
   tablePreview: {page: 1, pageCount: 1},
+  graphFocused: false,
   sessionEnding: false,
 };
 const $ = (id) => document.getElementById(id);
@@ -1425,22 +1535,105 @@ function graphEdges() {
 function graphNodes() {
   return $('graphMode').value === 'lineage' ? app.graph.artifact_nodes : app.graph.nodes;
 }
-function filteredGraphNodes() {
+function graphSelectedSeeds(edges) {
+  if (app.selectedArtifact) return [app.selectedArtifact];
+  if (!app.selectedOperation) return [];
+  if ($('graphMode').value === 'provenance') return [app.selectedOperation];
+  const seeds = new Set();
+  for (const edge of edges) {
+    if (edge.operation_id === app.selectedOperation) {
+      seeds.add(edge.source); seeds.add(edge.target);
+    }
+  }
+  return Array.from(seeds);
+}
+function graphNeighborhood(nodes, edges, seeds, radius = 2) {
+  const ids = new Set(nodes.map(node => node.id));
+  const adjacent = new Map(nodes.map(node => [node.id, new Set()]));
+  for (const edge of edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target)) continue;
+    adjacent.get(edge.source).add(edge.target);
+    adjacent.get(edge.target).add(edge.source);
+  }
+  const seen = new Set(seeds.filter(id => ids.has(id)));
+  let frontier = Array.from(seen);
+  for (let step = 0; step < radius; step++) {
+    const next = [];
+    for (const id of frontier) {
+      for (const neighbor of adjacent.get(id) || []) {
+        if (seen.has(neighbor)) continue;
+        seen.add(neighbor); next.push(neighbor);
+      }
+    }
+    frontier = next;
+    if (!frontier.length) break;
+  }
+  return seen;
+}
+function graphData() {
+  let nodes = graphNodes();
+  let edges = graphEdges();
+  if (app.graphFocused) {
+    const seeds = graphSelectedSeeds(edges);
+    if (seeds.length) {
+      const keep = graphNeighborhood(nodes, edges, seeds, 2);
+      nodes = nodes.filter(node => keep.has(node.id));
+      edges = edges.filter(edge => keep.has(edge.source) && keep.has(edge.target));
+    }
+  }
+
   const query = $('artifactSearch').value.trim().toLowerCase();
-  const nodes = graphNodes();
-  if (!query) return nodes;
-  return nodes.filter(node => [node.id, node.label, node.node_type, node.artifact_type, node.operation_type, node.operator_id, node.status].some(value => String(value || '').toLowerCase().includes(query)));
+  if (query) {
+    const matched = new Set();
+    for (const node of nodes) {
+      const fields = [node.id, node.label, node.node_type, node.artifact_type, node.operation_type, node.operator_id, node.status];
+      if (fields.some(value => String(value || '').toLowerCase().includes(query))) matched.add(node.id);
+    }
+    for (const edge of edges) {
+      const fields = [edge.label, edge.operation_label, edge.operation_id, edge.source_label, edge.output_label];
+      if (fields.some(value => String(value || '').toLowerCase().includes(query))) {
+        matched.add(edge.source); matched.add(edge.target);
+      }
+    }
+    const keep = graphNeighborhood(nodes, edges, Array.from(matched), 1);
+    nodes = nodes.filter(node => keep.has(node.id));
+    edges = edges.filter(edge => keep.has(edge.source) && keep.has(edge.target));
+  }
+  return {nodes, edges};
+}
+function renderGraphControls() {
+  const hasSelection = Boolean(app.selectedArtifact || ($('graphMode').value === 'provenance' && app.selectedOperation));
+  $('focusSelected').disabled = !hasSelection;
+  $('focusSelected').textContent = app.graphFocused ? 'Show all' : 'Focus selected';
+  $('focusSelected').classList.toggle('active', app.graphFocused);
+  $('focusNote').textContent = app.graphFocused && hasSelection ? 'Showing local neighborhood' : '';
+  const lineage = $('graphMode').value === 'lineage';
+  $('legendOperation').hidden = lineage;
+}
+function provenanceEdgeLabel(edge, nodeById) {
+  const value = String(edge.label || '').trim();
+  if (!value || ['source', 'output', 'input'].includes(value.toLowerCase())) return '';
+  const from = nodeById.get(edge.source); const to = nodeById.get(edge.target);
+  if (value === String(from?.label || '') || value === String(to?.label || '')) return '';
+  return truncate(value, 24);
 }
 function renderArtifactGraph() {
   const svg = $('artifactGraph');
   while (svg.firstChild) svg.removeChild(svg.firstChild);
   if (!app.graph) return;
-  const visibleNodes = filteredGraphNodes();
+  renderGraphControls();
+  const {nodes: visibleNodes, edges} = graphData();
   const visibleIds = new Set(visibleNodes.map(node => node.id));
-  const edges = graphEdges().filter(edge => visibleIds.has(edge.source) && visibleIds.has(edge.target));
+  const nodeById = new Map(visibleNodes.map(node => [node.id, node]));
   const positions = graphLayout(visibleNodes, edges);
-  const width = Math.max(760, ...Array.from(positions.values()).map(p => p.x + 250));
-  const height = Math.max(500, ...Array.from(positions.values()).map(p => p.y + 105));
+  const width = Math.max(760, ...visibleNodes.map(node => {
+    const pos = positions.get(node.id); const metrics = graphNodeMetrics(node);
+    return pos ? pos.x + metrics.width + 35 : 0;
+  }));
+  const height = Math.max(500, ...visibleNodes.map(node => {
+    const pos = positions.get(node.id); const metrics = graphNodeMetrics(node);
+    return pos ? pos.y + metrics.height + 35 : 0;
+  }));
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
   svg.setAttribute('width', width);
   svg.setAttribute('height', height);
@@ -1455,44 +1648,72 @@ function renderArtifactGraph() {
   for (const edge of edges) {
     const from = positions.get(edge.source); const to = positions.get(edge.target);
     if (!from || !to) continue;
+    const fromNode = nodeById.get(edge.source);
+    const toNode = nodeById.get(edge.target);
+    if (!fromNode || !toNode) continue;
+    const fromMetrics = graphNodeMetrics(fromNode); const toMetrics = graphNodeMetrics(toNode);
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    const x1 = from.x + 220; const y1 = from.y + 37; const x2 = to.x; const y2 = to.y + 37;
-    const bend = Math.max(45, (x2 - x1) / 2);
+    const x1 = from.x + fromMetrics.width; const y1 = from.y + fromMetrics.height / 2;
+    const x2 = to.x; const y2 = to.y + toMetrics.height / 2;
+    const horizontal = Math.max(0, x2 - x1);
+    const bend = Math.max(50, Math.min(150, horizontal / 2));
     line.setAttribute('d', `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
     line.setAttribute('class', 'edge'); line.setAttribute('marker-end', 'url(#arrow)');
     svg.appendChild(line);
-    if (edge.label) {
-      const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      label.setAttribute('x', String((x1 + x2) / 2)); label.setAttribute('y', String((y1 + y2) / 2 - 5)); label.setAttribute('text-anchor', 'middle'); label.setAttribute('class', 'edge-label'); label.textContent = edge.label;
-      svg.appendChild(label);
-    }
+    const middleX = (x1 + x2) / 2; const middleY = (y1 + y2) / 2 - 5;
+    const edgeLabel = $('graphMode').value === 'lineage'
+      ? truncate(String(edge.label || ''), 24)
+      : provenanceEdgeLabel(edge, nodeById);
+    if (!edgeLabel) continue;
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', String(middleX)); label.setAttribute('y', String(middleY)); label.setAttribute('text-anchor', 'middle'); label.setAttribute('class', 'edge-label'); label.textContent = edgeLabel;
+    svg.appendChild(label);
   }
   for (const node of visibleNodes) {
     const pos = positions.get(node.id);
     if (!pos) continue;
+    const metrics = graphNodeMetrics(node);
     const selected = node.node_type === 'operation' ? node.id === app.selectedOperation : node.id === app.selectedArtifact;
     const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     group.setAttribute('class', `node ${node.node_type}${selected ? ' selected' : ''}`);
     group.setAttribute('transform', `translate(${pos.x},${pos.y})`);
     group.style.cursor = 'pointer';
-    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    rect.setAttribute('width', '220'); rect.setAttribute('height', '74');
+    if (node.node_type === 'operation') {
+      const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      const inset = 18; const mid = metrics.height / 2;
+      shape.setAttribute('class', 'node-shape');
+      shape.setAttribute('d', `M ${inset} 0 H ${metrics.width - inset} L ${metrics.width} ${mid} L ${metrics.width - inset} ${metrics.height} H ${inset} L 0 ${mid} Z`);
+      group.appendChild(shape);
+    } else {
+      const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      const fold = 22;
+      shape.setAttribute('class', 'node-shape');
+      shape.setAttribute('d', `M 0 0 H ${metrics.width - fold} L ${metrics.width} ${fold} V ${metrics.height} H 0 Z`);
+      const foldLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      foldLine.setAttribute('class', 'node-fold');
+      foldLine.setAttribute('d', `M ${metrics.width - fold} 0 V ${fold} H ${metrics.width}`);
+      group.append(shape, foldLine);
+    }
+    const textX = node.node_type === 'operation' ? 24 : 12;
     const title = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    title.setAttribute('x', '12'); title.setAttribute('y', '25'); title.textContent = truncate(node.label, 29);
+    title.setAttribute('x', String(textX)); title.setAttribute('y', node.node_type === 'operation' ? '20' : '22'); title.textContent = truncate(node.label, node.node_type === 'operation' ? 20 : 28);
     const sub = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    sub.setAttribute('x', '12'); sub.setAttribute('y', '47'); sub.setAttribute('class', 'node-sub');
+    sub.setAttribute('x', String(textX)); sub.setAttribute('y', node.node_type === 'operation' ? '37' : '43'); sub.setAttribute('class', 'node-sub');
     sub.textContent = node.node_type === 'operation'
-      ? `operation · ${node.status} · ${node.size_display}`
-      : `${node.artifact_type} · ${node.status} · ${node.size_display}`;
-    const id = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    id.setAttribute('x', '12'); id.setAttribute('y', '63'); id.setAttribute('class', 'node-sub');
-    id.textContent = node.node_type === 'operation' ? `${truncate(node.id, 18)} · ${truncate(node.operator_id, 14)}` : truncate(node.id, 31);
-    group.append(rect, title, sub, id);
+      ? (node.operation_type === node.label ? 'operation' : node.operation_type)
+      : `${node.artifact_type} · ${node.size_display}${node.status === 'complete' ? '' : ` · ${node.status}`}`;
+    group.append(title, sub);
     group.addEventListener('click', () => node.node_type === 'operation' ? selectOperation(node.id) : selectArtifact(node.id));
     svg.appendChild(group);
   }
 }
+function graphNodeMetrics(node) {
+  return node.node_type === 'operation'
+    ? {width: 150, height: 46}
+    : {width: 220, height: 58};
+}
 function graphLayout(nodes, edges) {
+  if (!nodes.length) return new Map();
   const ids = new Set(nodes.map(node => node.id));
   const depth = new Map(nodes.map(node => [node.id, 0]));
   for (let iteration = 0; iteration < nodes.length; iteration++) {
@@ -1512,9 +1733,79 @@ function graphLayout(nodes, edges) {
     if (!levels.has(level)) levels.set(level, []);
     levels.get(level).push(node);
   }
+
+  const incoming = new Map(nodes.map(node => [node.id, []]));
+  const outgoing = new Map(nodes.map(node => [node.id, []]));
+  for (const edge of edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target)) continue;
+    outgoing.get(edge.source).push(edge.target);
+    incoming.get(edge.target).push(edge.source);
+  }
+  const levelKeys = Array.from(levels.keys()).sort((a, b) => a - b);
+  const rebuildOrder = () => {
+    const order = new Map();
+    for (const level of levelKeys) {
+      levels.get(level).forEach((node, index) => order.set(node.id, index));
+    }
+    return order;
+  };
+  const sortLevelByNeighbors = (level, neighbors, order) => {
+    const group = levels.get(level);
+    const previousIndex = new Map(group.map((node, index) => [node.id, index]));
+    const barycenter = node => {
+      const positions = (neighbors.get(node.id) || [])
+        .map(id => order.get(id))
+        .filter(value => Number.isFinite(value));
+      if (!positions.length) return null;
+      return positions.reduce((total, value) => total + value, 0) / positions.length;
+    };
+    group.sort((a, b) => {
+      const aCenter = barycenter(a); const bCenter = barycenter(b);
+      if (aCenter === null && bCenter === null) return previousIndex.get(a.id) - previousIndex.get(b.id);
+      if (aCenter === null) return 1;
+      if (bCenter === null) return -1;
+      if (aCenter !== bCenter) return aCenter - bCenter;
+      return previousIndex.get(a.id) - previousIndex.get(b.id);
+    });
+  };
+
+  // Repeated left/right barycentric sweeps keep connected branches close together
+  // and substantially reduce crossings compared with alphabetical rank ordering.
+  for (let sweep = 0; sweep < 6; sweep++) {
+    let order = rebuildOrder();
+    for (const level of levelKeys.slice(1)) {
+      sortLevelByNeighbors(level, incoming, order);
+      order = rebuildOrder();
+    }
+    order = rebuildOrder();
+    for (const level of levelKeys.slice(0, -1).reverse()) {
+      sortLevelByNeighbors(level, outgoing, order);
+      order = rebuildOrder();
+    }
+  }
+
+  const verticalGap = 34;
+  const levelHeights = new Map();
+  let maxLevelHeight = 0;
+  for (const level of levelKeys) {
+    const group = levels.get(level);
+    const total = group.reduce((sum, node) => sum + graphNodeMetrics(node).height, 0)
+      + Math.max(0, group.length - 1) * verticalGap;
+    levelHeights.set(level, total);
+    maxLevelHeight = Math.max(maxLevelHeight, total);
+  }
   const positions = new Map();
-  for (const [level, group] of levels.entries()) {
-    group.forEach((node, index) => positions.set(node.id, {x: 35 + level * 285, y: 35 + index * 105}));
+  let x = 35;
+  const horizontalGap = $('graphMode').value === 'lineage' ? 110 : 80;
+  for (const level of levelKeys) {
+    const group = levels.get(level);
+    const levelWidth = Math.max(...group.map(node => graphNodeMetrics(node).width));
+    let y = 35 + (maxLevelHeight - levelHeights.get(level)) / 2;
+    for (const node of group) {
+      positions.set(node.id, {x, y});
+      y += graphNodeMetrics(node).height + verticalGap;
+    }
+    x += levelWidth + horizontalGap;
   }
   return positions;
 }
@@ -1564,7 +1855,7 @@ function renderOperationDetail() {
   const operation = detail.operation;
   const operator = detail.operator;
   container.innerHTML = '';
-  const heading = document.createElement('h2'); heading.textContent = operation.operation_type;
+  const heading = document.createElement('h2'); heading.textContent = detail.display_label || operation.operation_type;
   const badges = document.createElement('div'); badges.className = 'badges';
   for (const value of ['operation', operation.status]) { const span = document.createElement('span'); span.className = 'badge'; span.textContent = value; badges.appendChild(span); }
   const dl = document.createElement('dl'); dl.className = 'detail-grid';
@@ -1581,7 +1872,7 @@ function renderOperationDetail() {
 
   const operatorSection = document.createElement('section'); operatorSection.className = 'inspector-section';
   const operatorHeading = document.createElement('h3'); operatorHeading.textContent = 'Operator';
-  const operatorName = detail.operator_aliases.length ? detail.operator_aliases[0] : operator.operation_type;
+  const operatorName = detail.operator_aliases.length ? detail.operator_aliases[0] : (detail.display_label || operator.operation_type);
   const operatorDl = document.createElement('dl'); operatorDl.className = 'detail-grid';
   addDetail(operatorDl, 'Name', operatorName);
   addDetail(operatorDl, 'ID', operator.operator_id);
@@ -1855,7 +2146,12 @@ $('saveMemo').addEventListener('click', saveMemo);
 $('memoHistoryButton').addEventListener('click', toggleMemoHistory);
 $('memoRaw').addEventListener('click', () => setMemoMode('raw'));
 $('memoPreview').addEventListener('click', () => setMemoMode('preview'));
-$('graphMode').addEventListener('change', () => { if ($('graphMode').value === 'lineage' && app.selectedOperation) { app.selectedOperation = null; app.operationDetail = null; app.artifactDetail = null; $('artifactDetail').innerHTML = '<div class="empty">Select an artifact to inspect it and its memo.</div>'; } renderArtifactGraph(); });
+$('graphMode').addEventListener('change', renderArtifactGraph);
+$('focusSelected').addEventListener('click', () => {
+  if (!(app.selectedArtifact || app.selectedOperation)) return;
+  app.graphFocused = !app.graphFocused;
+  renderArtifactGraph();
+});
 $('artifactSearch').addEventListener('input', renderArtifactGraph);
 $('refreshArtifacts').addEventListener('click', async () => { if (confirmArtifactMemoDiscard()) { await loadArtifactGraph(true); setStatus('Artifacts refreshed.'); } });
 $('closeTablePreview').addEventListener('click', () => $('tablePreviewDialog').close());

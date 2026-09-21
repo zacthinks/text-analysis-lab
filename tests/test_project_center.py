@@ -35,6 +35,15 @@ def test_project_center_serves_tabs_and_initializes_project_memo(tmp_path):
         assert 'data-tab="memos"' in html
         assert 'id="targetType"' not in html
         assert 'id="targetId"' not in html
+        assert 'class="graph-legend"' in html
+        assert "graph-legend-shape artifact" in html
+        assert "graph-legend-shape transformation" not in html
+        assert "graph-legend-shape operation" in html
+        assert '<option value="lineage">Lineage</option>' in html
+        assert 'id="focusSelected"' in html
+        assert "app.graph.lineage_edges" in html
+        assert "function graphNodeMetrics(node)" in html
+        assert "barycentric sweeps" in html
         assert server.memo_url.endswith("?tab=memos")
 
         state = _json(server.url + "api/state")
@@ -159,6 +168,20 @@ def test_project_center_artifact_graph_and_artifact_memo(tmp_path):
         output_id,
         ordinal=0,
     )
+    operation_dir = project.storage.operation_dir(operation_id)
+    operation_dir.mkdir(parents=True)
+    (operation_dir / "operation.json").write_text(
+        json.dumps(
+            {
+                "operation_id": operation_id,
+                "translator_class": {
+                    "module": "example.translators",
+                    "qualname": "SentenceSegmenter",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
     server = project.launch_memo_center(open_browser=False)
     try:
@@ -174,17 +197,24 @@ def test_project_center_artifact_graph_and_artifact_memo(tmp_path):
         assert {
             (edge["source"], edge["target"]) for edge in graph["provenance_edges"]
         } == {(source_id, operation_id), (operation_id, output_id)}
+        assert {
+            (edge["source"], edge["target"]) for edge in graph["overview_edges"]
+        } == {(source_id, output_id)}
+        assert graph["overview_edges"][0]["operation_id"] == operation_id
+        assert graph["overview_edges"][0]["label"] == "SentenceSegmenter"
         operation_node = next(
             node for node in graph["operation_nodes"] if node["id"] == operation_id
         )
         assert operation_node["node_type"] == "operation"
         assert operation_node["operator_id"] == operator_id
+        assert operation_node["label"] == "SentenceSegmenter"
 
         operation_detail = _json(
             server.url + f"api/operation?operation_id={operation_id}"
         )
         assert operation_detail["operation"]["operator_id"] == operator_id
         assert operation_detail["operator"]["operator_id"] == operator_id
+        assert operation_detail["display_label"] == "SentenceSegmenter"
         assert operation_detail["operator_use_count"] == 1
         assert operation_detail["sources"][0]["source_artifact_id"] == source_id
         assert operation_detail["outputs"][0]["artifact_id"] == output_id

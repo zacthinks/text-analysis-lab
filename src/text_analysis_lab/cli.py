@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import threading
 from pathlib import Path
 
 from text_analysis_lab.core.project import Project
@@ -43,11 +42,11 @@ def main(argv: list[str] | None = None) -> int:
 
         project = Project.open(project_path)
 
+        project_center = project.launch_project_center()
         try:
-            project.launch_project_center()
-            threading.Event().wait()
+            project_center.wait()
         except KeyboardInterrupt:
-            pass
+            project_center.close()
         finally:
             project.close()
 
