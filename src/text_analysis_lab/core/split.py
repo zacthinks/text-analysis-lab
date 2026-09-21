@@ -41,6 +41,7 @@ def split(
     labels: Sequence[str] = ("explore", "confirm"),
     proportions: Sequence[float],
     random_state: int | None = None,
+    by: str | Sequence[str] | None = None,
     stratify: str | Sequence[str] | None = None,
     workers: int = 1,
     memo: str | None = None,
@@ -50,8 +51,14 @@ def split(
     """Split one source artifact into keys-only child artifacts.
 
     ``labels``, ``proportions``, and ``random_state`` configure the reusable
-    random-split operator. ``stratify`` is resolved against the source bound to
-    this operation and may name key, data, or metadata output columns.
+    random-split operator. ``by`` optionally changes the assignment unit from
+    individual source rows to unique values of one or more key/metadata
+    columns. All rows sharing the same ``by`` values are assigned together,
+    while the returned artifacts remain at the source row granularity.
+
+    ``stratify`` is resolved against the source bound to this operation and may
+    name key, data, or metadata output columns. When ``by`` is supplied, each
+    assignment unit must resolve to exactly one stratum.
     """
     translator = RandomSplitTranslator(
         labels=labels,
@@ -65,6 +72,7 @@ def split(
         memo=memo,
         alias=alias,
         overwrite=overwrite,
+        by=by,
         stratify=stratify,
     )
 
@@ -120,15 +128,30 @@ class RandomSplitTranslator(BaseTranslator):
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = mode
-        unknown = sorted(set(params) - {"stratify"})
+        unknown = sorted(set(params) - {"by", "stratify"})
         if unknown:
             raise OperatorError(f"Unknown split operation parameter(s): {unknown}.")
 
         source = _source_artifact(sources)
+        raw_by = params.get("by")
         raw_stratify = params.get("stratify")
-        stratify_columns, column_request = _resolve_stratify_columns(
+        by_columns, by_request = _resolve_named_columns(
             source=source,
-            stratify=cast(str | Sequence[str] | None, raw_stratify),
+            value=cast(str | Sequence[str] | None, raw_by),
+            name="by",
+            allowed_namespaces={"key", "metadata"},
+        )
+        stratify_columns, stratify_request = _resolve_named_columns(
+            source=source,
+            value=cast(str | Sequence[str] | None, raw_stratify),
+            name="stratify",
+            allowed_namespaces={"key", "data", "metadata"},
+        )
+        column_request = _merge_column_requests(by_request, stratify_request)
+        requested_by = (
+            None
+            if raw_by is None
+            else list(_as_tuple(cast(str | Sequence[str], raw_by), name="by"))
         )
         requested = (
             None
@@ -138,6 +161,8 @@ class RandomSplitTranslator(BaseTranslator):
             )
         )
         return {
+            "by": requested_by,
+            "by_columns": list(by_columns),
             "stratify": requested,
             "stratify_columns": list(stratify_columns),
             "column_request": {
@@ -192,17 +217,30 @@ class RandomSplitTranslator(BaseTranslator):
         frame = _require_table_packet(source_batch.data)
         frame = _sort_by_position_if_present(frame).reset_index(drop=True)
         keys = _extract_key_frame(frame, primary_key=source_batch.primary_key)
+        by_columns = tuple(
+            str(column) for column in request.params.get("by_columns", ())
+        )
         stratify_columns = tuple(
             str(column) for column in request.params.get("stratify_columns", ())
         )
 
-        groups = _groups_for_frame(frame, stratify_columns=stratify_columns)
-        assignments = _assign_split_indices(
-            labels=self.labels,
-            proportions=self.proportions,
-            groups=groups,
-            random_state=self.random_state,
-        )
+        if by_columns:
+            assignments = _assign_grouped_split_indices(
+                frame,
+                labels=self.labels,
+                proportions=self.proportions,
+                by_columns=by_columns,
+                stratify_columns=stratify_columns,
+                random_state=self.random_state,
+            )
+        else:
+            groups = _groups_for_frame(frame, stratify_columns=stratify_columns)
+            assignments = _assign_split_indices(
+                labels=self.labels,
+                proportions=self.proportions,
+                groups=groups,
+                random_state=self.random_state,
+            )
 
         outputs: dict[str, dict[str, pd.DataFrame]] = {}
         for label in self.labels:
@@ -262,15 +300,17 @@ def _source_artifact(sources: Mapping[str, BaseArtifact]) -> BaseArtifact:
     return sources[DEFAULT_SOURCE_LABEL]
 
 
-def _resolve_stratify_columns(
+def _resolve_named_columns(
     *,
     source: BaseArtifact,
-    stratify: str | Sequence[str] | None,
+    value: str | Sequence[str] | None,
+    name: str,
+    allowed_namespaces: set[str],
 ) -> tuple[tuple[str, ...], ColumnRequest]:
-    if stratify is None:
+    if value is None:
         return (), ColumnRequest(keys=True, data=False, metadata=False)
 
-    requested = _as_tuple(stratify, name="stratify")
+    requested = _as_tuple(value, name=name)
     try:
         info = source.project.query.query_columns(source, metadata_mode="full")
     except Exception as exc:
@@ -284,48 +324,71 @@ def _resolve_stratify_columns(
         column["output_name"]: column["namespace"] for column in info.get("columns", ())
     }
 
-    stratify_columns: list[str] = []
+    resolved_columns: list[str] = []
     data_columns: list[str] = []
     metadata_columns: list[str] = []
 
-    for name in requested:
-        if name not in output_names:
-            if name in ambiguous:
+    for column_name in requested:
+        if column_name not in output_names:
+            if column_name in ambiguous:
                 raise QueryError(
-                    f"Stratify column {name!r} is ambiguous for artifact "
+                    f"{name} column {column_name!r} is ambiguous for artifact "
                     f"{source.artifact_id!r}. Use one of these qualified names "
-                    f"instead: {ambiguous[name]}."
+                    f"instead: {ambiguous[column_name]}."
                 )
             raise QueryError(
-                f"Stratify column {name!r} is not available for artifact "
+                f"{name} column {column_name!r} is not available for artifact "
                 f"{source.artifact_id!r}. Available output columns are: "
                 f"{sorted(output_names)}."
             )
 
-        namespace = output_to_namespace[name]
-        stratify_columns.append(name)
+        namespace = output_to_namespace[column_name]
+        if namespace not in allowed_namespaces:
+            allowed = ", ".join(sorted(allowed_namespaces))
+            raise QueryError(
+                f"{name} column {column_name!r} resolves to namespace "
+                f"{namespace!r}, but {name} only supports: {allowed}."
+            )
+
+        resolved_columns.append(column_name)
         if namespace == "key":
             continue
         if namespace == "data":
-            data_columns.append(name)
+            data_columns.append(column_name)
             continue
         if namespace == "metadata":
-            metadata_columns.append(name)
+            metadata_columns.append(column_name)
             continue
         raise QueryError(
-            f"Stratify column {name!r} has unsupported namespace {namespace!r}."
+            f"{name} column {column_name!r} has unsupported namespace {namespace!r}."
         )
 
-    if len(set(stratify_columns)) != len(stratify_columns):
-        raise ValueError(f"Duplicate stratify columns: {stratify_columns!r}.")
+    if len(set(resolved_columns)) != len(resolved_columns):
+        raise ValueError(f"Duplicate {name} columns: {resolved_columns!r}.")
 
     return (
-        tuple(stratify_columns),
+        tuple(resolved_columns),
         ColumnRequest(
             keys=True,
             data=data_columns or False,
             metadata=metadata_columns or False,
         ),
+    )
+
+
+def _merge_column_requests(*requests: ColumnRequest) -> ColumnRequest:
+    data: list[str] = []
+    metadata: list[str] = []
+    for request in requests:
+        if request.data is not False and request.data is not True:
+            data.extend(str(column) for column in request.data)
+        if request.metadata is not False and request.metadata is not True:
+            metadata.extend(str(column) for column in request.metadata)
+
+    return ColumnRequest(
+        keys=True,
+        data=list(dict.fromkeys(data)) or False,
+        metadata=list(dict.fromkeys(metadata)) or False,
     )
 
 
@@ -352,6 +415,82 @@ def _assign_split_indices(
         for label, count in zip(labels, counts, strict=True):
             stop = start + count
             assignments[label].extend(int(idx) for idx in shuffled[start:stop].tolist())
+            start = stop
+
+    return assignments
+
+
+def _assign_grouped_split_indices(
+    frame: pd.DataFrame,
+    *,
+    labels: tuple[str, ...],
+    proportions: tuple[float, ...],
+    by_columns: tuple[str, ...],
+    stratify_columns: tuple[str, ...],
+    random_state: int | None,
+) -> dict[str, list[int]]:
+    """Assign complete ``by`` units to outputs and return source row indices.
+
+    Split proportions are applied to the number of unique assignment units,
+    not to their row counts. If stratification is requested, units are assigned
+    independently within each stratum. A unit that spans more than one stratum
+    is invalid because it cannot be kept intact and stratified simultaneously.
+    """
+
+    missing = [
+        column
+        for column in (*by_columns, *stratify_columns)
+        if column not in frame.columns
+    ]
+    if missing:
+        raise ArtifactError(
+            f"Split packet is missing resolved by/stratify column(s) {missing}. "
+            f"Available columns: {list(frame.columns)}."
+        )
+
+    unit_rows: dict[tuple[Any, ...], list[int]] = {}
+    unit_strata: dict[tuple[Any, ...], tuple[Any, ...]] = {}
+    stratum_units: dict[tuple[Any, ...], list[tuple[Any, ...]]] = defaultdict(list)
+
+    selected_columns = list(dict.fromkeys((*by_columns, *stratify_columns)))
+    selected = frame.loc[:, selected_columns]
+    by_positions = [selected_columns.index(column) for column in by_columns]
+    stratum_positions = [selected_columns.index(column) for column in stratify_columns]
+
+    for row_index, row in enumerate(selected.itertuples(index=False, name=None)):
+        unit = tuple(_group_value(row[position]) for position in by_positions)
+        stratum = (
+            tuple(_group_value(row[position]) for position in stratum_positions)
+            if stratify_columns
+            else ("__all__",)
+        )
+
+        if unit not in unit_rows:
+            unit_rows[unit] = []
+            unit_strata[unit] = stratum
+            stratum_units[stratum].append(unit)
+        elif unit_strata[unit] != stratum:
+            raise ArtifactError(
+                "Split assignment unit spans multiple strata. "
+                f"by={list(by_columns)!r} unit={unit!r} resolves to both "
+                f"{unit_strata[unit]!r} and {stratum!r} for "
+                f"stratify={list(stratify_columns)!r}."
+            )
+
+        unit_rows[unit].append(row_index)
+
+    rng = np.random.default_rng(random_state)
+    assignments: dict[str, list[int]] = {label: [] for label in labels}
+
+    for units in stratum_units.values():
+        order = np.arange(len(units), dtype=int)
+        rng.shuffle(order)
+        counts = _counts_from_proportions(len(units), proportions)
+        start = 0
+        for label, count in zip(labels, counts, strict=True):
+            stop = start + count
+            for unit_index in order[start:stop].tolist():
+                assignments[label].extend(unit_rows[units[int(unit_index)]])
             start = stop
 
     return assignments
@@ -394,7 +533,27 @@ def _groups_for_frame(
 
 
 def _stratum_value(value: Any) -> Any:
-    return None if pd.isna(value) else value
+    return _group_value(value)
+
+
+def _group_value(value: Any) -> Any:
+    """Normalize a scalar grouping value into a stable hashable key component."""
+
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        missing = False
+    if isinstance(missing, (bool, np.bool_)) and bool(missing):
+        return None
+
+    try:
+        hash(value)
+    except TypeError as exc:
+        raise ArtifactError(
+            "Split by/stratify columns must contain scalar hashable values; "
+            f"got {type(value).__name__}."
+        ) from exc
+    return value
 
 
 # ---------------------------------------------------------------------------

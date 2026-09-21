@@ -1161,19 +1161,27 @@ class Project:
         labels: Sequence[str] = ("train", "test"),
         proportions: Sequence[float] = (0.8, 0.2),
         random_state: int | None = None,
+        by: str | Sequence[str] | None = None,
         stratify: str | Sequence[str] | None = None,
         workers: int = 1,
         memo: str | None = None,
         alias: Mapping[str, str] | None = None,
         overwrite: bool = False,
     ) -> Mapping[str, BaseArtifact]:
-        """Split one source artifact into keys-only child artifacts."""
+        """Split one source artifact into keys-only child artifacts.
+
+        ``by`` optionally makes one or more primary-key/metadata fields the
+        assignment unit. For example, splitting a sentence artifact with
+        ``by="doc_id"`` keeps every sentence from a document in the same
+        branch without changing the sentence-level output granularity.
+        """
         return _split(
             self,
             source,
             labels=labels,
             proportions=proportions,
             random_state=random_state,
+            by=by,
             stratify=stratify,
             workers=workers,
             memo=memo,

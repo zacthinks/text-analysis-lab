@@ -224,6 +224,26 @@ UMAP persistence is explicit because fitted nearest-neighbor search state can be
 
 Structural project operations such as `subset`, `sample`, `split`, `probability_split`, `select_keys`, `restrict`, `merge`, `join`, `set_primary_keys`, `collapse_runs`, and `aggregate` create new keyed Artifacts without requiring users to manage row alignment manually.
 
+`Project.split(...)` can assign either individual rows or higher-level groups. For
+example, a sentence Artifact keyed by `doc_id, sent_id` can be split at the
+document level without first aggregating back to documents:
+
+```python
+parts = project.split(
+    sentences,
+    labels=("train", "test"),
+    proportions=(0.8, 0.2),
+    random_state=42,
+    by="doc_id",
+)
+```
+
+All sentences from one `doc_id` stay in the same branch, while the output
+Artifacts remain sentence-level. `by` may name one or more primary-key or
+metadata fields. Split proportions apply to the number of unique assignment
+units, not their row counts. `stratify=` may be combined with `by=` when every
+assignment unit belongs to exactly one stratum.
+
 For analyses computed outside TeAL, `Project.register_external(...)` can register completed results as normal lineage-aware Artifacts while keeping external execution/checkpointing responsibilities outside TeAL.
 
 ## GeCo integration
