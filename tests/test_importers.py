@@ -7,8 +7,10 @@ import pytest
 from text_analysis_lab.core.errors import ArtifactError
 from text_analysis_lab.core.importers import (
     ImportOperator,
+    _coerce_import_dtypes,
     _duckdb_source_sql,
     _inventory_paths,
+    _normalize_import_dtype,
     _plan_tabular_columns,
     _quote_duckdb_identifier,
     _validate_batch_size,
@@ -82,6 +84,62 @@ def test_tabular_column_plan_rejects_teal_structural_columns() -> None:
             ["text", "_position"],
             text_fields="_position",
             metadata_fields=None,
+        )
+
+
+def test_import_dtype_normalization_supports_scalar_and_mapping() -> None:
+    selected = ("text", "year", "score")
+
+    assert _normalize_import_dtype(None, selected_fields=selected) == {}
+    assert _normalize_import_dtype("string", selected_fields=selected) == {
+        "text": "string",
+        "year": "string",
+        "score": "string",
+    }
+    assert _normalize_import_dtype(
+        {"year": "Int64", "score": "Float64"},
+        selected_fields=selected,
+    ) == {"year": "Int64", "score": "Float64"}
+
+    with pytest.raises(ArtifactError, match="unselected field"):
+        _normalize_import_dtype(
+            {"unused": "string"},
+            selected_fields=selected,
+        )
+    with pytest.raises(ValueError, match="Unsupported import dtype"):
+        _normalize_import_dtype(
+            {"year": "definitely-not-a-dtype"},
+            selected_fields=selected,
+        )
+
+
+def test_import_dtype_coercion_is_nullable_and_strict() -> None:
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "text": ["one", None],
+            "year": ["2020", None],
+            "score": ["1.5", "2.0"],
+        }
+    )
+    coerced = _coerce_import_dtypes(
+        frame,
+        {"text": "string", "year": "Int64", "score": "Float64"},
+        context="test import",
+    )
+
+    assert str(coerced["text"].dtype) == "string"
+    assert str(coerced["year"].dtype) == "Int64"
+    assert str(coerced["score"].dtype) == "Float64"
+    assert pd.isna(coerced.loc[1, "text"])
+    assert pd.isna(coerced.loc[1, "year"])
+
+    with pytest.raises(ArtifactError, match="Could not coerce imported field 'year'"):
+        _coerce_import_dtypes(
+            pd.DataFrame({"year": ["not-an-integer"]}),
+            {"year": "Int64"},
+            context="test import",
         )
 
 

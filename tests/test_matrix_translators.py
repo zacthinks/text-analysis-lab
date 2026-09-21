@@ -40,6 +40,7 @@ FEATURES = ["alpha", "beta", "gamma", "delta", "epsilon"]
 
 def _source(kind: str = "sparse_matrix"):
     return SimpleNamespace(
+        artifact_id="art_counts",
         artifact_type=ArtifactType(kind),
         primary_key=["doc_id"],
         get_data_columns=lambda: list(FEATURES),
@@ -306,7 +307,13 @@ def test_umap_lifecycle_without_optional_runtime(monkeypatch) -> None:
             return arr[:, : self.n_components]
 
     monkeypatch.setitem(sys.modules, "umap", SimpleNamespace(UMAP=FakeUMAP))
-    translator = UMAP(n_components=2, n_neighbors=3, random_state=7)
+    translator = UMAP(
+        n_components=2,
+        n_neighbors=3,
+        random_state=7,
+        reuse="stored",
+        storage="native",
+    )
     translator.input_request(
         sources={"source": _source()},
         mode="fit_translate",
@@ -337,9 +344,7 @@ def test_umap_view_only_mode_does_not_persist_estimator(monkeypatch, tmp_path) -
             raise AssertionError("view-only UMAP should not be reusable")
 
     monkeypatch.setitem(sys.modules, "umap", SimpleNamespace(UMAP=FakeUMAP))
-    translator = UMAP(
-        n_components=2, n_neighbors=3, random_state=7, retain_estimator=False
-    )
+    translator = UMAP(n_components=2, n_neighbors=3, random_state=7, reuse="none")
     translator.input_request(
         sources={"source": _source()},
         mode="fit_translate",
@@ -359,7 +364,179 @@ def test_umap_view_only_mode_does_not_persist_estimator(monkeypatch, tmp_path) -
     restored = translator.load_from_dir(path)
     assert not restored.is_fitted
     assert not restored.supports_fit_translate
+    assert restored.reuse == "none"
+    assert restored.storage is None
     assert restored.retain_estimator is False
+
+
+def test_umap_reuse_storage_contract_validation() -> None:
+    assert UMAP().reuse == "none"
+    assert UMAP().storage is None
+
+    recompute = UMAP(reuse="recompute")
+    assert recompute.reuse == "recompute"
+    assert recompute.storage is None
+
+    stored = UMAP(reuse="stored")
+    assert stored.reuse == "stored"
+    assert stored.storage == "compact"
+
+    native = UMAP(reuse="stored", storage="native")
+    assert native.storage == "native"
+
+    with pytest.raises(ValueError, match="only applicable"):
+        UMAP(reuse="none", storage="compact")
+    with pytest.raises(ValueError, match="only applicable"):
+        UMAP(reuse="recompute", storage="native")
+    with pytest.raises(ValueError, match="reuse must be one of"):
+        UMAP(reuse="mystery")  # type: ignore[arg-type]
+
+
+def test_umap_recompute_rebuilds_from_fitting_artifact(monkeypatch) -> None:
+    class FakeUMAP:
+        fit_calls = 0
+
+        def __init__(self, *, n_components=2, **kwargs):
+            self.n_components = n_components
+            self.kwargs = kwargs
+
+        def fit_transform(self, X):
+            type(self).fit_calls += 1
+            arr = X.toarray() if sparse.issparse(X) else np.asarray(X)
+            return arr[:, : self.n_components]
+
+        def fit(self, X):
+            type(self).fit_calls += 1
+            self.seen_shape = X.shape
+            return self
+
+        def transform(self, X):
+            arr = X.toarray() if sparse.issparse(X) else np.asarray(X)
+            return arr[:, : self.n_components]
+
+    monkeypatch.setitem(sys.modules, "umap", SimpleNamespace(UMAP=FakeUMAP))
+    translator = UMAP(n_components=2, n_neighbors=3, random_state=7, reuse="recompute")
+    translator.input_request(
+        sources={"source": _source()},
+        mode="fit_translate",
+        request=TranslationRequest(),
+    )
+    translator.translate_batch(
+        {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
+    )
+    assert not translator.is_fitted
+    assert translator.fit_source_artifact_id_ == "art_counts"
+
+    class FitSource:
+        artifact_type = ArtifactType.SPARSE_MATRIX
+
+        def get_data_columns(self):
+            return list(FEATURES)
+
+        def get_matrix(self):
+            return COUNTS
+
+    class FakeProject:
+        def get_artifact(self, artifact_id):
+            assert artifact_id == "art_counts"
+            return FitSource()
+
+    translator.prepare_for_translation(
+        project=FakeProject(),  # type: ignore[arg-type]
+        sources={"source": _source()},
+    )
+    assert translator.is_fitted
+    assert FakeUMAP.fit_calls == 2
+    reused = translator.translate_batch(
+        {"source": _packet(COUNTS[:2])}, mode="translate", request=TranslationRequest()
+    )
+    assert reused.outputs["output"]["data"]["values"].shape == (2, 2)
+
+
+def test_umap_recompute_snapshot_keeps_recipe_without_estimator(
+    monkeypatch, tmp_path
+) -> None:
+    class FakeUMAP:
+        def __init__(self, *, n_components=2, **kwargs):
+            self.n_components = n_components
+
+        def fit_transform(self, X):
+            arr = X.toarray() if sparse.issparse(X) else np.asarray(X)
+            return arr[:, : self.n_components]
+
+    monkeypatch.setitem(sys.modules, "umap", SimpleNamespace(UMAP=FakeUMAP))
+    translator = UMAP(n_components=2, n_neighbors=3, reuse="recompute")
+    translator.input_request(
+        sources={"source": _source()},
+        mode="fit_translate",
+        request=TranslationRequest(),
+    )
+    translator.translate_batch(
+        {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
+    )
+
+    path = tmp_path / "umap_recompute"
+    translator.save_to_dir(path, operator_id="op_umap_recompute")
+    assert list((path / "assets").iterdir()) == []
+
+    restored = translator.load_from_dir(path)
+    assert restored.reuse == "recompute"
+    assert restored.storage is None
+    assert restored.fit_source_artifact_id_ == "art_counts"
+    assert restored.source_features_ == tuple(FEATURES)
+    assert restored._fit_completed is True
+    assert not restored.is_fitted
+
+
+def test_umap_legacy_state_maps_to_previous_persistence_semantics() -> None:
+    retained = UMAP.from_json_state(
+        {
+            "n_components": 2,
+            "n_neighbors": 15,
+            "retain_estimator": True,
+            "fit_completed": True,
+        }
+    )
+    assert retained.reuse == "stored"
+    assert retained.storage == "native"
+
+    view_only = UMAP.from_json_state(
+        {
+            "n_components": 2,
+            "n_neighbors": 15,
+            "retain_estimator": False,
+            "fit_completed": True,
+        }
+    )
+    assert view_only.reuse == "none"
+    assert view_only.storage is None
+
+
+def test_umap_none_rejects_reuse_after_fit(monkeypatch) -> None:
+    class FakeUMAP:
+        def __init__(self, *, n_components=2, **kwargs):
+            self.n_components = n_components
+
+        def fit_transform(self, X):
+            arr = X.toarray() if sparse.issparse(X) else np.asarray(X)
+            return arr[:, : self.n_components]
+
+    monkeypatch.setitem(sys.modules, "umap", SimpleNamespace(UMAP=FakeUMAP))
+    translator = UMAP(n_components=2, n_neighbors=3, reuse="none")
+    translator.input_request(
+        sources={"source": _source()},
+        mode="fit_translate",
+        request=TranslationRequest(),
+    )
+    translator.translate_batch(
+        {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
+    )
+
+    with pytest.raises(OperatorError, match="reuse='none'"):
+        translator.prepare_for_translation(
+            project=SimpleNamespace(),  # type: ignore[arg-type]
+            sources={"source": _source()},
+        )
 
 
 def test_fitted_sklearn_matrix_operators_round_trip_assets(tmp_path) -> None:

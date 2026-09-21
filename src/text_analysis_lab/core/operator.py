@@ -35,6 +35,7 @@ from text_analysis_lab.core.types import (
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
+    from text_analysis_lab.core.project import Project
 
 
 OtherDataSerializer = Callable[[Any, Path, int], Mapping[str, Any] | None]
@@ -662,6 +663,22 @@ class BaseTranslator(BaseOperator):
         """Return whether this translator can resume this mode/route safely."""
         _ = mode, route
         return False
+
+    def prepare_for_translation(
+        self,
+        *,
+        project: Project,
+        sources: Mapping[str, BaseArtifact],
+    ) -> None:
+        """Prepare transient project-bound state before TeAL selects a run mode.
+
+        Most translators need no preparation here. A frozen translator whose
+        durable contract stores a reconstruction recipe instead of fitted state
+        may use this hook to rebuild transient fitted state from immutable project
+        artifacts. The rebuilt state is runtime-only unless ``save_assets()``
+        explicitly persists it.
+        """
+        _ = project, sources
 
     def validate_operation_params(
         self,

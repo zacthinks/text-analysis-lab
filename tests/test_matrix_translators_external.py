@@ -199,7 +199,12 @@ def test_real_umap_round_trip_if_installed(tmp_path: Path) -> None:
     try:
         counts = _register_counts(project)
         op = UMAP(
-            n_components=2, n_neighbors=3, min_dist=0.1, metric="cosine", random_state=7
+            n_components=2,
+            n_neighbors=3,
+            min_dist=0.1,
+            metric="cosine",
+            random_state=7,
+            reuse="stored",
         )
         output = project.translate(op, counts)["output"]
         values = output.get_matrix()
@@ -219,6 +224,46 @@ def test_real_umap_round_trip_if_installed(tmp_path: Path) -> None:
         assert reused.get_matrix().shape == (len(VALUES), 2)
         assert np.isfinite(reused.get_matrix()).all()
         assert reopened.get_artifact(artifact_id).status == "complete"
+    finally:
+        reopened.close()
+
+
+def test_real_umap_recompute_round_trip_if_installed(tmp_path: Path) -> None:
+    pytest.importorskip("umap")
+    project_path = tmp_path / "round27_umap_recompute"
+    project = teal.Project.create(project_path, name="round27_umap_recompute")
+    try:
+        counts = _register_counts(project)
+        op = UMAP(
+            n_components=2,
+            n_neighbors=3,
+            min_dist=0.1,
+            metric="cosine",
+            random_state=7,
+            reuse="recompute",
+        )
+        project.translate(op, counts)["output"]
+        operator_id = str(op.operator_id)
+        operator_dir = project.storage.operator_dir(operator_id)
+        assert list((operator_dir / "assets").iterdir()) == []
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(project_path)
+    try:
+        recomputable = reopened.get_operator(operator_id)
+        assert recomputable.reuse == "recompute"
+        assert not recomputable.is_fitted
+        reused = reopened.translate(
+            recomputable, reopened.get_artifact("art_counts_round14"), batch_size=3
+        )["output"]
+        values = reused.get_matrix()
+        assert values.shape == (len(VALUES), 2)
+        assert np.isfinite(values).all()
+        # Refit state is transient; reopening the frozen Operator still begins
+        # from the recipe-only form.
+        again = reopened.get_operator(operator_id)
+        assert not again.is_fitted
     finally:
         reopened.close()
 

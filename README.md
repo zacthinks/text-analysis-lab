@@ -220,6 +220,8 @@ Most substantive transformations are implemented as translators. A translator co
 
 Built-in translators include count vectorization, TF-IDF, feature trimming, matrix normalization, SVD/LSA, LDA, UMAP, Word2Vec, sentence/contextual transformer encoding, linguistic models, dictionary coding, fitted prediction, and external model/API paths.
 
+UMAP persistence is explicit because fitted nearest-neighbor search state can be much larger than the resulting embedding. Visualization-only use should normally keep the default `reuse="none"`. Use `reuse="recompute"` when later transformation may refit from the immutable fitting Artifact, or `reuse="stored"` to persist transform-capable fitted state. Stored UMAPs use TeAL's exact compact format by default; `storage="native"` preserves upstream serialization and is generally discouraged for large sparse text matrices.
+
 Structural project operations such as `subset`, `sample`, `split`, `probability_split`, `select_keys`, `restrict`, `merge`, `join`, `set_primary_keys`, `collapse_runs`, and `aggregate` create new keyed Artifacts without requiring users to manage row alignment manually.
 
 For analyses computed outside TeAL, `Project.register_external(...)` can register completed results as normal lineage-aware Artifacts while keeping external execution/checkpointing responsibilities outside TeAL.

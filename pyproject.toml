@@ -11,6 +11,8 @@ requires-python = ">=3.10"
 dependencies = [
     "cloudpickle>=3.1.2",
     "duckdb>=1.5.3",
+    "numba>=0.51.2",
+    "pynndescent>=0.6,<0.7",
     "pandas>=1.4",
     "nltk>=3.9.2",
     "openpyxl>=3.1",

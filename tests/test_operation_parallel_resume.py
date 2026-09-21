@@ -391,6 +391,33 @@ class _TransientResumableTranslator(BaseTranslator):
         return obj
 
 
+def test_successful_resumable_operation_removes_checkpoint_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import text_analysis_lab as teal
+
+    _install_pickle_parquet(monkeypatch)
+    rows = pd.DataFrame({"id": list(range(4))})
+    _install_fake_source_queries(monkeypatch, rows)
+    project = teal.Project.create(tmp_path / "project", name="cleanup_project")
+    try:
+        source = _seed_source_artifact(project, rows)
+        translator = _TransientResumableTranslator(
+            str(tmp_path / "never-fail"), fail_unit=999
+        )
+        outputs = project.translate(translator, source, batch_size=2, workers=1)
+        assert outputs["output"].status == "complete"
+
+        operation_id = str(project.catalog.list_operations()[-1]["operation_id"])
+        assert project.catalog.get_operation(operation_id)["status"] == "complete"
+        temp = project.storage.operation_temp_dir(operation_id)
+        assert not temp.exists()
+        assert not temp.with_name("temp.__staging__").exists()
+        assert not temp.with_name("temp.__previous__").exists()
+    finally:
+        project.close()
+
+
 def test_sequential_resume_retries_first_failed_unit_without_redoing_completed_work(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -411,12 +438,24 @@ def test_sequential_resume_retries_first_failed_unit_without_redoing_completed_w
         operation = project.catalog.list_operations()[-1]
         operation_id = str(operation["operation_id"])
         assert operation["status"] == "failed"
+        assert project.storage.operation_temp_dir(operation_id).exists()
 
         outputs = project.resume_operation(operation_id)
         output = outputs["output"]
         assert output.status == "complete"
         assert output.n_rows == 6
         assert project.catalog.get_operation(operation_id)["status"] == "complete"
+        assert not project.storage.operation_temp_dir(operation_id).exists()
+        assert (
+            not project.storage.operation_temp_dir(operation_id)
+            .with_name("temp.__staging__")
+            .exists()
+        )
+        assert (
+            not project.storage.operation_temp_dir(operation_id)
+            .with_name("temp.__previous__")
+            .exists()
+        )
     finally:
         project.close()
 

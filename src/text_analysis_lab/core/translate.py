@@ -348,6 +348,7 @@ def translate(
 ) -> Mapping[str, BaseArtifact]:
     """Run a new TeAL translation operation and return output artifacts by label."""
     source_bindings = _resolve_sources(project, sources)
+    translator.prepare_for_translation(project=project, sources=source_bindings)
     mode = _select_mode(translator)
     operation_params = translator.validate_operation_params(
         params,
@@ -534,6 +535,7 @@ def resume_translate(
         str(label): project.get_artifact(str(artifact_id))
         for label, artifact_id in raw_sources.items()
     }
+    translator.prepare_for_translation(project=project, sources=source_bindings)
     _validate_source_bindings(source_bindings, input_request)
     raw_output_specs = metadata.get("output_specs")
     if not isinstance(raw_output_specs, Mapping):
@@ -1967,6 +1969,33 @@ def _complete_runtime(project: Project, runtime: _Runtime) -> None:
         project.catalog.mark_artifact_complete(runtime.output_artifact_ids[label])
     _update_operation_metadata_status(runtime, "complete")
     project.catalog.mark_operation_complete(runtime.operation_id)
+    _cleanup_completed_operation_temp(runtime)
+
+
+def _cleanup_completed_operation_temp(runtime: _Runtime) -> None:
+    """Remove resumable working state after an operation is durably complete."""
+    paths = (
+        runtime.operation_temp_dir,
+        runtime.operation_temp_dir.with_name(
+            f"{runtime.operation_temp_dir.name}.__staging__"
+        ),
+        runtime.operation_temp_dir.with_name(
+            f"{runtime.operation_temp_dir.name}.__previous__"
+        ),
+    )
+    for path in paths:
+        try:
+            _remove_checkpoint_tree(path)
+        except OSError as exc:
+            # Completion is already authoritative in the catalog. A transient
+            # Windows handle must not convert committed outputs into a failed
+            # operation, but surface the stale working tree loudly.
+            warnings.warn(
+                f"Operation {runtime.operation_id} completed, but TeAL could not "
+                f"remove checkpoint state at {path}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
 
 def _fail_runtime(project: Project, runtime: _Runtime, error: Exception) -> None:

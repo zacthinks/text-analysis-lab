@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 
 TabularFormat = Literal["csv", "jsonl", "parquet"]
 ExcelSheetSelector = int | str
+ImportDType = str | Mapping[str, str] | None
 _MISSING_FIELDS_ERROR = object()
 _IMPORT_KINDS = frozenset(
     {
@@ -104,6 +105,7 @@ def read_csv(
     *,
     text_fields: str | Sequence[str],
     metadata_fields: str | Sequence[str] | None,
+    dtype: ImportDType = None,
     batch_size: int = 10_000,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     duckdb_options: Mapping[str, Any] | None = None,
@@ -113,7 +115,8 @@ def read_csv(
 
     TeAL always assigns a new 0-based integer ``row_id`` primary key. Only
     ``text_fields`` and ``metadata_fields`` are imported; all other source fields
-    are discarded.
+    are discarded. ``dtype`` may be a pandas dtype string applied to every
+    selected field or a mapping from selected field names to dtype strings.
     """
     return _read_tabular(
         project,
@@ -121,6 +124,7 @@ def read_csv(
         format="csv",
         text_fields=text_fields,
         metadata_fields=metadata_fields,
+        dtype=dtype,
         batch_size=batch_size,
         output_label=output_label,
         duckdb_options=duckdb_options,
@@ -134,6 +138,7 @@ def read_csv_folder(
     *,
     text_fields: str | Sequence[str],
     metadata_fields: str | Sequence[str] | None,
+    dtype: ImportDType = None,
     pattern: str = "*.csv",
     recursive: bool = True,
     batch_size: int = 10_000,
@@ -148,7 +153,9 @@ def read_csv_folder(
     global 0-based ``row_id`` across the combined corpus and attaches exactly two
     generic provenance metadata fields: ``source_file`` (the relative path below
     ``root``) and zero-based ``source_row`` within that CSV. Corpus-specific
-    interpretation of filenames belongs in later TeAL transformations.
+    interpretation of filenames belongs in later TeAL transformations. ``dtype``
+    may be a pandas dtype string applied to every selected source field or a
+    mapping from selected field names to dtype strings.
     """
     root_path = _validate_folder_root(root)
     if not isinstance(pattern, str) or not pattern:
@@ -166,6 +173,7 @@ def read_csv_folder(
         paths,
         text_fields=text_fields,
         metadata_fields=metadata_fields,
+        dtype=dtype,
         provenance_fields=provenance_fields,
         pattern=pattern,
         recursive=recursive,
@@ -182,6 +190,7 @@ def read_excel(
     *,
     text_fields: str | Sequence[str],
     metadata_fields: str | Sequence[str] | None,
+    dtype: ImportDType = None,
     sheets: ExcelSheetSelector | Sequence[ExcelSheetSelector] | None = None,
     header_row: int = 0,
     missing_fields: Any = _MISSING_FIELDS_ERROR,
@@ -200,6 +209,9 @@ def read_excel(
     Requested fields must exist on every selected sheet by default. Supplying
     ``missing_fields`` fills any absent requested field with that scalar value;
     explicitly passing ``None`` therefore fills missing fields with nulls.
+    ``dtype`` may be a pandas dtype string applied to every selected field or a
+    mapping from selected field names to dtype strings. Excel coercion is applied
+    to raw cell values before pandas type inference.
     """
     source_path = _validate_excel_source_file(path)
     return _read_excel_files(
@@ -208,6 +220,7 @@ def read_excel(
         paths=[source_path],
         text_fields=text_fields,
         metadata_fields=metadata_fields,
+        dtype=dtype,
         sheets=sheets,
         header_row=header_row,
         missing_fields=missing_fields,
@@ -225,6 +238,7 @@ def read_excel_folder(
     *,
     text_fields: str | Sequence[str],
     metadata_fields: str | Sequence[str] | None,
+    dtype: ImportDType = None,
     sheets: ExcelSheetSelector | Sequence[ExcelSheetSelector] | None = None,
     header_row: int = 0,
     missing_fields: Any = _MISSING_FIELDS_ERROR,
@@ -240,6 +254,8 @@ def read_excel_folder(
     selected sheets are traversed in caller-requested order, or workbook order
     when ``sheets=None``. Generic provenance metadata are ``source_file``,
     ``source_sheet``, ``source_sheet_index``, and zero-based ``source_row``.
+    ``dtype`` follows the same scalar-or-mapping coercion contract as
+    :func:`read_excel`.
     """
     root_path = _validate_folder_root(root)
     if not isinstance(pattern, str) or not pattern:
@@ -258,6 +274,7 @@ def read_excel_folder(
         paths=paths,
         text_fields=text_fields,
         metadata_fields=metadata_fields,
+        dtype=dtype,
         sheets=sheets,
         header_row=header_row,
         missing_fields=missing_fields,
@@ -275,6 +292,7 @@ def read_jsonl(
     *,
     text_fields: str | Sequence[str],
     metadata_fields: str | Sequence[str] | None,
+    dtype: ImportDType = None,
     batch_size: int = 10_000,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     duckdb_options: Mapping[str, Any] | None = None,
@@ -284,7 +302,8 @@ def read_jsonl(
 
     TeAL always assigns a new 0-based integer ``row_id`` primary key. Only
     ``text_fields`` and ``metadata_fields`` are imported; all other source fields
-    are discarded.
+    are discarded. ``dtype`` may be a pandas dtype string applied to every
+    selected field or a mapping from selected field names to dtype strings.
     """
     options = dict(duckdb_options or {})
     if "format" in options:
@@ -297,6 +316,7 @@ def read_jsonl(
         format="jsonl",
         text_fields=text_fields,
         metadata_fields=metadata_fields,
+        dtype=dtype,
         batch_size=batch_size,
         output_label=output_label,
         duckdb_options=options,
@@ -310,6 +330,7 @@ def read_parquet(
     *,
     text_fields: str | Sequence[str],
     metadata_fields: str | Sequence[str] | None,
+    dtype: ImportDType = None,
     batch_size: int = 10_000,
     output_label: str = DEFAULT_OUTPUT_LABEL,
     duckdb_options: Mapping[str, Any] | None = None,
@@ -319,7 +340,8 @@ def read_parquet(
 
     TeAL always assigns a new 0-based integer ``row_id`` primary key. Only
     ``text_fields`` and ``metadata_fields`` are imported; all other source fields
-    are discarded.
+    are discarded. ``dtype`` may be a pandas dtype string applied to every
+    selected field or a mapping from selected field names to dtype strings.
     """
     return _read_tabular(
         project,
@@ -327,6 +349,7 @@ def read_parquet(
         format="parquet",
         text_fields=text_fields,
         metadata_fields=metadata_fields,
+        dtype=dtype,
         batch_size=batch_size,
         output_label=output_label,
         duckdb_options=duckdb_options,
@@ -414,6 +437,7 @@ def _read_csv_files(
     *,
     text_fields: str | Sequence[str],
     metadata_fields: str | Sequence[str] | None,
+    dtype: ImportDType,
     provenance_fields: Mapping[str, str],
     pattern: str,
     recursive: bool,
@@ -457,6 +481,10 @@ def _read_csv_files(
             text_fields=text_fields,
             metadata_fields=metadata_fields,
         )
+        dtype_map = _normalize_import_dtype(
+            dtype,
+            selected_fields=(*plan["text_fields"], *plan["metadata_fields"]),
+        )
         collisions = sorted(
             set(source_columns).intersection(provenance_fields.values())
         )
@@ -494,6 +522,8 @@ def _read_csv_files(
                 for name, dtype in zip(source_columns, source_types, strict=True)
             ],
         }
+        if dtype_map:
+            request["dtype"] = dict(dtype_map)
         external_source = {
             "kind": "folder",
             "path": str(root),
@@ -511,6 +541,11 @@ def _read_csv_files(
                 frame = record_batch.to_pandas().reset_index(drop=True)
                 if frame.empty:
                     continue
+                frame = _coerce_import_dtypes(
+                    frame,
+                    dtype_map,
+                    context="CSV folder import",
+                )
                 keys = pd.DataFrame(
                     {
                         "row_id": np.arange(
@@ -566,6 +601,7 @@ def _read_excel_files(
     paths: Sequence[Path],
     text_fields: str | Sequence[str],
     metadata_fields: str | Sequence[str] | None,
+    dtype: ImportDType,
     sheets: ExcelSheetSelector | Sequence[ExcelSheetSelector] | None,
     header_row: int,
     missing_fields: Any,
@@ -586,6 +622,10 @@ def _read_excel_files(
         raise ValueError("text_fields must contain at least one source column.")
     metadata = _normalize_column_names(metadata_fields, name="metadata_fields")
     _validate_selected_field_names(text, metadata)
+    dtype_map = _normalize_import_dtype(
+        dtype,
+        selected_fields=(*text, *metadata),
+    )
 
     provenance_fields = ["source_sheet", "source_sheet_index", "source_row"]
     if root is not None:
@@ -690,6 +730,8 @@ def _read_excel_files(
         "formula_policy": "cached_values",
         "detected_sheets": inspections,
     }
+    if dtype_map:
+        common_request["dtype"] = dict(dtype_map)
     if root is None:
         source_path = paths[0]
         request = {"path": str(source_path), **common_request}
@@ -755,7 +797,14 @@ def _read_excel_files(
                         nonlocal next_row_id, batch_rows, batch_source_rows
                         if not batch_rows:
                             return None
-                        frame = pd.DataFrame(batch_rows, columns=[*text, *metadata])
+                        frame = _frame_from_import_rows(
+                            batch_rows,
+                            columns=[*text, *metadata],
+                            dtype_map=dtype_map,
+                            context=(
+                                f"Excel source {str(path)!r}, sheet {sheet_name!r}"
+                            ),
+                        )
                         count = len(frame)
                         keys = pd.DataFrame(
                             {
@@ -1007,6 +1056,7 @@ def _read_tabular(
     format: TabularFormat,
     text_fields: str | Sequence[str],
     metadata_fields: str | Sequence[str] | None,
+    dtype: ImportDType,
     batch_size: int,
     output_label: str,
     duckdb_options: Mapping[str, Any] | None,
@@ -1029,6 +1079,10 @@ def _read_tabular(
             columns,
             text_fields=text_fields,
             metadata_fields=metadata_fields,
+        )
+        dtype_map = _normalize_import_dtype(
+            dtype,
+            selected_fields=(*plan["text_fields"], *plan["metadata_fields"]),
         )
 
         selected_fields = (*plan["text_fields"], *plan["metadata_fields"])
@@ -1054,6 +1108,8 @@ def _read_tabular(
                 for name, dtype in zip(columns, duckdb_types, strict=True)
             ],
         }
+        if dtype_map:
+            request["dtype"] = dict(dtype_map)
         stat = source_path.stat()
         external_source = {
             "kind": "file",
@@ -1071,6 +1127,11 @@ def _read_tabular(
                 frame = record_batch.to_pandas().reset_index(drop=True)
                 if frame.empty:
                     continue
+                frame = _coerce_import_dtypes(
+                    frame,
+                    dtype_map,
+                    context=f"{format.upper()} import {str(source_path)!r}",
+                )
                 keys = pd.DataFrame(
                     {
                         "row_id": np.arange(
@@ -1268,6 +1329,127 @@ def _plan_tabular_columns(
         "metadata_fields": tuple(metadata),
         "discarded_fields": discarded,
     }
+
+
+def _normalize_import_dtype(
+    dtype: ImportDType,
+    *,
+    selected_fields: Sequence[str],
+) -> dict[str, str]:
+    """Normalize an optional import-time dtype coercion specification.
+
+    ``None`` preserves the source reader's normal inferred/native types. A scalar
+    dtype string applies to every selected source field, while a mapping applies
+    only to the named selected fields. Dtype names follow pandas ``astype``
+    conventions so nullable dtypes such as ``string``, ``Int64``, ``Float64``,
+    and ``boolean`` are supported.
+
+    The normalized result is deliberately a plain string mapping so it can be
+    recorded directly in operation provenance.
+    """
+    selected = tuple(str(field) for field in selected_fields)
+    selected_set = set(selected)
+
+    if dtype is None:
+        return {}
+
+    if isinstance(dtype, str):
+        target = _validate_import_dtype_name(dtype)
+        return {field: target for field in selected}
+
+    if not isinstance(dtype, Mapping):
+        raise TypeError(
+            "dtype must be a dtype string, a mapping of selected field names to "
+            "dtype strings, or None."
+        )
+
+    normalized: dict[str, str] = {}
+    for raw_field, raw_target in dtype.items():
+        if not isinstance(raw_field, str) or not raw_field:
+            raise TypeError("dtype mapping keys must be non-empty field-name strings.")
+        if raw_field not in selected_set:
+            raise ArtifactError(
+                f"dtype specifies unselected field {raw_field!r}; selected source "
+                f"fields are {list(selected)}."
+            )
+        if not isinstance(raw_target, str):
+            raise TypeError(
+                f"dtype for field {raw_field!r} must be a dtype string, got "
+                f"{type(raw_target).__name__}."
+            )
+        normalized[raw_field] = _validate_import_dtype_name(raw_target)
+    return normalized
+
+
+def _validate_import_dtype_name(value: str) -> str:
+    target = str(value).strip()
+    if not target:
+        raise ValueError("dtype strings cannot be empty.")
+    try:
+        pd.api.types.pandas_dtype(target)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Unsupported import dtype {target!r}.") from exc
+    return target
+
+
+def _coerce_import_dtypes(
+    frame: pd.DataFrame,
+    dtype_map: Mapping[str, str],
+    *,
+    context: str,
+) -> pd.DataFrame:
+    """Apply strict import-time dtype coercions before artifact materialization."""
+    if not dtype_map:
+        return frame
+
+    result = frame.copy()
+    for field, target in dtype_map.items():
+        if field not in result.columns:
+            raise ArtifactError(
+                f"Import dtype coercion expected field {field!r} in {context}, but "
+                f"available columns are {list(result.columns)}."
+            )
+        try:
+            result[field] = result[field].astype(target)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ArtifactError(
+                f"Could not coerce imported field {field!r} to dtype {target!r} "
+                f"in {context}: {exc}"
+            ) from exc
+    return result
+
+
+def _frame_from_import_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    columns: Sequence[str],
+    dtype_map: Mapping[str, str],
+    context: str,
+) -> pd.DataFrame:
+    """Build a frame while applying dtypes to raw values before pandas inference.
+
+    Excel cells arrive as Python objects (for example ``datetime.time`` or
+    integers). Constructing an untyped DataFrame first can coerce those values
+    (for example ``7`` plus a missing value becomes ``7.0``), which loses the
+    source representation before a later string cast. This helper assigns typed
+    arrays from the original cell values instead.
+    """
+    frame = pd.DataFrame(rows, columns=list(columns))
+    if not dtype_map:
+        return frame
+
+    for field, target in dtype_map.items():
+        try:
+            frame[field] = pd.Series(
+                [row.get(field) for row in rows],
+                dtype=target,
+            )
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ArtifactError(
+                f"Could not coerce imported field {field!r} to dtype {target!r} "
+                f"in {context}: {exc}"
+            ) from exc
+    return frame
 
 
 def _quote_duckdb_identifier(value: str) -> str:
