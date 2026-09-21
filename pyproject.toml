@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "text-analysis-lab"
-version = "0.1.0"
+version = "0.2.0"
 description = "Persistent, lineage-aware workflows for reproducible text analysis"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -104,3 +104,6 @@ pythonpath = ["src"]
 
 [tool.setuptools.package-data]
 "text_analysis_lab.linguistics" = ["resources/*.json"]
+
+[project.scripts]
+teal = "text_analysis_lab.cli:main"

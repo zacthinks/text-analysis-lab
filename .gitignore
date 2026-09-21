@@ -29,3 +29,6 @@ Thumbs.db
 
 # Local dependency resolution
 uv.lock
+
+# Dev
+/_*/

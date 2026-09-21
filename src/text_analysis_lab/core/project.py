@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from text_analysis_lab.core.aggregate import (
     AggregateField,
@@ -113,6 +113,9 @@ from text_analysis_lab.core.types import (
     QueryForm,
 )
 
+if TYPE_CHECKING:
+    from text_analysis_lab.gui import ProjectCenterServer
+
 
 class Project:
     """Persistent TeAL workspace.
@@ -153,6 +156,7 @@ class Project:
         self.catalog = ProjectCatalog(self.storage.catalog_dir)
         self.query = QueryEngine(self)
         self._geco_manager = None
+        self._project_centers: list[ProjectCenterServer] = []
         self._closed = False
 
     def __enter__(self) -> Project:  # noqa: PYI034 - keep Python 3.10 base deps minimal
@@ -207,6 +211,10 @@ class Project:
             return
         if self._geco_manager is not None:
             self._geco_manager.close()
+        for project_center in self._project_centers:
+            with suppress(Exception):
+                project_center.close()
+        self._project_centers.clear()
         self.query.close()
         self.catalog.close()
         self._closed = True
@@ -530,6 +538,72 @@ class Project:
         if row is None:
             raise KeyError(f"No standalone memo found for target_id={target_id!r}.")
         return str(row["body"])
+
+    def _launch_project_center(
+        self,
+        *,
+        initial_tab: str,
+        port: int,
+        open_browser: bool,
+    ) -> ProjectCenterServer:
+        from text_analysis_lab.gui import launch_project_center
+
+        project_center = launch_project_center(
+            catalog_dir=self.storage.catalog_dir,
+            project_name=self.name,
+            manifest_path=self.storage.manifest_path,
+            initial_tab=initial_tab,
+            port=port,
+            open_browser=open_browser,
+        )
+        self._project_centers.append(project_center)
+        print(f"TeAL Project Center running at {project_center.url_for(initial_tab)}")
+        return project_center
+
+    def launch_project_center(
+        self,
+        *,
+        port: int = 0,
+        open_browser: bool = True,
+    ) -> ProjectCenterServer:
+        """Launch the local TeAL Project Center on its Artifacts tab.
+
+        The Project Center is TeAL's localhost-only interactive interface. The
+        returned handle exposes ``url`` and ``close()`` and is closed
+        automatically when the project closes. ``port=0`` asks the operating
+        system to choose an available local port.
+        """
+        return self._launch_project_center(
+            initial_tab="artifacts",
+            port=port,
+            open_browser=open_browser,
+        )
+
+    def launch_memo_center(
+        self,
+        *,
+        port: int = 0,
+        open_browser: bool = True,
+    ) -> ProjectCenterServer:
+        """Launch the TeAL Project Center directly on its Memos tab."""
+        return self._launch_project_center(
+            initial_tab="memos",
+            port=port,
+            open_browser=open_browser,
+        )
+
+    def launch_artifact_map(
+        self,
+        *,
+        port: int = 0,
+        open_browser: bool = True,
+    ) -> ProjectCenterServer:
+        """Launch the TeAL Project Center directly on its Artifacts tab."""
+        return self._launch_project_center(
+            initial_tab="artifacts",
+            port=port,
+            open_browser=open_browser,
+        )
 
     # ------------------------------------------------------------------
     # Execution facades
