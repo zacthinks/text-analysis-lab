@@ -694,6 +694,12 @@ def _operation_detail_payload(
         operator_aliases = catalog.aliases_for_operator(operator_id)
         operator_use_count = len(catalog.operations_using_operator(operator_id))
         display_label = _operation_graph_label(catalog, operation, operation_dir)
+        operation_memo = catalog.get_memo(
+            target_type="operation", target_id=operation_id
+        )
+        operator_memo = catalog.get_memo(
+            target_type="operator", target_id=operator_id
+        )
 
     operator_dir = teal_dir / "operators" / operator_id
     operation_size = _directory_size(operation_dir)
@@ -712,6 +718,8 @@ def _operation_detail_payload(
         "operator_size_bytes": operator_size,
         "operator_size_display": _format_bytes(operator_size),
         "operator_descriptor_available": (operator_dir / "operator.json").is_file(),
+        "operation_memo": operation_memo,
+        "operator_memo": operator_memo,
     }
 
 
@@ -1222,6 +1230,8 @@ const app = {
   artifactDetail: null,
   operationDetail: null,
   artifactMemoBaseline: {title: '', body: ''},
+  operationMemoBaseline: {title: '', body: ''},
+  operatorMemoBaseline: {title: '', body: ''},
   artifactDescriptor: null,
   operationDescriptor: null,
   operatorDescriptor: null,
@@ -1242,7 +1252,7 @@ function setStatus(message, error = false) {
   $('status').className = error ? 'global-status error' : 'global-status';
 }
 async function endSession() {
-  const dirty = memoIsDirty() || artifactMemoIsDirty();
+  const dirty = memoIsDirty() || inspectorMemoIsDirty();
   const prompt = dirty
     ? 'You have unsaved changes. End this Project Center session and discard them?'
     : 'End this Project Center session?';
@@ -1280,11 +1290,20 @@ function artifactMemoIsDirty() {
   if (!title || !body) return false;
   return title.value !== app.artifactMemoBaseline.title || body.value !== app.artifactMemoBaseline.body;
 }
+function operationMemoIsDirty() {
+  return inspectorTargetMemoIsDirty('operation');
+}
+function operatorMemoIsDirty() {
+  return inspectorTargetMemoIsDirty('operator');
+}
+function inspectorMemoIsDirty() {
+  return artifactMemoIsDirty() || operationMemoIsDirty() || operatorMemoIsDirty();
+}
 function confirmMemoDiscard() {
   return !memoIsDirty() || window.confirm('Discard unsaved memo changes?');
 }
 function confirmArtifactMemoDiscard() {
-  return !artifactMemoIsDirty() || window.confirm('Discard unsaved artifact memo changes?');
+  return !inspectorMemoIsDirty() || window.confirm('Discard unsaved inspector memo changes?');
 }
 function setMemoBaseline(title, body) {
   app.memoBaseline = {title: title || '', body: body || ''};
@@ -1869,6 +1888,7 @@ function renderOperationDetail() {
   const actionRow = document.createElement('div'); actionRow.className = 'artifact-actions';
   const operationDetailsButton = document.createElement('button'); operationDetailsButton.textContent = 'Load operation details'; operationDetailsButton.disabled = !detail.descriptor_available; operationDetailsButton.addEventListener('click', loadOperationJson); actionRow.appendChild(operationDetailsButton);
   const operationJsonBox = document.createElement('section'); operationJsonBox.className = 'artifact-json'; operationJsonBox.id = 'operationJsonBox'; operationJsonBox.hidden = true;
+  const operationMemoBox = document.createElement('section'); operationMemoBox.className = 'artifact-memo'; operationMemoBox.id = 'operationMemoBox';
 
   const operatorSection = document.createElement('section'); operatorSection.className = 'inspector-section';
   const operatorHeading = document.createElement('h3'); operatorHeading.textContent = 'Operator';
@@ -1883,9 +1903,12 @@ function renderOperationDetail() {
   const operatorActions = document.createElement('div'); operatorActions.className = 'artifact-actions';
   const operatorDetailsButton = document.createElement('button'); operatorDetailsButton.textContent = 'Load operator details'; operatorDetailsButton.disabled = !detail.operator_descriptor_available; operatorDetailsButton.addEventListener('click', loadOperatorJson); operatorActions.appendChild(operatorDetailsButton);
   const operatorJsonBox = document.createElement('section'); operatorJsonBox.className = 'artifact-json'; operatorJsonBox.id = 'operatorJsonBox'; operatorJsonBox.hidden = true;
-  operatorSection.append(operatorHeading, operatorDl, operatorActions, operatorJsonBox);
+  const operatorMemoBox = document.createElement('section'); operatorMemoBox.className = 'artifact-memo'; operatorMemoBox.id = 'operatorMemoBox';
+  operatorSection.append(operatorHeading, operatorDl, operatorActions, operatorJsonBox, operatorMemoBox);
 
-  container.append(heading, badges, dl, actionRow, operationJsonBox, operatorSection);
+  container.append(heading, badges, dl, actionRow, operationJsonBox, operationMemoBox, operatorSection);
+  renderInspectorTargetMemo('operation');
+  renderInspectorTargetMemo('operator');
 }
 async function loadOperationJson() {
   if (!app.selectedOperation) return;
@@ -2052,6 +2075,128 @@ function previewCell(value) {
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }
+function inspectorTargetMemoConfig(kind) {
+  if (kind === 'operation') {
+    return {
+      kind,
+      heading: 'Operation memo',
+      boxId: 'operationMemoBox',
+      prefix: 'operationMemo',
+      targetType: 'operation',
+      targetId: app.selectedOperation,
+      memoKey: 'operation_memo',
+      baselineKey: 'operationMemoBaseline',
+    };
+  }
+  if (kind === 'operator') {
+    return {
+      kind,
+      heading: 'Operator memo',
+      boxId: 'operatorMemoBox',
+      prefix: 'operatorMemo',
+      targetType: 'operator',
+      targetId: app.operationDetail?.operator?.operator_id || null,
+      memoKey: 'operator_memo',
+      baselineKey: 'operatorMemoBaseline',
+    };
+  }
+  throw new Error(`Unknown inspector memo kind: ${kind}`);
+}
+function inspectorTargetMemoIsDirty(kind) {
+  const config = inspectorTargetMemoConfig(kind);
+  const title = $(`${config.prefix}Title`);
+  const body = $(`${config.prefix}Body`);
+  if (!title || !body) return false;
+  const baseline = app[config.baselineKey];
+  return title.value !== baseline.title || body.value !== baseline.body;
+}
+function setInspectorTargetMemoBaseline(kind, title, body) {
+  const config = inspectorTargetMemoConfig(kind);
+  app[config.baselineKey] = {title: title || '', body: body || ''};
+}
+function renderInspectorTargetMemo(kind) {
+  const config = inspectorTargetMemoConfig(kind);
+  const box = $(config.boxId);
+  if (!box || !app.operationDetail || !config.targetId) return;
+  const memo = app.operationDetail[config.memoKey];
+  box.innerHTML = '';
+  const heading = document.createElement('h3'); heading.textContent = config.heading; box.appendChild(heading);
+  if (!memo) {
+    const text = document.createElement('div'); text.className = 'empty'; text.textContent = `No memo has been created for this ${kind}.`;
+    const button = document.createElement('button'); button.className = 'primary'; button.textContent = 'Add Memo'; button.addEventListener('click', () => showInspectorTargetMemoEditor(kind, null));
+    box.append(text, button);
+    setInspectorTargetMemoBaseline(kind, '', '');
+    return;
+  }
+  showInspectorTargetMemoEditor(kind, memo);
+}
+function showInspectorTargetMemoEditor(kind, memo, resetBaseline = true) {
+  const config = inspectorTargetMemoConfig(kind);
+  const box = $(config.boxId);
+  if (!box) return;
+  box.innerHTML = '';
+  const heading = document.createElement('h3'); heading.textContent = config.heading;
+  const title = document.createElement('input'); title.id = `${config.prefix}Title`; title.placeholder = 'Optional title'; title.value = memo?.title || '';
+  const body = document.createElement('textarea'); body.id = `${config.prefix}Body`; body.placeholder = `Write ${kind} memo in Markdown...`; body.value = memo?.body || '';
+  const preview = document.createElement('div'); preview.id = `${config.prefix}PreviewPane`; preview.className = 'preview markdown-body'; preview.hidden = true;
+  const modes = document.createElement('div'); modes.className = 'editor-mode';
+  const raw = document.createElement('button'); raw.id = `${config.prefix}Raw`; raw.className = 'active'; raw.textContent = 'Markdown';
+  const previewButton = document.createElement('button'); previewButton.id = `${config.prefix}Preview`; previewButton.textContent = 'Preview';
+  raw.addEventListener('click', () => setInspectorTargetMemoMode(kind, 'raw'));
+  previewButton.addEventListener('click', () => setInspectorTargetMemoMode(kind, 'preview'));
+  modes.append(raw, previewButton);
+  const actions = document.createElement('div'); actions.className = 'artifact-memo-actions';
+  if (memo) {
+    const history = document.createElement('button'); history.textContent = 'History'; history.addEventListener('click', () => showInspectorTargetMemoHistory(kind)); actions.appendChild(history);
+  }
+  const save = document.createElement('button'); save.className = 'primary'; save.textContent = 'Save'; save.addEventListener('click', () => saveInspectorTargetMemo(kind)); actions.appendChild(save);
+  box.append(heading, title, modes, body, preview, actions);
+  if (resetBaseline) setInspectorTargetMemoBaseline(kind, title.value, body.value);
+}
+function setInspectorTargetMemoMode(kind, mode) {
+  const config = inspectorTargetMemoConfig(kind);
+  const body = $(`${config.prefix}Body`); const preview = $(`${config.prefix}PreviewPane`);
+  if (!body || !preview) return;
+  const showPreview = mode === 'preview';
+  $(`${config.prefix}Raw`).classList.toggle('active', !showPreview);
+  $(`${config.prefix}Preview`).classList.toggle('active', showPreview);
+  body.hidden = showPreview; preview.hidden = !showPreview;
+  if (showPreview) preview.innerHTML = renderMarkdown(body.value);
+}
+async function saveInspectorTargetMemo(kind) {
+  const config = inspectorTargetMemoConfig(kind);
+  const title = $(`${config.prefix}Title`); const body = $(`${config.prefix}Body`);
+  if (!title || !body || !body.value.trim()) { setStatus(`${config.heading} body cannot be empty.`, true); return; }
+  try {
+    const payload = await api('/api/save', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({target_type: config.targetType, target_id: config.targetId, title: title.value || null, body: body.value})
+    });
+    app.operationDetail[config.memoKey] = payload.memo;
+    setInspectorTargetMemoBaseline(kind, payload.memo.title || '', payload.memo.body || '');
+    await loadState(true);
+    renderOperationDetail();
+    setStatus(`Saved ${kind} memo version ${payload.memo.memo_id}.`);
+  } catch (error) { setStatus(error.message, true); }
+}
+async function showInspectorTargetMemoHistory(kind) {
+  const config = inspectorTargetMemoConfig(kind);
+  const memo = app.operationDetail?.[config.memoKey];
+  if (!memo || !config.targetId) return;
+  try {
+    const params = new URLSearchParams({target_type: config.targetType, target_id: config.targetId});
+    const payload = await api(`/api/history?${params}`);
+    const choices = payload.versions.map((version, index) => `${index}: ${index === 0 ? 'Current' : `Previous ${index}`} — ${formatWhen(version.created_at)}`).join('\n');
+    const raw = window.prompt(`${config.heading} versions:\n${choices}\n\nEnter a version number to load:`, '0');
+    if (raw === null) return;
+    const index = Number(raw);
+    if (!Number.isInteger(index) || index < 0 || index >= payload.versions.length) { setStatus('Invalid history selection.', true); return; }
+    if (!confirmArtifactMemoDiscard()) return;
+    showInspectorTargetMemoEditor(kind, payload.versions[index], false);
+    setStatus(index === 0 ? `Current ${kind} memo loaded.` : `Loaded historical ${kind} memo version ${payload.versions[index].memo_id}; Save to restore it as a new version.`);
+  } catch (error) { setStatus(error.message, true); }
+}
+
 function renderArtifactMemo() {
   const box = $('artifactMemoBox');
   const memo = app.artifactDetail.memo;
@@ -2164,11 +2309,17 @@ window.addEventListener('keydown', event => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
     event.preventDefault();
     if (activeTab() === 'memos') saveMemo();
-    else if (activeTab() === 'artifacts' && $('artifactMemoBody')) saveArtifactMemo();
+    else if (activeTab() === 'artifacts') {
+      const active = document.activeElement;
+      if ($('operationMemoBox')?.contains(active) && $('operationMemoBody')) saveInspectorTargetMemo('operation');
+      else if ($('operatorMemoBox')?.contains(active) && $('operatorMemoBody')) saveInspectorTargetMemo('operator');
+      else if ($('artifactMemoBody')) saveArtifactMemo();
+      else if ($('operationMemoBody')) saveInspectorTargetMemo('operation');
+    }
   }
 });
 window.addEventListener('beforeunload', event => {
-  if (!app.sessionEnding && (memoIsDirty() || artifactMemoIsDirty())) { event.preventDefault(); event.returnValue = ''; }
+  if (!app.sessionEnding && (memoIsDirty() || inspectorMemoIsDirty())) { event.preventDefault(); event.returnValue = ''; }
 });
 
 Promise.all([loadState(false), loadArtifactGraph(false)]).then(() => {
