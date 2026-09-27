@@ -697,9 +697,7 @@ def _operation_detail_payload(
         operation_memo = catalog.get_memo(
             target_type="operation", target_id=operation_id
         )
-        operator_memo = catalog.get_memo(
-            target_type="operator", target_id=operator_id
-        )
+        operator_memo = catalog.get_memo(target_type="operator", target_id=operator_id)
 
     operator_dir = teal_dir / "operators" / operator_id
     operation_size = _directory_size(operation_dir)

@@ -1718,26 +1718,54 @@ class BaseArtifact(ABC):
             form="table",
         )
 
-    def get_previous(self, key: Any, n: int = 1, **kwargs: Any) -> pd.DataFrame:
+    def get_previous(
+        self,
+        key: Any,
+        n: int = 1,
+        *,
+        context_artifact: BaseArtifact | str | None = None,
+        key_columns: ColumnSelect = True,
+        data_columns: ColumnSelect = True,
+        metadata_columns: ColumnSelect = False,
+        metadata_mode: MetadataMode = "none",
+    ) -> pd.DataFrame:
         if n < 0:
             raise ValueError("n must be non-negative.")
         return self.get_context(
             key,
             before=n,
             after=0,
+            context_artifact=context_artifact,
+            key_columns=key_columns,
+            data_columns=data_columns,
+            metadata_columns=metadata_columns,
+            metadata_mode=metadata_mode,
             include_focus=False,
-            **kwargs,
         )
 
-    def get_next(self, key: Any, n: int = 1, **kwargs: Any) -> pd.DataFrame:
+    def get_next(
+        self,
+        key: Any,
+        n: int = 1,
+        *,
+        context_artifact: BaseArtifact | str | None = None,
+        key_columns: ColumnSelect = True,
+        data_columns: ColumnSelect = True,
+        metadata_columns: ColumnSelect = False,
+        metadata_mode: MetadataMode = "none",
+    ) -> pd.DataFrame:
         if n < 0:
             raise ValueError("n must be non-negative.")
         return self.get_context(
             key,
             before=0,
             after=n,
+            context_artifact=context_artifact,
+            key_columns=key_columns,
+            data_columns=data_columns,
+            metadata_columns=metadata_columns,
+            metadata_mode=metadata_mode,
             include_focus=False,
-            **kwargs,
         )
 
     # ------------------------------------------------------------------

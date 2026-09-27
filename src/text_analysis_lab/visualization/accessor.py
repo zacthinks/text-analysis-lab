@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from functools import wraps
 from typing import TYPE_CHECKING, Any
+
+from text_analysis_lab.visualization.histogram import histogram
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -14,7 +17,6 @@ class ArtifactVisualization:
     def __init__(self, artifact: BaseArtifact) -> None:
         self._artifact = artifact
 
+    @wraps(histogram)
     def histogram(self, field: str, **kwargs: Any):
-        from text_analysis_lab.visualization.histogram import histogram
-
         return histogram(self._artifact, field=field, **kwargs)

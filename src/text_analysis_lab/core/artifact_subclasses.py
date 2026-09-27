@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Sequence
+from functools import wraps
 from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast, get_args
@@ -619,6 +620,7 @@ class _MatrixArtifact(BaseArtifact):
             )
         return result
 
+    @wraps(BaseArtifact.kwic)
     def kwic(self, *args: Any, **kwargs: Any):
         raise UnsupportedArtifactOperationError(
             f"KWIC is not supported for {self.__class__.__name__}."

@@ -14,6 +14,7 @@ import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Any, Literal
 
@@ -198,6 +199,7 @@ def _fastcoref_eager_attention_patch(enabled: bool) -> Iterator[None]:
     modeling = importlib.import_module("fastcoref.modeling")
     original = modeling.AutoConfig.from_pretrained
 
+    @wraps(original)
     def from_pretrained_eager(*args: Any, **kwargs: Any) -> Any:
         config = original(*args, **kwargs)
         return _set_eager_attention(config)
