@@ -30,6 +30,7 @@ from text_analysis_lab.core.artifact_subclasses import _MatrixArtifact
 from text_analysis_lab.core.kwic import keyword_in_context
 from text_analysis_lab.visualization.accessor import ArtifactVisualization
 from text_analysis_lab.visualization.histogram import histogram
+from text_analysis_lab.visualization.scatter import scatter
 
 ParameterShape = tuple[str, inspect._ParameterKind, Any]
 
@@ -93,11 +94,15 @@ def test_analysis_accessor_signatures_track_canonical_functions() -> None:
         )
 
 
-def test_visualization_accessor_signature_tracks_histogram() -> None:
+def test_visualization_accessor_signatures_track_functions() -> None:
     assert _shape(ArtifactVisualization.histogram, drop_first=True) == _shape(
         histogram,
         drop_first=True,
         positionalize=("field",),
+    )
+    assert _shape(ArtifactVisualization.scatter, drop_first=True) == _shape(
+        scatter,
+        drop_first=True,
     )
 
 
@@ -139,6 +144,7 @@ def test_accessor_methods_are_not_transparent_wrapped_functions() -> None:
         ArtifactAnalysis.crosstab,
         ArtifactAnalysis.kwic,
         ArtifactVisualization.histogram,
+        ArtifactVisualization.scatter,
         BaseArtifact.get_previous,
         BaseArtifact.get_next,
         _MatrixArtifact.kwic,

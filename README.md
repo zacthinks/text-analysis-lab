@@ -294,7 +294,8 @@ The next major architectural layer is not another collection of text algorithms.
 - human **Tasks** that can block/unblock workflows and aggregate into a project research to-do list;
 - bounded/background execution with explicit resource admission;
 - richer Project Center views for tasks, workflows, artifact previews, and project status;
-- literature-grounded methodological workflows, including measurement-development/audit designs.
+- literature-grounded methodological workflows, including measurement-development/audit designs;
+- environment management and documentation.
 
 DBYS (Develop Before You Scale) is a natural future methodological workflow, but TeAL does not currently impose DBYS-specific batch selection. Existing `split`, `subset`, `sample`, `select_keys`, `restrict`, and related primitives already support representative, purposive, challenge-seeking, and adaptive Development case selection. Future workflow support should orchestrate and document those choices rather than privilege one sampling rule.
 

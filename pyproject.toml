@@ -46,6 +46,10 @@ all = [
     "fastcoref==2.1.6",
     "datasets==2.14.4",
     "pyarrow<21",
+    "plotly>=5",
+]
+visualization = [
+    "plotly>=5",
 ]
 lexicons = [
     "afinn>=0.1",
@@ -54,8 +58,6 @@ transformers = [
     "torch>=2.0",
     "transformers>=4.40",
     "sentence-transformers>=5.0",
-]
-umap = [
 ]
 parallel = [
     "dask[distributed]>=2026.7.0",
@@ -69,7 +71,6 @@ word2vec = [
 llm = [
     "openai>=3.0,<4",
 ]
-
 linguistics = [
     "torch>=2.0",
     "transformers>=4.41,<5",
