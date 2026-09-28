@@ -268,6 +268,17 @@ class ArtifactStorage:
         self.metadata_dir.mkdir(parents=True, exist_ok=True)
         return self.metadata_dir
 
+    def purge_payload(self) -> None:
+        """Remove heavyweight artifact payload while retaining ``artifact.json``.
+
+        Purging is intentionally idempotent.  The descriptor remains in place so
+        project provenance can still describe a deleted artifact after its tabular
+        payload has been reclaimed.
+        """
+        for path in (self.keys_dir, self.data_dir, self.metadata_dir):
+            if path.exists():
+                shutil.rmtree(path)
+
     def ensure_data_values_dir(self) -> Path:
         self.data_values_dir.mkdir(parents=True, exist_ok=True)
         return self.data_values_dir

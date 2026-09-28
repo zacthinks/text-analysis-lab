@@ -10,7 +10,9 @@ from typing import Any, cast, get_args
 
 from text_analysis_lab.core.errors import (
     AliasOverwriteBlockedError,
+    ArtifactDeletionBlockedError,
     ArtifactNotFoundError,
+    ArtifactRestoreBlockedError,
     InvalidAliasError,
     OperatorNotFoundError,
 )
@@ -877,19 +879,155 @@ class ProjectCatalog:
             return self._dicts(con.execute(sql, params).fetchall())
 
     def mark_artifact_deleted(self, artifact_id: str) -> None:
-        """Mark an artifact deleted and remove aliases pointing to it."""
-        artifact_id = str(artifact_id)
+        """Safely mark one artifact deleted and remove aliases pointing to it."""
+        self.mark_artifacts_deleted([artifact_id])
+
+    def mark_artifacts_deleted(
+        self,
+        artifact_ids: Iterable[str],
+        *,
+        memo_target_id: str | None = None,
+        memo: str | None = None,
+    ) -> None:
+        """Atomically soft-delete artifacts after rechecking live descendants.
+
+        ``artifact_ids`` is the complete deletion set chosen by the caller.  A
+        transaction-local descendant check prevents deletion when any live
+        descendant falls outside that set, including descendants reachable only
+        through an already-deleted intermediate artifact.
+        """
+        ids = {str(artifact_id) for artifact_id in artifact_ids}
+        if not ids:
+            return
+
+        memo_text = None if memo is None else str(memo).strip()
+        if memo is not None and not memo_text:
+            raise ValueError("Deletion memo must be non-empty when provided.")
+        if memo_target_id is not None and str(memo_target_id) not in ids:
+            raise ValueError("memo_target_id must be included in artifact_ids.")
+
         with self.con as con:
-            cur = con.execute(
+            placeholders = ", ".join("?" for _ in ids)
+            rows = con.execute(
+                f"SELECT artifact_id FROM artifacts WHERE artifact_id IN ({placeholders})",
+                tuple(sorted(ids)),
+            ).fetchall()
+            found = {str(row["artifact_id"]) for row in rows}
+            missing = sorted(ids - found)
+            if missing:
+                raise ArtifactNotFoundError(missing[0])
+
+            external_live_descendants: set[str] = set()
+            for artifact_id in ids:
+                for row in self._artifact_descendants_with_con(
+                    con,
+                    artifact_id,
+                    include_deleted=False,
+                ):
+                    descendant_id = str(row["artifact_id"])
+                    if descendant_id not in ids:
+                        external_live_descendants.add(descendant_id)
+
+            if external_live_descendants:
+                blocked = ", ".join(sorted(external_live_descendants))
+                raise ArtifactDeletionBlockedError(
+                    "Cannot delete artifact(s) because live dependents would remain: "
+                    f"{blocked}. Delete those dependents first or use recursive=True."
+                )
+
+            con.executemany(
                 "UPDATE artifacts SET deleted = 1 WHERE artifact_id = ?",
-                (artifact_id,),
+                ((artifact_id,) for artifact_id in sorted(ids)),
             )
-            if cur.rowcount == 0:
-                raise ArtifactNotFoundError(artifact_id)
-            con.execute(
+            con.executemany(
                 "DELETE FROM artifact_aliases WHERE artifact_id = ?",
-                (artifact_id,),
+                ((artifact_id,) for artifact_id in sorted(ids)),
             )
+
+            if memo_target_id is not None and memo_text is not None:
+                target_id = str(memo_target_id)
+                current = con.execute(
+                    """
+                    SELECT title, body
+                    FROM memos
+                    WHERE target_type = 'artifact' AND target_id = ?
+                    ORDER BY memo_id DESC
+                    LIMIT 1
+                    """,
+                    (target_id,),
+                ).fetchone()
+                existing_body = "" if current is None else str(current["body"])
+                title = None if current is None else current["title"]
+                deletion_note = f"## Deletion note\n\n{memo_text}"
+                body = (
+                    deletion_note
+                    if not existing_body.strip()
+                    else f"{existing_body.rstrip()}\n\n{deletion_note}"
+                )
+                con.execute(
+                    """
+                    INSERT INTO memos(target_type, target_id, title, body, created_at)
+                    VALUES ('artifact', ?, ?, ?, ?)
+                    """,
+                    (target_id, title, body, utc_now_iso()),
+                )
+
+    def restore_artifact(
+        self,
+        artifact_id: str,
+        *,
+        new_alias: str | None = None,
+    ) -> None:
+        """Atomically restore a deleted artifact when all ancestors are live."""
+        artifact_id = str(artifact_id)
+        normalized_alias = (
+            None if new_alias is None else self.validate_artifact_alias(str(new_alias))
+        )
+
+        try:
+            with self.con as con:
+                row = con.execute(
+                    "SELECT deleted FROM artifacts WHERE artifact_id = ?",
+                    (artifact_id,),
+                ).fetchone()
+                if row is None:
+                    raise ArtifactNotFoundError(artifact_id)
+                if not bool(row["deleted"]):
+                    raise ArtifactRestoreBlockedError(
+                        f"Artifact {artifact_id} is not deleted."
+                    )
+
+                deleted_ancestors = [
+                    str(item["artifact_id"])
+                    for item in self._artifact_ancestors_with_con(
+                        con,
+                        artifact_id,
+                        include_deleted=True,
+                    )
+                    if bool(item["deleted"])
+                ]
+                if deleted_ancestors:
+                    blocked = ", ".join(sorted(deleted_ancestors))
+                    raise ArtifactRestoreBlockedError(
+                        f"Cannot restore artifact {artifact_id} because upstream "
+                        f"artifact(s) are deleted: {blocked}. Restore them first."
+                    )
+
+                con.execute(
+                    "UPDATE artifacts SET deleted = 0 WHERE artifact_id = ?",
+                    (artifact_id,),
+                )
+                if normalized_alias is not None:
+                    con.execute(
+                        """
+                        INSERT INTO artifact_aliases(alias, artifact_id, touched_at)
+                        VALUES (?, ?, ?)
+                        """,
+                        (normalized_alias, artifact_id, utc_now_iso()),
+                    )
+        except sqlite3.IntegrityError as exc:
+            assert normalized_alias is not None
+            self._raise_artifact_alias_integrity_error(normalized_alias, exc)
 
     def validate_artifact_alias(self, alias: str) -> str:
         """Validate and normalize a public artifact alias without mutating the catalog."""
@@ -1168,6 +1306,106 @@ class ProjectCatalog:
                 (artifact_id, artifact_id),
             ).fetchall()
         return self._dicts(rows)
+
+    def _artifact_descendants_with_con(
+        self,
+        con: sqlite3.Connection,
+        artifact_id: str,
+        *,
+        include_deleted: bool,
+    ) -> list[dict[str, Any]]:
+        """Return transitive descendants using an existing catalog transaction."""
+        deleted_filter = "" if include_deleted else "WHERE a.deleted = 0"
+        rows = con.execute(
+            f"""
+            WITH RECURSIVE
+            edges(parent_id, child_id) AS (
+                SELECT basis_artifact_id, artifact_id
+                FROM artifact_basis
+                UNION
+                SELECT os.source_artifact_id, oo.artifact_id
+                FROM operation_sources os
+                JOIN operation_outputs oo ON oo.operation_id = os.operation_id
+            ),
+            descendants(artifact_id) AS (
+                SELECT child_id
+                FROM edges
+                WHERE parent_id = ?
+                UNION
+                SELECT e.child_id
+                FROM edges e
+                JOIN descendants d ON e.parent_id = d.artifact_id
+            )
+            SELECT DISTINCT a.*
+            FROM descendants d
+            JOIN artifacts a ON a.artifact_id = d.artifact_id
+            {deleted_filter}
+            ORDER BY a.artifact_id
+            """,
+            (str(artifact_id),),
+        ).fetchall()
+        return self._dicts(rows)
+
+    def artifact_descendants(
+        self, artifact_id: str, *, include_deleted: bool = False
+    ) -> list[dict[str, Any]]:
+        """Return all transitive dependents, traversing through deleted artifacts."""
+        with self.con as con:
+            return self._artifact_descendants_with_con(
+                con,
+                str(artifact_id),
+                include_deleted=include_deleted,
+            )
+
+    def _artifact_ancestors_with_con(
+        self,
+        con: sqlite3.Connection,
+        artifact_id: str,
+        *,
+        include_deleted: bool,
+    ) -> list[dict[str, Any]]:
+        """Return transitive upstream dependencies using an existing transaction."""
+        deleted_filter = "" if include_deleted else "WHERE a.deleted = 0"
+        rows = con.execute(
+            f"""
+            WITH RECURSIVE
+            edges(parent_id, child_id) AS (
+                SELECT basis_artifact_id, artifact_id
+                FROM artifact_basis
+                UNION
+                SELECT os.source_artifact_id, oo.artifact_id
+                FROM operation_sources os
+                JOIN operation_outputs oo ON oo.operation_id = os.operation_id
+            ),
+            ancestors(artifact_id) AS (
+                SELECT parent_id
+                FROM edges
+                WHERE child_id = ?
+                UNION
+                SELECT e.parent_id
+                FROM edges e
+                JOIN ancestors a ON e.child_id = a.artifact_id
+            )
+            SELECT DISTINCT a.*
+            FROM ancestors x
+            JOIN artifacts a ON a.artifact_id = x.artifact_id
+            {deleted_filter}
+            ORDER BY a.artifact_id
+            """,
+            (str(artifact_id),),
+        ).fetchall()
+        return self._dicts(rows)
+
+    def artifact_ancestors(
+        self, artifact_id: str, *, include_deleted: bool = False
+    ) -> list[dict[str, Any]]:
+        """Return all transitive basis/source dependencies for an artifact."""
+        with self.con as con:
+            return self._artifact_ancestors_with_con(
+                con,
+                str(artifact_id),
+                include_deleted=include_deleted,
+            )
 
     def has_artifact_dependents(
         self, artifact_id: str, *, include_deleted: bool = False

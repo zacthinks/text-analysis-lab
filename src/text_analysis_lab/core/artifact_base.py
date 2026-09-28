@@ -606,6 +606,20 @@ class BaseArtifact(ABC):
         return cast(ArtifactStatus, value)
 
     @property
+    def is_deleted(self) -> bool:
+        """Return whether this artifact is logically deleted in the catalog."""
+        row = self.project.catalog.resolve_artifact(
+            self.artifact_id,
+            include_deleted=True,
+        )
+        return bool(row["deleted"])
+
+    @property
+    def is_purged(self) -> bool:
+        """Return whether a deleted artifact's declared payload is missing."""
+        return self.project._artifact_payload_is_purged(self.artifact_id)
+
+    @property
     def components(self) -> dict[str, Any]:
         return dict(self.descriptor.get("components", {}))
 
@@ -679,6 +693,25 @@ class BaseArtifact(ABC):
     def remove_alias(self, alias: str) -> None:
         """Remove a project-level alias."""
         self.project.catalog.remove_artifact_alias(alias)
+
+    def delete(
+        self,
+        *,
+        recursive: bool = False,
+        purge_payload: bool = False,
+        memo: str | None = None,
+    ) -> None:
+        """Delete this artifact through its owning project."""
+        self.project.delete_artifact(
+            self,
+            recursive=recursive,
+            purge_payload=purge_payload,
+            memo=memo,
+        )
+
+    def restore(self, *, new_alias: str | None = None) -> BaseArtifact:
+        """Restore this artifact when its payload and upstream lineage are intact."""
+        return self.project.restore_artifact(self, new_alias=new_alias)
 
     @property
     def operation_id(self) -> str | None:

@@ -30,6 +30,7 @@ from text_analysis_lab.core.collapse_runs import collapse_runs as _collapse_runs
 from text_analysis_lab.core.errors import (
     ArtifactError,
     ArtifactNotFoundError,
+    ArtifactRestoreBlockedError,
     OperatorError,
     OperatorNotFoundError,
 )
@@ -85,7 +86,7 @@ from text_analysis_lab.core.set_primary_keys import (
     set_primary_keys as _set_primary_keys,
 )
 from text_analysis_lab.core.split import split as _split
-from text_analysis_lab.core.storage import ProjectStorage
+from text_analysis_lab.core.storage import ArtifactStorage, ProjectStorage
 from text_analysis_lab.core.subset import FunctionSpec
 from text_analysis_lab.core.subset import subset as _subset
 from text_analysis_lab.core.transform_like import (
@@ -342,9 +343,92 @@ class Project:
         """Mark an artifact alias as the preferred display alias."""
         self.catalog.touch_artifact_alias(alias)
 
-    def delete_artifact(self, ref: BaseArtifact | str) -> None:
-        """Mark an artifact as deleted in the catalog and remove its aliases."""
-        self.catalog.mark_artifact_deleted(self.resolve_artifact_id(ref))
+    def _artifact_payload_is_purged(self, artifact_id: str) -> bool:
+        """Infer purge state from a deleted artifact's descriptor and filesystem."""
+        artifact_id = str(artifact_id)
+        row = self.catalog.resolve_artifact(artifact_id, include_deleted=True)
+        if not bool(row["deleted"]):
+            return False
+
+        descriptor_path = self.storage.artifact_descriptor_path(artifact_id)
+        if not descriptor_path.exists():
+            raise ArtifactError(
+                f"Artifact {artifact_id} is missing artifact.json and cannot be "
+                "classified as retained or purged."
+            )
+        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+        components = descriptor.get("components", {})
+        if not isinstance(components, Mapping):
+            raise ArtifactError(
+                f"Artifact {artifact_id} descriptor has invalid components metadata."
+            )
+
+        artifact_dir = self.storage.artifact_dir(artifact_id)
+        for name in ("keys", "data", "metadata"):
+            component = components.get(name)
+            if not isinstance(component, Mapping):
+                continue
+            path = component.get("path")
+            if isinstance(path, str) and path and not (artifact_dir / path).exists():
+                return True
+        return False
+
+    def delete_artifact(
+        self,
+        ref: BaseArtifact | str,
+        *,
+        recursive: bool = False,
+        purge_payload: bool = False,
+        memo: str | None = None,
+    ) -> None:
+        """Delete an artifact safely, optionally cascading and purging its payload.
+
+        Deletion is logical by default: catalog lineage and ``artifact.json`` are
+        retained while aliases are removed.  ``recursive=True`` deletes the full
+        transitive dependent closure.  ``purge_payload=True`` additionally removes
+        keys/data/metadata payload directories while retaining the descriptor,
+        catalog provenance, and memos.
+        """
+        artifact_id = self.resolve_artifact_id(ref, include_deleted=True)
+        deletion_ids = {artifact_id}
+        if recursive:
+            deletion_ids.update(
+                str(row["artifact_id"])
+                for row in self.catalog.artifact_descendants(
+                    artifact_id,
+                    include_deleted=True,
+                )
+            )
+
+        self.catalog.mark_artifacts_deleted(
+            deletion_ids,
+            memo_target_id=artifact_id if memo is not None else None,
+            memo=memo,
+        )
+
+        if purge_payload:
+            for delete_id in sorted(deletion_ids):
+                ArtifactStorage.open(
+                    self.storage.artifact_dir(delete_id)
+                ).purge_payload()
+            self.query.clear_cache()
+
+    def restore_artifact(
+        self,
+        ref: BaseArtifact | str,
+        *,
+        new_alias: str | None = None,
+    ) -> BaseArtifact:
+        """Restore an unpurged deleted artifact and optionally assign a new alias."""
+        artifact_id = self.resolve_artifact_id(ref, include_deleted=True)
+        if self._artifact_payload_is_purged(artifact_id):
+            raise ArtifactRestoreBlockedError(
+                f"Artifact {artifact_id} cannot be restored because its payload "
+                "has been purged from disk."
+            )
+        self.catalog.restore_artifact(artifact_id, new_alias=new_alias)
+        self.query.clear_cache()
+        return self.get_artifact(artifact_id)
 
     def sql(
         self,

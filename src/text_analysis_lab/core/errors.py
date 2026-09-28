@@ -55,6 +55,14 @@ class ArtifactNotFoundError(ArtifactError):
     """Raised when an artifact ID cannot be found in the project."""
 
 
+class ArtifactDeletionBlockedError(ArtifactError):
+    """Raised when deleting an artifact would leave live dependents behind."""
+
+
+class ArtifactRestoreBlockedError(ArtifactError):
+    """Raised when a deleted artifact cannot be safely restored."""
+
+
 class InvalidAliasError(ArtifactError):
     """Raised when an artifact alias is not valid."""
 
