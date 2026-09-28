@@ -569,7 +569,7 @@ def test_metadata_lineage_reuses_non_bubbling_traversal_rules() -> None:
     artifacts = {a.artifact_id: a for a in [root, fine, reduced]}
 
     class FakeProject:
-        def get_artifact(self, artifact_id):
+        def get_artifact(self, artifact_id, *, include_deleted=False):
             return artifacts[artifact_id]
 
     sources = iter_metadata_lineage_sources(FakeProject(), reduced)
@@ -582,6 +582,7 @@ def test_data_inheritance_remains_preserved_key_only() -> None:
 
     class FakeArtifact:
         artifact_type = ArtifactType.TABLE
+        is_deleted = False
 
         def __init__(self, artifact_id, mode, bases, owns_data):
             self.artifact_id = artifact_id
@@ -606,7 +607,7 @@ def test_data_inheritance_remains_preserved_key_only() -> None:
     artifacts = {a.artifact_id: a for a in [parent, child, extended]}
 
     class FakeProject:
-        def get_artifact(self, artifact_id):
+        def get_artifact(self, artifact_id, *, include_deleted=False):
             return artifacts[artifact_id]
 
     project = FakeProject()

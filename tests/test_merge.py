@@ -41,6 +41,7 @@ def test_merged_key_is_virtual_data_provider_for_preserved_descendants() -> None
 
     class FakeArtifact:
         artifact_type = ArtifactType.TABLE
+        is_deleted = False
 
         def __init__(self, artifact_id, mode, bases, owns_data):
             self.artifact_id = artifact_id
@@ -66,7 +67,7 @@ def test_merged_key_is_virtual_data_provider_for_preserved_descendants() -> None
     artifacts = {a.artifact_id: a for a in [left, right, merged, child]}
 
     class FakeProject:
-        def get_artifact(self, artifact_id):
+        def get_artifact(self, artifact_id, *, include_deleted=False):
             return artifacts[artifact_id]
 
     project = FakeProject()
@@ -108,7 +109,7 @@ def test_full_metadata_can_cross_merge_boundary_and_deduplicates_common_ancestor
     artifacts = {a.artifact_id: a for a in [root, left, right, merged, child]}
 
     class FakeProject:
-        def get_artifact(self, artifact_id):
+        def get_artifact(self, artifact_id, *, include_deleted=False):
             return artifacts[artifact_id]
 
     sources = iter_metadata_lineage_sources(FakeProject(), child)

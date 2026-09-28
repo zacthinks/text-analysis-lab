@@ -256,3 +256,51 @@ def test_delete_traverses_through_legacy_deleted_intermediate(tmp_path: Path) ->
         assert grandchild.is_deleted
     finally:
         project.close()
+
+
+def test_deleted_descendants_can_reload_and_restore_after_project_reopen(
+    tmp_path: Path,
+) -> None:
+    project_path = tmp_path / "project"
+    project = Project.create(project_path, "project")
+    try:
+        root = _make_artifact(project, "art_000001", alias="root")
+        child = _make_artifact(
+            project,
+            "art_000002",
+            basis=(root.artifact_id,),
+            alias="child",
+        )
+        grandchild = _make_artifact(
+            project,
+            "art_000003",
+            basis=(child.artifact_id,),
+            alias="grandchild",
+        )
+        ids = (root.artifact_id, child.artifact_id, grandchild.artifact_id)
+        root.delete(recursive=True)
+    finally:
+        project.close()
+
+    project = Project.open(project_path)
+    try:
+        root = project.get_artifact(ids[0], include_deleted=True)
+        child = project.get_artifact(ids[1], include_deleted=True)
+        grandchild = project.get_artifact(ids[2], include_deleted=True)
+
+        assert root.is_deleted
+        assert child.is_deleted
+        assert grandchild.is_deleted
+
+        with pytest.raises(ArtifactRestoreBlockedError):
+            grandchild.restore(new_alias="grandchild_restored")
+
+        root = root.restore(new_alias="root_restored")
+        child = child.restore(new_alias="child_restored")
+        grandchild = grandchild.restore(new_alias="grandchild_restored")
+
+        assert not root.is_deleted
+        assert not child.is_deleted
+        assert not grandchild.is_deleted
+    finally:
+        project.close()

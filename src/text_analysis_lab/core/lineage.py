@@ -432,7 +432,10 @@ def find_data_artifact(artifact: BaseArtifact) -> BaseArtifact | None:
                 f"got {len(basis_ids)}."
             )
 
-        current = current.project.get_artifact(basis_ids[0])
+        current = current.project.get_artifact(
+            basis_ids[0],
+            include_deleted=current.is_deleted,
+        )
 
         if current.artifact_type != artifact.artifact_type:
             raise DataInheritanceError(
