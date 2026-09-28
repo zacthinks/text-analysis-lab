@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Sequence
-from functools import wraps
 from itertools import pairwise
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, get_args
 
 import numpy as np
 import pandas as pd
@@ -24,7 +23,12 @@ from text_analysis_lab.core.errors import (
     UnsupportedArtifactTypeError,
 )
 from text_analysis_lab.core.lineage import artifact_lineage, basis_artifact_ids
-from text_analysis_lab.core.types import ArtifactType, ColumnSelect
+from text_analysis_lab.core.types import (
+    ArtifactType,
+    ColumnSelect,
+    MetadataMode,
+    StreamingMode,
+)
 
 try:
     from text_analysis_lab.core.types import StructuralColumn
@@ -34,6 +38,7 @@ except ImportError:  # Compatibility with the pre-StructuralColumn version.
 if TYPE_CHECKING:
     from scipy import sparse as scipy_sparse
 
+    from text_analysis_lab.core.kwic import KWICResult
     from text_analysis_lab.core.project import Project
 
 
@@ -620,8 +625,32 @@ class _MatrixArtifact(BaseArtifact):
             )
         return result
 
-    @wraps(BaseArtifact.kwic)
-    def kwic(self, *args: Any, **kwargs: Any):
+    def kwic(
+        self,
+        pattern: str,
+        *,
+        window: int = 5,
+        before: int | None = None,
+        after: int | None = None,
+        valuetype: Literal["fixed", "regex"] = "fixed",
+        case_sensitive: bool = False,
+        enforce_word_boundary: bool = True,
+        key_columns: ColumnSelect = True,
+        data_columns: ColumnSelect = True,
+        metadata_columns: ColumnSelect = False,
+        metadata_mode: MetadataMode = "none",
+        where: str | None = None,
+        order_by: str | Sequence[str] | None = None,
+        positions: Sequence[int] | None = None,
+        sample_n: int | None = None,
+        sample_frac: float | None = None,
+        random_state: int | None = None,
+        limit: int | None = None,
+        batch_size: int = 100_000,
+        streaming_mode: StreamingMode = "auto",
+        search_columns: ColumnSelect | None = None,
+        target_matches: int | None = None,
+    ) -> KWICResult:
         raise UnsupportedArtifactOperationError(
             f"KWIC is not supported for {self.__class__.__name__}."
         )
