@@ -13,6 +13,11 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from text_analysis_lab.core.catalog import ProjectCatalog
+from text_analysis_lab.gui.project_center_graph import (
+    PROJECT_CENTER_GRAPH_SCRIPT,
+    load_project_center_graph_layout,
+    save_project_center_graph_layout,
+)
 
 
 class ProjectCenterServer:
@@ -200,6 +205,9 @@ def _handler_factory(
                 if parsed.path == "/api/artifacts":
                     self._send_json(_artifact_graph_payload(catalog_dir, manifest_path))
                     return
+                if parsed.path == "/api/graph-layout":
+                    self._send_json(load_project_center_graph_layout(manifest_path))
+                    return
                 if parsed.path == "/api/artifact":
                     query = parse_qs(parsed.query)
                     artifact_id = _single_query_value(query, "artifact_id")
@@ -251,6 +259,27 @@ def _handler_factory(
                 if parsed.path == "/api/end-session":
                     self._send_json({"status": "ending"})
                     end_session()
+                    return
+                if parsed.path == "/api/graph-layout":
+                    payload = self._read_json_body()
+                    result = save_project_center_graph_layout(manifest_path, payload)
+                    self._send_json(result)
+                    return
+                project_actions = {
+                    "/api/artifact-alias/add": "artifact_alias_add",
+                    "/api/artifact-alias/remove": "artifact_alias_remove",
+                    "/api/artifact-alias/prefer": "artifact_alias_prefer",
+                    "/api/operator-alias/add": "operator_alias_add",
+                    "/api/operator-alias/remove": "operator_alias_remove",
+                    "/api/operator-alias/prefer": "operator_alias_prefer",
+                    "/api/artifact/delete": "artifact_delete",
+                    "/api/artifact/restore": "artifact_restore",
+                }
+                action = project_actions.get(parsed.path)
+                if action is not None:
+                    payload = self._read_json_body()
+                    result = _project_action(manifest_path, action, payload)
+                    self._send_json(result)
                     return
                 if parsed.path != "/api/save":
                     self._send_error(
@@ -329,6 +358,81 @@ def _single_query_value(query: Mapping[str, list[str]], name: str) -> str:
     if not values or len(values) != 1 or not values[0]:
         raise ValueError(f"Query parameter {name!r} is required exactly once.")
     return values[0]
+
+
+def _required_payload_text(payload: Mapping[str, Any], name: str) -> str:
+    value = payload.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Request field {name!r} must be a non-empty string.")
+    return value.strip()
+
+
+def _project_action(
+    manifest_path: Path,
+    action: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Apply one Project Center mutation through the public Project API."""
+    from text_analysis_lab.core.errors import TeALError
+    from text_analysis_lab.core.project import Project
+
+    try:
+        with Project.open(manifest_path.parent.parent) as project:
+            if action == "artifact_alias_add":
+                artifact_id = _required_payload_text(payload, "artifact_id")
+                alias = _required_payload_text(payload, "alias")
+                project.add_artifact_alias(artifact_id, alias)
+                return {"status": "ok"}
+            if action == "artifact_alias_remove":
+                alias = _required_payload_text(payload, "alias")
+                project.remove_artifact_alias(alias)
+                return {"status": "ok"}
+            if action == "artifact_alias_prefer":
+                alias = _required_payload_text(payload, "alias")
+                project.prefer_artifact_alias(alias)
+                return {"status": "ok"}
+            if action == "operator_alias_add":
+                operator_id = _required_payload_text(payload, "operator_id")
+                alias = _required_payload_text(payload, "alias")
+                project.add_operator_alias(operator_id, alias)
+                return {"status": "ok"}
+            if action == "operator_alias_remove":
+                alias = _required_payload_text(payload, "alias")
+                project.remove_operator_alias(alias)
+                return {"status": "ok"}
+            if action == "operator_alias_prefer":
+                alias = _required_payload_text(payload, "alias")
+                project.prefer_operator_alias(alias)
+                return {"status": "ok"}
+            if action == "artifact_delete":
+                artifact_id = _required_payload_text(payload, "artifact_id")
+                memo = payload.get("memo")
+                if memo is not None:
+                    if not isinstance(memo, str):
+                        raise ValueError("Request field 'memo' must be a string or null.")
+                    memo = memo.strip() or None
+                project.delete_artifact(
+                    artifact_id,
+                    recursive=bool(payload.get("recursive", False)),
+                    purge_payload=bool(payload.get("purge_payload", False)),
+                    memo=memo,
+                )
+                return {"status": "ok"}
+            if action == "artifact_restore":
+                artifact_id = _required_payload_text(payload, "artifact_id")
+                new_alias = payload.get("new_alias")
+                if new_alias is not None:
+                    if not isinstance(new_alias, str):
+                        raise ValueError(
+                            "Request field 'new_alias' must be a string or null."
+                        )
+                    new_alias = new_alias.strip() or None
+                project.restore_artifact(artifact_id, new_alias=new_alias)
+                return {"status": "ok"}
+    except TeALError as exc:
+        raise ValueError(str(exc)) from exc
+
+    raise ValueError(f"Unknown Project Center action: {action!r}.")
 
 
 def _ensure_project_memo(
@@ -468,7 +572,7 @@ def _artifact_graph_payload(
     operations_dir = teal_dir / "operations"
     operators_dir = teal_dir / "operators"
     with _catalog(catalog_dir) as catalog:
-        artifacts = catalog.list_artifacts()
+        artifacts = catalog.list_artifacts(include_deleted=True)
         artifact_nodes = []
         for row in artifacts:
             artifact_id = str(row["artifact_id"])
@@ -485,15 +589,16 @@ def _artifact_graph_payload(
                     "lineage_mode": str(row["lineage_mode"]),
                     "size_bytes": size_bytes,
                     "size_display": _format_bytes(size_bytes),
+                    "deleted": bool(row["deleted"]),
                 }
             )
 
-        live_ids = {node["id"] for node in artifact_nodes}
+        artifact_ids = {node["id"] for node in artifact_nodes}
         lineage_edges = []
         for node in artifact_nodes:
             for basis in catalog.artifact_basis(node["id"]):
                 source = str(basis["basis_artifact_id"])
-                if source in live_ids:
+                if source in artifact_ids:
                     lineage_edges.append(
                         {
                             "source": source,
@@ -532,7 +637,7 @@ def _artifact_graph_payload(
             output_rows = catalog.operation_outputs(operation_id)
             for source_row in source_rows:
                 source = str(source_row["source_artifact_id"])
-                if source in live_ids:
+                if source in artifact_ids:
                     provenance_edges.append(
                         {
                             "source": source,
@@ -542,7 +647,7 @@ def _artifact_graph_payload(
                     )
             for output_row in output_rows:
                 output = str(output_row["artifact_id"])
-                if output in live_ids:
+                if output in artifact_ids:
                     provenance_edges.append(
                         {
                             "source": operation_id,
@@ -553,11 +658,11 @@ def _artifact_graph_payload(
 
             for source_row in source_rows:
                 source = str(source_row["source_artifact_id"])
-                if source not in live_ids:
+                if source not in artifact_ids:
                     continue
                 for output_row in output_rows:
                     output = str(output_row["artifact_id"])
-                    if output not in live_ids:
+                    if output not in artifact_ids:
                         continue
                     source_label = str(source_row["source_label"])
                     output_label = str(output_row["output_label"])
@@ -626,6 +731,7 @@ def _artifact_detail_payload(
             else catalog.operation_sources(str(operation["operation_id"]))
         )
         memo = catalog.get_memo(target_type="artifact", target_id=artifact_id)
+        live_dependent_count = len(catalog.artifact_descendants(artifact_id))
 
     artifact_dir = manifest_path.parent / "artifacts" / artifact_id
     size_bytes = _directory_size(artifact_dir)
@@ -648,6 +754,7 @@ def _artifact_detail_payload(
         "operation": operation,
         "sources": sources,
         "memo": memo,
+        "live_dependent_count": live_dependent_count,
         "size_bytes": size_bytes,
         "size_display": _format_bytes(size_bytes),
         "dimensions": dimensions,
@@ -697,7 +804,9 @@ def _operation_detail_payload(
         operation_memo = catalog.get_memo(
             target_type="operation", target_id=operation_id
         )
-        operator_memo = catalog.get_memo(target_type="operator", target_id=operator_id)
+        operator_memo = catalog.get_memo(
+            target_type="operator", target_id=operator_id
+        )
 
     operator_dir = teal_dir / "operators" / operator_id
     operation_size = _directory_size(operation_dir)
@@ -981,6 +1090,9 @@ input, select, textarea { border: 1px solid var(--line); border-radius: 6px; bac
 button { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); padding: 8px 11px; }
 button.primary { background: var(--accent); color: white; border-color: var(--accent); }
 button.active { background: var(--accent-soft); border-color: var(--accent); }
+button.danger { background: #c93434; color: white; border-color: #c93434; }
+button.danger:hover { filter: brightness(1.08); }
+button.danger:disabled { opacity: .45; cursor: not-allowed; }
 .app { height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
 .header { background: var(--panel); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 18px; padding: 10px 16px; }
 .brand { min-width: 220px; }
@@ -1037,8 +1149,10 @@ textarea.memo-body { width: 100%; min-height: 54vh; resize: vertical; line-heigh
 /* Artifacts */
 .artifact-shell { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 380px; }
 .graph-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
-.graph-toolbar { background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 14px; display: flex; gap: 8px; align-items: center; }
-.graph-toolbar input { min-width: 220px; }
+.graph-toolbar { background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.graph-toolbar input[type="search"] { min-width: 220px; }
+.graph-physics-toggle { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; user-select: none; }
+.graph-physics-toggle input { margin: 0; }
 .graph-toolbar .spacer { flex: 1; }
 .graph-legend { display: inline-flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .graph-legend-item { display: inline-flex; align-items: center; gap: 5px; }
@@ -1048,6 +1162,8 @@ textarea.memo-body { width: 100%; min-height: 54vh; resize: vertical; line-heigh
 .graph-legend-shape.transformation { width: 24px; height: 14px; border-radius: 999px; background: var(--accent-soft); }
 .graph-wrap { overflow: auto; padding: 16px; }
 .graph-canvas { min-width: 100%; min-height: 100%; }
+.node { cursor: grab; touch-action: none; }
+.node.dragging { cursor: grabbing; }
 .node-shape { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
 .node.operation .node-shape { fill: var(--accent-soft); }
 .node:hover .node-shape, .node.selected .node-shape { stroke: var(--accent); stroke-width: 2.5; }
@@ -1055,7 +1171,10 @@ textarea.memo-body { width: 100%; min-height: 54vh; resize: vertical; line-heigh
 .node:hover .node-fold, .node.selected .node-fold { stroke: var(--accent); }
 .node text { fill: var(--text); pointer-events: none; }
 .node .node-sub { fill: var(--muted); font-size: 11px; }
+.node.deleted { opacity: .46; }
+.node.deleted .node-shape, .node.deleted .node-fold { stroke-dasharray: 5 4; }
 .edge { stroke: var(--muted); stroke-width: 1.4; fill: none; opacity: .64; }
+.edge.deleted { stroke-dasharray: 5 5; opacity: .38; }
 .edge.selected { stroke: var(--accent); stroke-width: 2.5; opacity: 1; }
 .edge-label { fill: var(--muted); font-size: 10px; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
 .edge-badge { cursor: pointer; }
@@ -1076,6 +1195,32 @@ textarea.memo-body { width: 100%; min-height: 54vh; resize: vertical; line-heigh
 .artifact-memo textarea { min-height: 220px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .artifact-memo-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .artifact-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 16px; }
+.alias-editor { margin: 10px 0 16px; }
+.alias-editor-label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.alias-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.alias-chip { display: inline-flex; align-items: center; gap: 3px; min-height: 28px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 3px 2px 9px; background: var(--bg); max-width: 100%; }
+.alias-chip.preferred { border-color: var(--accent); background: var(--accent-soft); }
+.alias-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alias-chip-actions { display: inline-flex; align-items: center; gap: 0; margin-left: 1px; }
+.alias-chip-action { border: 0; background: transparent; padding: 1px 2px; min-width: 18px; color: var(--muted); line-height: 1.2; }
+.alias-chip-action:hover { color: var(--text); background: rgb(127 127 127 / .12); }
+.alias-chip-preferred { color: var(--accent); padding: 0 2px; min-width: 18px; text-align: center; }
+.alias-add-row { display: flex; gap: 6px; }
+.alias-add-row input { flex: 1; min-width: 0; }
+.action-dialog { width: min(520px, 92vw); border: 1px solid var(--line); border-radius: 10px; padding: 0; background: var(--panel); color: var(--text); }
+.action-dialog::backdrop { background: rgb(0 0 0 / .42); }
+.action-dialog-body { padding: 18px; }
+.action-dialog h2 { margin: 0 0 8px; }
+.action-dialog p { margin: 7px 0 14px; color: var(--muted); }
+.action-dialog label.option { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0; }
+.action-dialog label.option[hidden] { display: none; }
+.action-dialog label.option input { margin-top: 3px; }
+.action-dialog textarea, .action-dialog input[type="text"] { width: 100%; }
+.action-dialog textarea { min-height: 100px; resize: vertical; }
+.action-dialog .dialog-field { margin-top: 14px; }
+.action-dialog .dialog-field label { display: block; color: var(--muted); margin-bottom: 5px; }
+.action-dialog .dialog-error { color: var(--danger); margin-top: 10px; min-height: 20px; }
+.action-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); }
 .artifact-json { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 8px; }
 .artifact-json[hidden] { display: none; }
 .inspector-section { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }
@@ -1172,6 +1317,10 @@ textarea.memo-body { width: 100%; min-height: 54vh; resize: vertical; line-heigh
         <div class="graph-toolbar">
           <label for="graphMode">View</label>
           <select id="graphMode"><option value="lineage">Lineage</option><option value="provenance">Provenance</option></select>
+          <label class="graph-physics-toggle" title="Use gentle springs, repulsion, and centering so connected nodes react and settle"><input id="graphPhysics" type="checkbox" checked> Physics</label>
+          <label class="graph-physics-toggle"><input id="showDeletedArtifacts" type="checkbox"> Show deleted</label>
+          <button id="unfreezeGraphNodes">Unfreeze all</button>
+          <button id="resetGraphLayout" title="Clear saved positions and restore the deterministic layered layout">Reset layout</button>
           <button id="focusSelected" disabled>Focus selected</button>
           <span class="graph-focus-note" id="focusNote"></span>
           <input id="artifactSearch" type="search" placeholder="Find artifact or transformation">
@@ -1215,6 +1364,28 @@ textarea.memo-body { width: 100%; min-height: 54vh; resize: vertical; line-heigh
       </div>
     </div>
   </dialog>
+
+  <dialog class="action-dialog" id="deleteArtifactDialog">
+    <div class="action-dialog-body">
+      <h2>Delete artifact?</h2>
+      <p id="deleteArtifactSummary"></p>
+      <label class="option" id="deleteDependentsOption" hidden><input id="deleteDependents" type="checkbox"><span id="deleteDependentsLabel"></span></label>
+      <label class="option"><input id="purgeArtifactPayload" type="checkbox"><span>Permanently purge payload</span></label>
+      <div class="dialog-field"><label for="deletionNote">Deletion note (optional)</label><textarea id="deletionNote" placeholder="Why is this artifact being deleted?"></textarea></div>
+      <div class="dialog-error" id="deleteArtifactError"></div>
+    </div>
+    <div class="action-dialog-actions"><button id="cancelDeleteArtifact">Cancel</button><button class="danger" id="confirmDeleteArtifact">Delete</button></div>
+  </dialog>
+
+  <dialog class="action-dialog" id="restoreArtifactDialog">
+    <div class="action-dialog-body">
+      <h2>Restore artifact?</h2>
+      <p id="restoreArtifactSummary"></p>
+      <div class="dialog-field"><label for="restoreArtifactAlias">New alias (optional)</label><input id="restoreArtifactAlias" type="text" placeholder="Leave blank to restore without an alias"></div>
+      <div class="dialog-error" id="restoreArtifactError"></div>
+    </div>
+    <div class="action-dialog-actions"><button id="cancelRestoreArtifact">Cancel</button><button class="primary" id="confirmRestoreArtifact">Restore</button></div>
+  </dialog>
 </div>
 <script>
 const app = {
@@ -1235,6 +1406,14 @@ const app = {
   operatorDescriptor: null,
   tablePreview: {page: 1, pageCount: 1},
   graphFocused: false,
+  graphManualPositions: {lineage: new Map(), provenance: new Map()},
+  graphLivePositions: {lineage: new Map(), provenance: new Map()},
+  graphLayoutLoaded: false,
+  graphLayoutSaveTimer: null,
+  graphLayoutSaveQueue: Promise.resolve(),
+  graphPhysicsPending: {lineage: false, provenance: false},
+  graphLastClick: null,
+  graphSimulation: null,
   sessionEnding: false,
 };
 const $ = (id) => document.getElementById(id);
@@ -1258,6 +1437,7 @@ async function endSession() {
   try {
     app.sessionEnding = true;
     $('endSession').disabled = true;
+    await saveGraphLayoutNow();
     const payload = await api('/api/end-session', {method: 'POST'});
     if (payload.status !== 'ending') throw new Error('Project Center did not acknowledge shutdown.');
     setStatus('Session ended. You can close this browser tab.');
@@ -1533,6 +1713,11 @@ async function loadArtifactGraph(preserve = true) {
   const previousArtifact = preserve ? app.selectedArtifact : null;
   const previousOperation = preserve ? app.selectedOperation : null;
   app.graph = await api('/api/artifacts');
+  if (!app.graphLayoutLoaded) {
+    restoreGraphLayoutState(await api('/api/graph-layout'));
+    app.graphLayoutLoaded = true;
+  }
+  initializeGraphLayouts();
   renderStorageSummary();
   renderArtifactGraph();
   if (previousOperation && app.graph.operation_nodes.some(node => node.id === previousOperation)) {
@@ -1546,286 +1731,7 @@ function renderStorageSummary() {
   if (!storage) { $('storageSummary').textContent = ''; return; }
   $('storageSummary').textContent = `Project ${storage.total_display} · artifacts ${storage.artifacts_display} · operations ${storage.operations_display} · operators ${storage.operators_display} · other ${storage.other_display}`;
 }
-function graphEdges() {
-  return $('graphMode').value === 'lineage' ? app.graph.lineage_edges : app.graph.provenance_edges;
-}
-function graphNodes() {
-  return $('graphMode').value === 'lineage' ? app.graph.artifact_nodes : app.graph.nodes;
-}
-function graphSelectedSeeds(edges) {
-  if (app.selectedArtifact) return [app.selectedArtifact];
-  if (!app.selectedOperation) return [];
-  if ($('graphMode').value === 'provenance') return [app.selectedOperation];
-  const seeds = new Set();
-  for (const edge of edges) {
-    if (edge.operation_id === app.selectedOperation) {
-      seeds.add(edge.source); seeds.add(edge.target);
-    }
-  }
-  return Array.from(seeds);
-}
-function graphNeighborhood(nodes, edges, seeds, radius = 2) {
-  const ids = new Set(nodes.map(node => node.id));
-  const adjacent = new Map(nodes.map(node => [node.id, new Set()]));
-  for (const edge of edges) {
-    if (!ids.has(edge.source) || !ids.has(edge.target)) continue;
-    adjacent.get(edge.source).add(edge.target);
-    adjacent.get(edge.target).add(edge.source);
-  }
-  const seen = new Set(seeds.filter(id => ids.has(id)));
-  let frontier = Array.from(seen);
-  for (let step = 0; step < radius; step++) {
-    const next = [];
-    for (const id of frontier) {
-      for (const neighbor of adjacent.get(id) || []) {
-        if (seen.has(neighbor)) continue;
-        seen.add(neighbor); next.push(neighbor);
-      }
-    }
-    frontier = next;
-    if (!frontier.length) break;
-  }
-  return seen;
-}
-function graphData() {
-  let nodes = graphNodes();
-  let edges = graphEdges();
-  if (app.graphFocused) {
-    const seeds = graphSelectedSeeds(edges);
-    if (seeds.length) {
-      const keep = graphNeighborhood(nodes, edges, seeds, 2);
-      nodes = nodes.filter(node => keep.has(node.id));
-      edges = edges.filter(edge => keep.has(edge.source) && keep.has(edge.target));
-    }
-  }
-
-  const query = $('artifactSearch').value.trim().toLowerCase();
-  if (query) {
-    const matched = new Set();
-    for (const node of nodes) {
-      const fields = [node.id, node.label, node.node_type, node.artifact_type, node.operation_type, node.operator_id, node.status];
-      if (fields.some(value => String(value || '').toLowerCase().includes(query))) matched.add(node.id);
-    }
-    for (const edge of edges) {
-      const fields = [edge.label, edge.operation_label, edge.operation_id, edge.source_label, edge.output_label];
-      if (fields.some(value => String(value || '').toLowerCase().includes(query))) {
-        matched.add(edge.source); matched.add(edge.target);
-      }
-    }
-    const keep = graphNeighborhood(nodes, edges, Array.from(matched), 1);
-    nodes = nodes.filter(node => keep.has(node.id));
-    edges = edges.filter(edge => keep.has(edge.source) && keep.has(edge.target));
-  }
-  return {nodes, edges};
-}
-function renderGraphControls() {
-  const hasSelection = Boolean(app.selectedArtifact || ($('graphMode').value === 'provenance' && app.selectedOperation));
-  $('focusSelected').disabled = !hasSelection;
-  $('focusSelected').textContent = app.graphFocused ? 'Show all' : 'Focus selected';
-  $('focusSelected').classList.toggle('active', app.graphFocused);
-  $('focusNote').textContent = app.graphFocused && hasSelection ? 'Showing local neighborhood' : '';
-  const lineage = $('graphMode').value === 'lineage';
-  $('legendOperation').hidden = lineage;
-}
-function provenanceEdgeLabel(edge, nodeById) {
-  const value = String(edge.label || '').trim();
-  if (!value || ['source', 'output', 'input'].includes(value.toLowerCase())) return '';
-  const from = nodeById.get(edge.source); const to = nodeById.get(edge.target);
-  if (value === String(from?.label || '') || value === String(to?.label || '')) return '';
-  return truncate(value, 24);
-}
-function renderArtifactGraph() {
-  const svg = $('artifactGraph');
-  while (svg.firstChild) svg.removeChild(svg.firstChild);
-  if (!app.graph) return;
-  renderGraphControls();
-  const {nodes: visibleNodes, edges} = graphData();
-  const visibleIds = new Set(visibleNodes.map(node => node.id));
-  const nodeById = new Map(visibleNodes.map(node => [node.id, node]));
-  const positions = graphLayout(visibleNodes, edges);
-  const width = Math.max(760, ...visibleNodes.map(node => {
-    const pos = positions.get(node.id); const metrics = graphNodeMetrics(node);
-    return pos ? pos.x + metrics.width + 35 : 0;
-  }));
-  const height = Math.max(500, ...visibleNodes.map(node => {
-    const pos = positions.get(node.id); const metrics = graphNodeMetrics(node);
-    return pos ? pos.y + metrics.height + 35 : 0;
-  }));
-  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-  svg.setAttribute('width', width);
-  svg.setAttribute('height', height);
-
-  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-  const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-  marker.setAttribute('id', 'arrow'); marker.setAttribute('viewBox', '0 0 10 10'); marker.setAttribute('refX', '9'); marker.setAttribute('refY', '5'); marker.setAttribute('markerWidth', '6'); marker.setAttribute('markerHeight', '6'); marker.setAttribute('orient', 'auto-start-reverse');
-  const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  arrow.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z'); arrow.setAttribute('fill', 'currentColor');
-  marker.appendChild(arrow); defs.appendChild(marker); svg.appendChild(defs);
-
-  for (const edge of edges) {
-    const from = positions.get(edge.source); const to = positions.get(edge.target);
-    if (!from || !to) continue;
-    const fromNode = nodeById.get(edge.source);
-    const toNode = nodeById.get(edge.target);
-    if (!fromNode || !toNode) continue;
-    const fromMetrics = graphNodeMetrics(fromNode); const toMetrics = graphNodeMetrics(toNode);
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    const x1 = from.x + fromMetrics.width; const y1 = from.y + fromMetrics.height / 2;
-    const x2 = to.x; const y2 = to.y + toMetrics.height / 2;
-    const horizontal = Math.max(0, x2 - x1);
-    const bend = Math.max(50, Math.min(150, horizontal / 2));
-    line.setAttribute('d', `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
-    line.setAttribute('class', 'edge'); line.setAttribute('marker-end', 'url(#arrow)');
-    svg.appendChild(line);
-    const middleX = (x1 + x2) / 2; const middleY = (y1 + y2) / 2 - 5;
-    const edgeLabel = $('graphMode').value === 'lineage'
-      ? truncate(String(edge.label || ''), 24)
-      : provenanceEdgeLabel(edge, nodeById);
-    if (!edgeLabel) continue;
-    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    label.setAttribute('x', String(middleX)); label.setAttribute('y', String(middleY)); label.setAttribute('text-anchor', 'middle'); label.setAttribute('class', 'edge-label'); label.textContent = edgeLabel;
-    svg.appendChild(label);
-  }
-  for (const node of visibleNodes) {
-    const pos = positions.get(node.id);
-    if (!pos) continue;
-    const metrics = graphNodeMetrics(node);
-    const selected = node.node_type === 'operation' ? node.id === app.selectedOperation : node.id === app.selectedArtifact;
-    const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    group.setAttribute('class', `node ${node.node_type}${selected ? ' selected' : ''}`);
-    group.setAttribute('transform', `translate(${pos.x},${pos.y})`);
-    group.style.cursor = 'pointer';
-    if (node.node_type === 'operation') {
-      const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      const inset = 18; const mid = metrics.height / 2;
-      shape.setAttribute('class', 'node-shape');
-      shape.setAttribute('d', `M ${inset} 0 H ${metrics.width - inset} L ${metrics.width} ${mid} L ${metrics.width - inset} ${metrics.height} H ${inset} L 0 ${mid} Z`);
-      group.appendChild(shape);
-    } else {
-      const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      const fold = 22;
-      shape.setAttribute('class', 'node-shape');
-      shape.setAttribute('d', `M 0 0 H ${metrics.width - fold} L ${metrics.width} ${fold} V ${metrics.height} H 0 Z`);
-      const foldLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      foldLine.setAttribute('class', 'node-fold');
-      foldLine.setAttribute('d', `M ${metrics.width - fold} 0 V ${fold} H ${metrics.width}`);
-      group.append(shape, foldLine);
-    }
-    const textX = node.node_type === 'operation' ? 24 : 12;
-    const title = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    title.setAttribute('x', String(textX)); title.setAttribute('y', node.node_type === 'operation' ? '20' : '22'); title.textContent = truncate(node.label, node.node_type === 'operation' ? 20 : 28);
-    const sub = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    sub.setAttribute('x', String(textX)); sub.setAttribute('y', node.node_type === 'operation' ? '37' : '43'); sub.setAttribute('class', 'node-sub');
-    sub.textContent = node.node_type === 'operation'
-      ? (node.operation_type === node.label ? 'operation' : node.operation_type)
-      : `${node.artifact_type} · ${node.size_display}${node.status === 'complete' ? '' : ` · ${node.status}`}`;
-    group.append(title, sub);
-    group.addEventListener('click', () => node.node_type === 'operation' ? selectOperation(node.id) : selectArtifact(node.id));
-    svg.appendChild(group);
-  }
-}
-function graphNodeMetrics(node) {
-  return node.node_type === 'operation'
-    ? {width: 150, height: 46}
-    : {width: 220, height: 58};
-}
-function graphLayout(nodes, edges) {
-  if (!nodes.length) return new Map();
-  const ids = new Set(nodes.map(node => node.id));
-  const depth = new Map(nodes.map(node => [node.id, 0]));
-  for (let iteration = 0; iteration < nodes.length; iteration++) {
-    let changed = false;
-    for (const edge of edges) {
-      if (!ids.has(edge.source) || !ids.has(edge.target)) continue;
-      const candidate = (depth.get(edge.source) || 0) + 1;
-      if (candidate > (depth.get(edge.target) || 0) && candidate <= nodes.length) {
-        depth.set(edge.target, candidate); changed = true;
-      }
-    }
-    if (!changed) break;
-  }
-  const levels = new Map();
-  for (const node of nodes.slice().sort((a, b) => a.label.localeCompare(b.label))) {
-    const level = depth.get(node.id) || 0;
-    if (!levels.has(level)) levels.set(level, []);
-    levels.get(level).push(node);
-  }
-
-  const incoming = new Map(nodes.map(node => [node.id, []]));
-  const outgoing = new Map(nodes.map(node => [node.id, []]));
-  for (const edge of edges) {
-    if (!ids.has(edge.source) || !ids.has(edge.target)) continue;
-    outgoing.get(edge.source).push(edge.target);
-    incoming.get(edge.target).push(edge.source);
-  }
-  const levelKeys = Array.from(levels.keys()).sort((a, b) => a - b);
-  const rebuildOrder = () => {
-    const order = new Map();
-    for (const level of levelKeys) {
-      levels.get(level).forEach((node, index) => order.set(node.id, index));
-    }
-    return order;
-  };
-  const sortLevelByNeighbors = (level, neighbors, order) => {
-    const group = levels.get(level);
-    const previousIndex = new Map(group.map((node, index) => [node.id, index]));
-    const barycenter = node => {
-      const positions = (neighbors.get(node.id) || [])
-        .map(id => order.get(id))
-        .filter(value => Number.isFinite(value));
-      if (!positions.length) return null;
-      return positions.reduce((total, value) => total + value, 0) / positions.length;
-    };
-    group.sort((a, b) => {
-      const aCenter = barycenter(a); const bCenter = barycenter(b);
-      if (aCenter === null && bCenter === null) return previousIndex.get(a.id) - previousIndex.get(b.id);
-      if (aCenter === null) return 1;
-      if (bCenter === null) return -1;
-      if (aCenter !== bCenter) return aCenter - bCenter;
-      return previousIndex.get(a.id) - previousIndex.get(b.id);
-    });
-  };
-
-  // Repeated left/right barycentric sweeps keep connected branches close together
-  // and substantially reduce crossings compared with alphabetical rank ordering.
-  for (let sweep = 0; sweep < 6; sweep++) {
-    let order = rebuildOrder();
-    for (const level of levelKeys.slice(1)) {
-      sortLevelByNeighbors(level, incoming, order);
-      order = rebuildOrder();
-    }
-    order = rebuildOrder();
-    for (const level of levelKeys.slice(0, -1).reverse()) {
-      sortLevelByNeighbors(level, outgoing, order);
-      order = rebuildOrder();
-    }
-  }
-
-  const verticalGap = 34;
-  const levelHeights = new Map();
-  let maxLevelHeight = 0;
-  for (const level of levelKeys) {
-    const group = levels.get(level);
-    const total = group.reduce((sum, node) => sum + graphNodeMetrics(node).height, 0)
-      + Math.max(0, group.length - 1) * verticalGap;
-    levelHeights.set(level, total);
-    maxLevelHeight = Math.max(maxLevelHeight, total);
-  }
-  const positions = new Map();
-  let x = 35;
-  const horizontalGap = $('graphMode').value === 'lineage' ? 110 : 80;
-  for (const level of levelKeys) {
-    const group = levels.get(level);
-    const levelWidth = Math.max(...group.map(node => graphNodeMetrics(node).width));
-    let y = 35 + (maxLevelHeight - levelHeights.get(level)) / 2;
-    for (const node of group) {
-      positions.set(node.id, {x, y});
-      y += graphNodeMetrics(node).height + verticalGap;
-    }
-    x += levelWidth + horizontalGap;
-  }
-  return positions;
-}
+__PROJECT_CENTER_GRAPH_SCRIPT__
 function truncate(value, max) {
   const text = String(value || '');
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
@@ -1862,6 +1768,132 @@ async function selectOperation(operationId, ask = true) {
     setStatus(error.message, true);
   }
 }
+function aliasEditor({kind, targetId, aliases, disabled = false}) {
+  const editor = document.createElement('section'); editor.className = 'alias-editor';
+  const label = document.createElement('div'); label.className = 'alias-editor-label'; label.textContent = 'Aliases';
+  const chips = document.createElement('div'); chips.className = 'alias-chips';
+  if (!aliases.length) {
+    const empty = document.createElement('span'); empty.className = 'target-note'; empty.textContent = disabled ? 'No active aliases.' : 'No aliases yet.'; chips.appendChild(empty);
+  }
+  aliases.forEach((alias, index) => {
+    const chip = document.createElement('span'); chip.className = `alias-chip${index === 0 ? ' preferred' : ''}`;
+    const name = document.createElement('span'); name.className = 'alias-chip-name'; name.textContent = alias; chip.appendChild(name);
+    const actions = document.createElement('span'); actions.className = 'alias-chip-actions';
+    if (index === 0) {
+      const preferred = document.createElement('span'); preferred.className = 'alias-chip-preferred'; preferred.textContent = '★'; actions.appendChild(preferred);
+    } else if (!disabled) {
+      const prefer = document.createElement('button'); prefer.type = 'button'; prefer.className = 'alias-chip-action'; prefer.textContent = '★'; prefer.setAttribute('aria-label', `Prefer alias ${alias}`);
+      prefer.addEventListener('click', () => mutateAlias(kind, 'prefer', {alias}));
+      actions.appendChild(prefer);
+    }
+    if (!disabled) {
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'alias-chip-action'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove alias ${alias}`);
+      remove.addEventListener('click', () => mutateAlias(kind, 'remove', {alias}));
+      actions.appendChild(remove);
+    }
+    if (actions.childNodes.length) chip.appendChild(actions);
+    chips.appendChild(chip);
+  });
+  editor.append(label, chips);
+  if (!disabled) {
+    const row = document.createElement('div'); row.className = 'alias-add-row';
+    const input = document.createElement('input'); input.type = 'text'; input.placeholder = 'Add alias';
+    const add = document.createElement('button'); add.type = 'button'; add.textContent = 'Add';
+    const submit = () => {
+      const alias = input.value.trim();
+      if (!alias) return;
+      mutateAlias(kind, 'add', {alias, [`${kind}_id`]: targetId});
+    };
+    add.addEventListener('click', submit);
+    input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); submit(); } });
+    row.append(input, add); editor.appendChild(row);
+  }
+  return editor;
+}
+async function mutateAlias(kind, action, body) {
+  if (!confirmArtifactMemoDiscard()) return;
+  try {
+    await api(`/api/${kind}-alias/${action}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    await Promise.all([loadState(true), loadArtifactGraph(true)]);
+    const alias = body.alias || '';
+    setStatus(action === 'add' ? `Added ${kind} alias ${alias}.` : action === 'prefer' ? `Preferred ${kind} alias ${alias}.` : `Removed ${kind} alias ${alias}.`);
+  } catch (error) { setStatus(error.message, true); }
+}
+function openDeleteArtifactDialog() {
+  const detail = app.artifactDetail;
+  if (!detail || detail.artifact.deleted) return;
+  const name = detail.aliases[0] || detail.artifact.label || detail.artifact.artifact_id;
+  const count = Number(detail.live_dependent_count || 0);
+  $('deleteArtifactSummary').textContent = `Delete ${name}? Its provenance and descriptor will be retained. The stored payload is retained unless you permanently purge it.`;
+  $('deleteDependentsOption').hidden = count === 0;
+  $('deleteDependentsLabel').textContent = count === 1 ? 'Delete 1 dependent artifact too' : `Delete ${count} dependent artifacts too`;
+  $('deleteDependents').checked = false;
+  $('purgeArtifactPayload').checked = false;
+  $('deletionNote').value = '';
+  $('deleteArtifactError').textContent = '';
+  updateDeleteArtifactButton();
+  $('deleteArtifactDialog').showModal();
+}
+function updateDeleteArtifactButton() {
+  const count = Number(app.artifactDetail?.live_dependent_count || 0);
+  $('confirmDeleteArtifact').disabled = count > 0 && !$('deleteDependents').checked;
+}
+async function confirmDeleteArtifact() {
+  if (!app.selectedArtifact || !app.artifactDetail) return;
+  if (!confirmArtifactMemoDiscard()) return;
+  const button = $('confirmDeleteArtifact'); button.disabled = true; $('deleteArtifactError').textContent = '';
+  try {
+    await saveGraphLayoutNow();
+    await api('/api/artifact/delete', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        artifact_id: app.selectedArtifact,
+        recursive: $('deleteDependents').checked,
+        purge_payload: $('purgeArtifactPayload').checked,
+        memo: $('deletionNote').value.trim() || null,
+      }),
+    });
+    $('deleteArtifactDialog').close();
+    app.graphFocused = false;
+    // Structural deletion can leave large gaps in a saved layout. Mark both
+    // graph views for a fresh physics pass so the remaining unpinned nodes
+    // can close that space when Physics is enabled.
+    app.graphPhysicsPending.lineage = true;
+    app.graphPhysicsPending.provenance = true;
+    await Promise.all([loadState(true), loadArtifactGraph(true)]);
+    setStatus('Artifact deleted.');
+  } catch (error) {
+    $('deleteArtifactError').textContent = error.message;
+    updateDeleteArtifactButton();
+  }
+}
+function openRestoreArtifactDialog() {
+  const detail = app.artifactDetail;
+  if (!detail || !detail.artifact.deleted) return;
+  const name = detail.artifact.label || detail.artifact.artifact_id;
+  $('restoreArtifactSummary').textContent = `Restore ${name}?`;
+  $('restoreArtifactAlias').value = '';
+  $('restoreArtifactError').textContent = '';
+  $('restoreArtifactDialog').showModal();
+}
+async function confirmRestoreArtifact() {
+  if (!app.selectedArtifact) return;
+  if (!confirmArtifactMemoDiscard()) return;
+  const button = $('confirmRestoreArtifact'); button.disabled = true; $('restoreArtifactError').textContent = '';
+  try {
+    await api('/api/artifact/restore', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({artifact_id: app.selectedArtifact, new_alias: $('restoreArtifactAlias').value.trim() || null}),
+    });
+    $('restoreArtifactDialog').close();
+    await Promise.all([loadState(true), loadArtifactGraph(true)]);
+    setStatus('Artifact restored.');
+  } catch (error) {
+    $('restoreArtifactError').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
 function renderOperationDetail() {
   const detail = app.operationDetail;
   const container = $('artifactDetail');
@@ -1890,9 +1922,7 @@ function renderOperationDetail() {
 
   const operatorSection = document.createElement('section'); operatorSection.className = 'inspector-section';
   const operatorHeading = document.createElement('h3'); operatorHeading.textContent = 'Operator';
-  const operatorName = detail.operator_aliases.length ? detail.operator_aliases[0] : (detail.display_label || operator.operation_type);
   const operatorDl = document.createElement('dl'); operatorDl.className = 'detail-grid';
-  addDetail(operatorDl, 'Name', operatorName);
   addDetail(operatorDl, 'ID', operator.operator_id);
   addDetail(operatorDl, 'Type', operator.operation_type);
   addDetail(operatorDl, 'Snapshot', operator.snapshot_status);
@@ -1902,7 +1932,8 @@ function renderOperationDetail() {
   const operatorDetailsButton = document.createElement('button'); operatorDetailsButton.textContent = 'Load operator details'; operatorDetailsButton.disabled = !detail.operator_descriptor_available; operatorDetailsButton.addEventListener('click', loadOperatorJson); operatorActions.appendChild(operatorDetailsButton);
   const operatorJsonBox = document.createElement('section'); operatorJsonBox.className = 'artifact-json'; operatorJsonBox.id = 'operatorJsonBox'; operatorJsonBox.hidden = true;
   const operatorMemoBox = document.createElement('section'); operatorMemoBox.className = 'artifact-memo'; operatorMemoBox.id = 'operatorMemoBox';
-  operatorSection.append(operatorHeading, operatorDl, operatorActions, operatorJsonBox, operatorMemoBox);
+  const operatorAliases = aliasEditor({kind: 'operator', targetId: operator.operator_id, aliases: detail.operator_aliases});
+  operatorSection.append(operatorHeading, operatorDl, operatorAliases, operatorActions, operatorJsonBox, operatorMemoBox);
 
   container.append(heading, badges, dl, actionRow, operationJsonBox, operationMemoBox, operatorSection);
   renderInspectorTargetMemo('operation');
@@ -1950,22 +1981,27 @@ function renderArtifactDetail() {
   container.innerHTML = '';
   const heading = document.createElement('h2'); heading.textContent = preferred;
   const badges = document.createElement('div'); badges.className = 'badges';
-  for (const value of [a.artifact_type, a.status, a.lineage_mode]) { const span = document.createElement('span'); span.className = 'badge'; span.textContent = value; badges.appendChild(span); }
+  for (const value of [a.artifact_type, a.status, a.lineage_mode, ...(a.deleted ? ['deleted'] : [])]) { const span = document.createElement('span'); span.className = 'badge'; span.textContent = value; badges.appendChild(span); }
   const dl = document.createElement('dl'); dl.className = 'detail-grid';
   addDetail(dl, 'ID', a.artifact_id);
   addDetail(dl, 'Label', a.label);
-  addDetail(dl, 'Aliases', detail.aliases.join(', ') || '—');
   addDetail(dl, 'Size on disk', detail.size_display);
   if (detail.dimensions) addDetail(dl, 'Dimensions', `${Number(detail.dimensions.rows || 0).toLocaleString()} × ${Number(detail.dimensions.columns || 0).toLocaleString()}`);
   addDetail(dl, 'Operation', operation);
   addDetail(dl, 'Sources', sources);
   addDetail(dl, 'Basis', basis);
+  const aliases = aliasEditor({kind: 'artifact', targetId: a.artifact_id, aliases: detail.aliases, disabled: Boolean(a.deleted)});
   const actionRow = document.createElement('div'); actionRow.className = 'artifact-actions';
   const detailsButton = document.createElement('button'); detailsButton.textContent = 'Load details'; detailsButton.disabled = !detail.descriptor_available; detailsButton.addEventListener('click', loadArtifactJson); actionRow.appendChild(detailsButton);
   if (detail.table_preview_available) { const previewButton = document.createElement('button'); previewButton.textContent = 'Preview table'; previewButton.addEventListener('click', openTablePreview); actionRow.appendChild(previewButton); }
+  if (a.deleted) {
+    const restoreButton = document.createElement('button'); restoreButton.className = 'primary'; restoreButton.textContent = 'Restore'; restoreButton.addEventListener('click', openRestoreArtifactDialog); actionRow.appendChild(restoreButton);
+  } else {
+    const deleteButton = document.createElement('button'); deleteButton.className = 'danger'; deleteButton.textContent = 'Delete'; deleteButton.addEventListener('click', openDeleteArtifactDialog); actionRow.appendChild(deleteButton);
+  }
   const jsonBox = document.createElement('section'); jsonBox.className = 'artifact-json'; jsonBox.id = 'artifactJsonBox'; jsonBox.hidden = true;
   const memoBox = document.createElement('section'); memoBox.className = 'artifact-memo'; memoBox.id = 'artifactMemoBox';
-  container.append(heading, badges, dl, actionRow, jsonBox, memoBox);
+  container.append(heading, badges, dl, aliases, actionRow, jsonBox, memoBox);
   renderArtifactMemo();
 }
 function addDetail(dl, term, value) {
@@ -2290,6 +2326,15 @@ $('memoHistoryButton').addEventListener('click', toggleMemoHistory);
 $('memoRaw').addEventListener('click', () => setMemoMode('raw'));
 $('memoPreview').addEventListener('click', () => setMemoMode('preview'));
 $('graphMode').addEventListener('change', renderArtifactGraph);
+$('graphPhysics').addEventListener('change', () => {
+  const mode = $('graphMode').value;
+  if ($('graphPhysics').checked) app.graphPhysicsPending[mode] = true;
+  else { stopGraphPhysics(); scheduleGraphLayoutSave(0); }
+  renderArtifactGraph();
+});
+$('showDeletedArtifacts').addEventListener('change', renderArtifactGraph);
+$('unfreezeGraphNodes').addEventListener('click', unfreezeAllGraphNodes);
+$('resetGraphLayout').addEventListener('click', resetCurrentGraphLayout);
 $('focusSelected').addEventListener('click', () => {
   if (!(app.selectedArtifact || app.selectedOperation)) return;
   app.graphFocused = !app.graphFocused;
@@ -2298,6 +2343,11 @@ $('focusSelected').addEventListener('click', () => {
 $('artifactSearch').addEventListener('input', renderArtifactGraph);
 $('refreshArtifacts').addEventListener('click', async () => { if (confirmArtifactMemoDiscard()) { await loadArtifactGraph(true); setStatus('Artifacts refreshed.'); } });
 $('closeTablePreview').addEventListener('click', () => $('tablePreviewDialog').close());
+$('deleteDependents').addEventListener('change', updateDeleteArtifactButton);
+$('cancelDeleteArtifact').addEventListener('click', () => $('deleteArtifactDialog').close());
+$('confirmDeleteArtifact').addEventListener('click', confirmDeleteArtifact);
+$('cancelRestoreArtifact').addEventListener('click', () => $('restoreArtifactDialog').close());
+$('confirmRestoreArtifact').addEventListener('click', confirmRestoreArtifact);
 for (const id of ['previewKeys', 'previewData', 'previewMetadata', 'previewFullMetadata']) $(id).addEventListener('change', () => { app.tablePreview.page = 1; loadTablePreview(); });
 $('previewPageSize').addEventListener('change', () => { app.tablePreview.page = 1; loadTablePreview(); });
 $('previewPrevious').addEventListener('click', () => { if (app.tablePreview.page > 1) { app.tablePreview.page -= 1; loadTablePreview(); } });
@@ -2316,6 +2366,7 @@ window.addEventListener('keydown', event => {
     }
   }
 });
+window.addEventListener('pagehide', flushGraphLayoutWithBeacon);
 window.addEventListener('beforeunload', event => {
   if (!app.sessionEnding && (memoIsDirty() || inspectorMemoIsDirty())) { event.preventDefault(); event.returnValue = ''; }
 });
@@ -2331,3 +2382,6 @@ Promise.all([loadState(false), loadArtifactGraph(false)]).then(() => {
 </body>
 </html>
 """
+_INDEX_HTML = _INDEX_HTML.replace(
+    "__PROJECT_CENTER_GRAPH_SCRIPT__", PROJECT_CENTER_GRAPH_SCRIPT
+)
