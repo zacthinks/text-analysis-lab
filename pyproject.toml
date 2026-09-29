@@ -7,7 +7,7 @@ name = "text-analysis-lab"
 version = "0.2.0"
 description = "Persistent, lineage-aware workflows for reproducible text analysis"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "cloudpickle>=3.1.2",
     "duckdb>=1.5.3",
@@ -47,6 +47,10 @@ all = [
     "datasets==2.14.4",
     "pyarrow<21",
     "plotly>=5",
+    "geometric-coder[all]",
+]
+geco = [
+    "geometric-coder[all]",
 ]
 visualization = [
     "plotly>=5",

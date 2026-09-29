@@ -1,133 +1,95 @@
 # Text Analysis Lab (TeAL)
 
-**Current development release: 0.2.0**
+**Current development release: 0.2.0 · Python 3.11+ · MIT**
 
-Text Analysis Lab (TeAL) is a Python-first toolkit for reproducible, inspectable text analysis. It is designed for research settings where text moves through many transformations—import, cleaning, decomposition, feature construction, representation learning, coding, aggregation, validation, and analysis—and where researchers need to preserve what every derived object means and how it came to exist.
+Text Analysis Lab (TeAL) is an end-to-end project environment for computer-assisted text analysis. It is designed to support transparent, intentional, rigorous, and reproducible multi-stage work: importing and restructuring corpora, building representations, exploring patterns, developing and validating measures, and carrying results into downstream analysis while preserving the relationships among those stages.
 
-TeAL organizes work around a persistent `Project` and a graph of durable, keyed Artifacts. Rather than treating every intermediate result as a disposable DataFrame, TeAL records stable keys, lineage, operation provenance, operator state, and project metadata so results can be traced back to earlier representations and source text.
+A TeAL `Project` owns durable, keyed `Artifacts` and records the lineage, operations, operator state, metadata, and methodological notes that connect them. The aim is to make complex text-analysis workflows easier to inspect, extend, rerun, and report without manually reconstructing how each intermediate object was produced.
 
-TeAL is still pre-1.0. The public API is usable and broadly tested, but interfaces may continue to change as the workflow/task layer and Project Center mature.
+For the broader motivation, architecture, and current project overview, see the [TeAL website](https://zacthinks.github.io/teal/).
+
+> **Development status:** TeAL is still pre-1.0. The public API is usable and broadly tested, but interfaces may continue to change.
 
 ## What TeAL supports
 
-TeAL 0.2.0 currently includes:
+TeAL currently includes:
 
 - CSV, JSONL, Parquet, Excel, folder, TXT, and PDF ingestion;
-- persistent keyed Artifacts with explicit lineage and provenance;
+- persistent keyed Artifacts with explicit lineage and operation provenance;
 - filtering, sampling, splitting, restriction, key selection, merging, joining, aggregation, run collapsing, and primary-key restructuring;
-- alias-backed artifact reuse and safe overwrite semantics;
-- text cleaning, text-length metadata, corpus inspection, KWIC, and nearest-neighbor analysis;
+- alias-backed reuse and safe overwrite semantics;
+- corpus inspection, context retrieval, KWIC, summaries, diagnostics, and visualization;
+- sparse and dense matrix analytics, including nearest neighbors, distances, row summaries, feature summaries, and matrix summaries;
 - spaCy sentence/token decomposition with POS tags, dependencies, entities, and lexical flags;
-- count matrices, TF-IDF, feature trimming, normalization, and sparse/dense matrix workflows;
-- researcher-defined and provider-backed dictionaries and lexicons;
-- SVD/LSA, LDA, UMAP, and local Word2Vec;
+- count matrices, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, and Word2Vec;
 - sentence-transformer and contextual-transformer representations;
+- researcher-defined and provider-backed dictionaries and lexicons;
 - classical classification, frozen fitted predictors, and external-result registration;
 - coreference resolution, semantic-role labeling, and word-sense disambiguation;
 - generalized-difference estimation for audited machine-coded measurements;
-- optional GeCo integration for interactive coding and geometric exploration;
+- GeCo integration for interactive exploration, human coding, and classifier development;
 - optional OpenAI Responses API translation with durable provenance;
 - versioned project, artifact, operation, operator, and standalone memos;
-- a localhost-only **TeAL Project Center** with an Artifact Map and Memo Center.
+- the localhost-only **TeAL Project Center** for visual project inspection and memoing.
 
-A central design goal is to keep corpus-scale transformations inside the project rather than requiring repeated full-corpus round trips through pandas. Small tables can still be materialized for inspection, plotting, or bounded analysis.
+TeAL keeps corpus-scale transformations inside the project whenever possible. Small tables can still be materialized for inspection, plotting, or bounded analysis.
 
 ## Installation
 
-TeAL requires Python 3.10 or newer.
+TeAL is currently installed directly from GitHub.
 
-### Developing TeAL with `uv`
+### With `uv`
 
-Clone the repository, enter it, and run:
-
-```bash
-uv sync
-```
-
-To install every optional feature used by the full integration suite:
+For TeAL with GeCo human coding and exploration:
 
 ```bash
-uv sync --all-extras
+uv add "text-analysis-lab[geco] @ git+https://github.com/zacthinks/text-analysis-lab.git"
 ```
 
-Then run Python or Jupyter inside the environment:
+For TeAL with all optional features:
 
 ```bash
-uv run python
-uv run jupyter lab
+uv add "text-analysis-lab[all] @ git+https://github.com/zacthinks/text-analysis-lab.git"
 ```
 
-### Installing with `pip`
-
-A minimal local install is:
+For only the core dependencies:
 
 ```bash
-pip install .
+uv add "text-analysis-lab @ git+https://github.com/zacthinks/text-analysis-lab.git"
 ```
 
-Optional feature groups can be installed as needed:
+### With `pip`
+
+For TeAL with GeCo human coding and exploration:
 
 ```bash
-pip install ".[pdf]"
-pip install ".[spacy]"
-pip install ".[word2vec]"
-pip install ".[transformers]"
-pip install ".[linguistics]"
-pip install ".[llm]"
+pip install "text-analysis-lab[geco] @ git+https://github.com/zacthinks/text-analysis-lab.git"
 ```
 
-Or install all optional TeAL features:
+For TeAL with all optional features:
 
 ```bash
-pip install ".[all]"
+pip install "text-analysis-lab[all] @ git+https://github.com/zacthinks/text-analysis-lab.git"
 ```
 
-Some integrations require external model/data resources. For example:
+For only the core dependencies:
+
+```bash
+pip install "text-analysis-lab @ git+https://github.com/zacthinks/text-analysis-lab.git"
+```
+
+Many optional integrations are imported lazily. A minimal installation therefore remains usable, and TeAL will raise a targeted error when a requested feature needs an additional dependency. Use `[geco]` if you want TeAL's interactive exploration and human-coding workflows; use `[all]` for the broadest supported feature set.
+
+Some integrations also require external model or data resources. For example:
 
 ```bash
 python -m spacy download en_core_web_sm
 python -m wn download 'oewn:2025+'
 ```
 
-## GPU-enabled PyTorch in downstream research projects
+### GPU-enabled PyTorch
 
-TeAL does **not** choose a CUDA/ROCm/CPU PyTorch build for downstream projects. The research project that owns the environment should make that hardware-specific choice and commit its own `pyproject.toml` and `uv.lock`.
-
-On a new machine, `uv` can be used once to discover an appropriate PyTorch backend. For example, in a disposable environment:
-
-```bash
-uv venv .torch-probe
-uv pip install --python .torch-probe/Scripts/python.exe torch --torch-backend=auto
-```
-
-On POSIX systems use `.torch-probe/bin/python` instead. Inspect the resolved build:
-
-```bash
-.torch-probe/Scripts/python.exe -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available())"
-```
-
-If the machine resolves to a backend such as `cu130`, encode that choice in the **downstream research project's** `pyproject.toml` rather than overriding Torch after `uv sync`:
-
-```toml
-[project]
-dependencies = [
-    "text-analysis-lab[all]",
-    "torch",
-]
-
-[tool.uv.sources]
-text-analysis-lab = { git = "https://github.com/zacthinks/text-analysis-lab.git" }
-torch = { index = "pytorch-cu130" }
-
-[[tool.uv.index]]
-name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
-explicit = true
-```
-
-`explicit = true` keeps the PyTorch index from becoming a general package source for unrelated dependencies. Once the backend is encoded, ordinary `uv lock`, `uv sync`, and `uv run` reproduce that project environment without a fragile post-sync Torch override. CPU execution remains available when CUDA is unavailable, although exact numerical results need not be bit-for-bit identical across hardware backends.
-
-See the current [`uv` PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/) for available backend/index options.
+TeAL does not choose a CUDA, ROCm, or CPU PyTorch build for downstream projects. If your workflow uses GPU-backed transformer models, let the research project that owns the environment specify the appropriate PyTorch build in its own `pyproject.toml` / lockfile. See the [`uv` PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/) for current backend options.
 
 ## Quick start
 
@@ -135,7 +97,7 @@ Suppose `documents.csv` contains a `text` column and a `group` metadata column:
 
 ```python
 import text_analysis_lab as teal
-from text_analysis_lab.translators import TextLength
+from text_analysis_lab import translators as tr
 
 project = teal.Project.create("demo.teal", name="demo")
 
@@ -147,7 +109,7 @@ documents = project.read_csv(
 )
 
 lengths = project.translate(
-    TextLength({"text": ["words", "characters"]}),
+    tr.TextLength({"text": ["words", "characters"]}),
     documents,
     alias="document_lengths",
 )["output"]
@@ -157,147 +119,109 @@ preview = lengths.query(
     metadata_columns=["group", "text_words", "text_characters"],
     metadata_mode="full",
     limit=10,
-    form="table",
 )
 
 print(preview)
 ```
 
-An existing project can be reopened later:
+Artifacts are written directly into the project. Reopen the project later and recover important Artifacts by alias:
 
 ```python
 project = teal.Project.open("demo.teal")
 documents = project.get_artifact("documents")
 ```
 
+## Core project model
+
+A TeAL project is a graph, not a single linear pipeline.
+
+- **Artifacts** are durable keyed objects stored in the project.
+- **Stable keys**, not physical row order, align related Artifacts.
+- **Lineage** records structural Artifact-to-Artifact relationships.
+- **Provenance** records the operations and operators that produced Artifacts.
+- **Aliases** provide stable human-readable references and support idempotent reuse on creation/operation calls.
+- **Queries and analyses** can materialize ordinary in-memory results without extending the Artifact graph.
+
+Structural operations such as `subset`, `sample`, `split`, `probability_split`, `select_keys`, `restrict`, `merge`, `join`, `set_primary_keys`, `collapse_runs`, and `aggregate` create lineage-aware Artifacts while preserving stable identity.
+
+## Translators
+
+Most substantive transformations are implemented as translators. A translator consumes one or more Artifacts and produces one or more new Artifacts while recording its configuration and provenance.
+
+```python
+outputs = project.translate(
+    tr.SomeTranslator(...),
+    documents,
+    alias="result",
+)
+
+result = outputs["output"]
+```
+
+`project.translate(...)` always returns a mapping from output label to Artifact, including for single-output translators.
+
+Built-in translators include text cleaning and diagnostics, spaCy decomposition, count vectorization, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, Word2Vec, sentence/contextual transformer encoding, dictionary coding, fitted prediction, linguistic models, function mapping, and external API/model paths.
+
 ## Project Center
 
-TeAL 0.2.0 introduces a local browser interface backed directly by the project's catalog. It is intentionally a view/controller over TeAL state, not a second source of truth.
+The Project Center provides a visual interface to the same TeAL project used from Python. It supports project graph inspection, lineage/provenance views, artifact previews, storage inspection, and versioned memos for projects, artifacts, operations, and operators.
 
-Open the general Project Center:
+Launch it from Python:
 
 ```python
 project.launch_project_center()
 ```
 
-Open directly on a specific tab:
+or from the command line:
 
-```python
-project.launch_artifact_map()
-project.launch_memo_center()
+```bash
+teal gui path/to/project
 ```
-
-All three methods launch the same localhost-only application. The current tabs are:
-
-- **Artifacts** — browse the project artifact graph, switch between lineage and operation-provenance edges, inspect disk footprint and matrix dimensions, lazily load `artifact.json`, preview table artifacts page-by-page with selectable key/data/metadata components, and create/edit artifact memos;
-- **Memos** — browse/search project, standalone, artifact, operation, and operator memos; create standalone memos; edit Markdown; preview rendered Markdown; and inspect/restore version history.
-
-Memo saves are append-only at the storage layer: editing feels in-place in the interface, but every explicit save creates a new version. Memos are intentionally not deletable through the Project Center.
-
-The Artifact Map remains an initial project-inspection interface. Table preview is deliberately paged and queries only the displayed rows/components; richer representation-specific previews and additional project/workflow views remain planned.
-
-## Linguistic decomposition
-
-With the `spacy` extra and an installed spaCy model, TeAL can decompose documents into sentence and token Artifacts:
-
-```python
-from text_analysis_lab.translators import SpacyTranslator
-
-outputs = project.translate(
-    SpacyTranslator(model="en_core_web_sm"),
-    documents,
-)
-
-sentences = outputs["sentences"]
-tokens = outputs["tokens"]
-```
-
-Sentence/token Artifacts extend the source primary key, preserving stable links back to source records.
-
-## Representations and translation
-
-Most substantive transformations are implemented as translators. A translator consumes one or more Artifacts and produces one or more new Artifacts while recording configuration and lineage.
-
-Built-in translators include count vectorization, TF-IDF, feature trimming, matrix normalization, SVD/LSA, LDA, UMAP, Word2Vec, sentence/contextual transformer encoding, linguistic models, dictionary coding, fitted prediction, and external model/API paths.
-
-UMAP persistence is explicit because fitted nearest-neighbor search state can be much larger than the resulting embedding. Visualization-only use should normally keep the default `reuse="none"`. Use `reuse="recompute"` when later transformation may refit from the immutable fitting Artifact, or `reuse="stored"` to persist transform-capable fitted state. Stored UMAPs use TeAL's exact compact format by default; `storage="native"` preserves upstream serialization and is generally discouraged for large sparse text matrices.
-
-Structural project operations such as `subset`, `sample`, `split`, `probability_split`, `select_keys`, `restrict`, `merge`, `join`, `set_primary_keys`, `collapse_runs`, and `aggregate` create new keyed Artifacts without requiring users to manage row alignment manually.
-
-`Project.split(...)` can assign either individual rows or higher-level groups. For
-example, a sentence Artifact keyed by `doc_id, sent_id` can be split at the
-document level without first aggregating back to documents:
-
-```python
-parts = project.split(
-    sentences,
-    labels=("train", "test"),
-    proportions=(0.8, 0.2),
-    random_state=42,
-    by="doc_id",
-)
-```
-
-All sentences from one `doc_id` stay in the same branch, while the output
-Artifacts remain sentence-level. `by` may name one or more primary-key or
-metadata fields. Split proportions apply to the number of unique assignment
-units, not their row counts. `stratify=` may be combined with `by=` when every
-assignment unit belongs to exactly one stratum.
-
-For analyses computed outside TeAL, `Project.register_external(...)` can register completed results as normal lineage-aware Artifacts while keeping external execution/checkpointing responsibilities outside TeAL.
 
 ## GeCo integration
 
-TeAL can link compatible Artifacts to [GeCo](https://github.com/zacthinks/GeCo) for interactive coding, geometric exploration, classifier development, and focused qualitative/computational workflows. Stable identity is preserved across the boundary so labels and frozen predictors can return to TeAL without relying on physical row order.
+TeAL can create linked [GeCo](https://github.com/zacthinks/GeCo) workspaces for interactive exploration, qualitative coding, classifier development, and finite human-labeling tasks. Stable TeAL keys are preserved across the boundary so human judgments and frozen predictors can return to the TeAL project.
+
+An exploratory workspace can combine documents with one or more geometries and projections:
+
+```python
+geco = project.geco.create(
+    "coding",
+    documents=documents,
+    text_field="text",
+    geometry=tfidf,
+    projections={"umap": umap},
+)
+
+geco.launch()
+```
+
+Selected human codes and fitted classifiers can be exported back into TeAL:
+
+```python
+labels = geco.export_codes("code name")
+predictor = geco.export_classifier("classifier_name")
+```
+
+For finite human-labeling tasks, TeAL can create a focused coding workspace with `project.geco.create_focus(...)`.
+
+## External results
+
+Analyses performed outside TeAL can still be registered as project Artifacts.
+
+Use `Project.from_keyed_frame(...)` when external measurements attach new columns to an existing key universe. Use `Project.register_external(...)` when you need more explicit control over provenance and structural basis.
 
 ## Development and testing
 
-Normal clean-clone check:
+For contributors working on TeAL itself:
 
 ```bash
-uv sync
-uv run ruff check .
-uv run pytest -q -rs
-```
-
-Full optional environment:
-
-```bash
+git clone https://github.com/zacthinks/text-analysis-lab.git
+cd text-analysis-lab
 uv sync --all-extras
 uv run ruff check .
 uv run pytest -q -rs
 ```
-
-Two external integration groups are opt-in because they may download real model resources:
-
-```bash
-# PowerShell
-$env:TEAL_RUN_HF_EXTERNAL = "1"
-$env:TEAL_RUN_LINGUISTICS_EXTERNAL = "1"
-uv run pytest -q -rs
-```
-
-```bash
-# bash/zsh
-export TEAL_RUN_HF_EXTERNAL=1
-export TEAL_RUN_LINGUISTICS_EXTERNAL=1
-uv run pytest -q -rs
-```
-
-The 0.2.0 release-preparation checkpoint passed the complete externally enabled suite in the maintainer environment before the Project Center documentation/launcher polish; rerun the full suite locally before publishing a release or major checkpoint.
-
-## Roadmap
-
-The next major architectural layer is not another collection of text algorithms. TeAL's longer-term plan includes:
-
-- persistent methodological **Workflows** composed of durable steps;
-- human **Tasks** that can block/unblock workflows and aggregate into a project research to-do list;
-- bounded/background execution with explicit resource admission;
-- richer Project Center views for tasks, workflows, artifact previews, and project status;
-- literature-grounded methodological workflows, including measurement-development/audit designs;
-- environment management and documentation.
-
-DBYS (Develop Before You Scale) is a natural future methodological workflow, but TeAL does not currently impose DBYS-specific batch selection. Existing `split`, `subset`, `sample`, `select_keys`, `restrict`, and related primitives already support representative, purposive, challenge-seeking, and adaptive Development case selection. Future workflow support should orchestrate and document those choices rather than privilege one sampling rule.
 
 ## License
 
