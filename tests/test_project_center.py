@@ -46,6 +46,10 @@ def test_project_center_serves_tabs_and_initializes_project_memo(tmp_path):
         assert "barycentric sweeps" in html
         assert "/assets/mathjax/tex-svg-full.js" in html
         assert "function protectMath" in html
+        assert "function protectInlineCode" in html
+        assert "function restoreInlineCode" in html
+        assert "const protectedCode = protectInlineCode(source);" in html
+        assert "const heading = line.match(/^(#{1,6})" in html
         assert "function renderMarkdownInto" in html
         assert "typesetPromise" in html
         assert "cdn.jsdelivr.net" not in html
