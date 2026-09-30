@@ -44,7 +44,22 @@ def test_project_center_serves_tabs_and_initializes_project_memo(tmp_path):
         assert "app.graph.lineage_edges" in html
         assert "function graphNodeMetrics(node)" in html
         assert "barycentric sweeps" in html
+        assert "/assets/mathjax/tex-svg-full.js" in html
+        assert "function protectMath" in html
+        assert "function renderMarkdownInto" in html
+        assert "typesetPromise" in html
+        assert "cdn.jsdelivr.net" not in html
         assert server.memo_url.endswith("?tab=memos")
+
+        with urlopen(
+            server.url + "assets/mathjax/tex-svg-full.js",
+            timeout=5,
+        ) as response:
+            mathjax = response.read()
+            content_type = response.headers["Content-Type"]
+        assert mathjax
+        assert b"MathJax" in mathjax
+        assert content_type.startswith("application/javascript")
 
         state = _json(server.url + "api/state")
         assert state["project_name"] == "memo_test"
