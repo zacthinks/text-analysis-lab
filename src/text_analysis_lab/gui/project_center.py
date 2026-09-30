@@ -1160,8 +1160,8 @@ button.danger:disabled { opacity: .45; cursor: not-allowed; }
 textarea.memo-body { width: 100%; min-height: 54vh; resize: vertical; line-height: 1.55; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .preview { min-height: 54vh; border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; background: var(--panel); overflow-wrap: anywhere; }
 .preview[hidden], textarea[hidden] { display: none; }
-.markdown-body h1, .markdown-body h2, .markdown-body h3 { line-height: 1.25; margin: 1.2em 0 .5em; }
-.markdown-body h1:first-child, .markdown-body h2:first-child, .markdown-body h3:first-child { margin-top: 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { line-height: 1.25; margin: 1.2em 0 .5em; }
+.markdown-body h1:first-child, .markdown-body h2:first-child, .markdown-body h3:first-child, .markdown-body h4:first-child, .markdown-body h5:first-child, .markdown-body h6:first-child { margin-top: 0; }
 .markdown-body p { margin: .7em 0; }
 .markdown-body code { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
 .markdown-body pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow: auto; }
@@ -1728,6 +1728,80 @@ function renderMarkdownInto(element, source, typeset = true) {
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
+function protectInlineCodeLine(line, store) {
+  let result = '';
+  let index = 0;
+
+  while (index < line.length) {
+    if (line[index] !== '`') {
+      result += line[index];
+      index += 1;
+      continue;
+    }
+
+    const openStart = index;
+    while (index < line.length && line[index] === '`') index += 1;
+    const delimiterLength = index - openStart;
+    let closeStart = -1;
+    let cursor = index;
+
+    while (cursor < line.length) {
+      if (line[cursor] !== '`') {
+        cursor += 1;
+        continue;
+      }
+      const runStart = cursor;
+      while (cursor < line.length && line[cursor] === '`') cursor += 1;
+      if (cursor - runStart === delimiterLength) {
+        closeStart = runStart;
+        break;
+      }
+    }
+
+    if (closeStart < 0) {
+      result += line.slice(openStart, index);
+      continue;
+    }
+
+    result += store(line.slice(index, closeStart));
+    index = closeStart + delimiterLength;
+  }
+
+  return result;
+}
+
+function protectInlineCode(source) {
+  const spans = [];
+  const store = value => {
+    const index = spans.length;
+    spans.push(value);
+    return `TEALCODEINLINE${index}TOKEN`;
+  };
+
+  const lines = String(source || '').replace(/\r\n/g, '\n').split('\n');
+  let inFence = false;
+  const protectedLines = lines.map(line => {
+    if (line.startsWith('```')) {
+      inFence = !inFence;
+      return line;
+    }
+    return inFence ? line : protectInlineCodeLine(line, store);
+  });
+
+  return {text: protectedLines.join('\n'), spans};
+}
+
+function restoreInlineCode(html, spans) {
+  let restored = html;
+  spans.forEach((value, index) => {
+    restored = restored.replaceAll(
+      `TEALCODEINLINE${index}TOKEN`,
+      `<code>${escapeHtml(value)}</code>`
+    );
+  });
+  return restored;
+}
+
 function protectDollarMath(source, store) {
   let result = '';
   let index = 0;
@@ -1806,7 +1880,6 @@ function restoreMath(html, expressions) {
 
 function inlineMarkdown(value) {
   let text = escapeHtml(value);
-  text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
   text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   text = text.replace(/__([^_]+)__/g, '<strong>$1</strong>');
   text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
@@ -1815,7 +1888,8 @@ function inlineMarkdown(value) {
   return text;
 }
 function renderMarkdown(source) {
-  const protectedMath = protectMath(source);
+  const protectedCode = protectInlineCode(source);
+  const protectedMath = protectMath(protectedCode.text);
   const lines = protectedMath.text.replace(/\r\n/g, '\n').split('\n');
   const out = [];
   let inFence = false;
@@ -1843,7 +1917,7 @@ function renderMarkdown(source) {
       continue;
     }
 
-    const heading = line.match(/^(#{1,3})\s+(.*)$/);
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
     if (heading) {
       closeList();
       const level = heading[1].length;
@@ -1872,7 +1946,10 @@ function renderMarkdown(source) {
   }
   closeList();
   if (inFence) out.push(`<pre><code>${escapeHtml(fence.join('\n'))}</code></pre>`);
-  return restoreMath(out.join('\n'), protectedMath.expressions);
+  return restoreInlineCode(
+    restoreMath(out.join('\n'), protectedMath.expressions),
+    protectedCode.spans
+  );
 }
 
 async function loadArtifactGraph(preserve = true) {
