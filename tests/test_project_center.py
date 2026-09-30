@@ -50,6 +50,8 @@ def test_project_center_serves_tabs_and_initializes_project_memo(tmp_path):
         assert "function restoreInlineCode" in html
         assert "const protectedCode = protectInlineCode(source);" in html
         assert "const heading = line.match(/^(#{1,6})" in html
+        assert "const continuesList = listType === 'ol'" in html
+        assert '<ol start="' in html
         assert "function renderMarkdownInto" in html
         assert "typesetPromise" in html
         assert "cdn.jsdelivr.net" not in html
