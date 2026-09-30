@@ -8,6 +8,7 @@ import webbrowser
 from collections.abc import Callable, Mapping
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -188,6 +189,12 @@ def _handler_factory(
                 if parsed.path == "/":
                     self._send_html(_INDEX_HTML)
                     return
+                if parsed.path == "/assets/mathjax/tex-svg-full.js":
+                    self._send_bytes(
+                        _mathjax_javascript(),
+                        content_type="application/javascript; charset=utf-8",
+                    )
+                    return
                 if parsed.path == "/api/state":
                     self._send_json(_state_payload(catalog_dir, project_name))
                     return
@@ -313,6 +320,14 @@ def _handler_factory(
             data = body.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _send_bytes(self, data: bytes, *, content_type: str) -> None:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -1050,6 +1065,20 @@ def _save_memo(catalog_dir: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
     return {"memo": current}
 
 
+def _mathjax_javascript() -> bytes:
+    """Return the locally installed MathJax browser bundle."""
+    try:
+        resource = files("mathjax").joinpath(
+            "static", "mathjax", "es5", "tex-svg-full.js"
+        )
+        return resource.read_bytes()
+    except (FileNotFoundError, ModuleNotFoundError) as exc:
+        raise RuntimeError(
+            "Project Center math preview requires the bundled MathJax assets from "
+            "django-static-mathjax."
+        ) from exc
+
+
 _INDEX_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
@@ -1131,14 +1160,17 @@ button.danger:disabled { opacity: .45; cursor: not-allowed; }
 textarea.memo-body { width: 100%; min-height: 54vh; resize: vertical; line-height: 1.55; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .preview { min-height: 54vh; border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; background: var(--panel); overflow-wrap: anywhere; }
 .preview[hidden], textarea[hidden] { display: none; }
-.markdown-body h1, .markdown-body h2, .markdown-body h3 { line-height: 1.25; margin: 1.2em 0 .5em; }
-.markdown-body h1:first-child, .markdown-body h2:first-child, .markdown-body h3:first-child { margin-top: 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { line-height: 1.25; margin: 1.2em 0 .5em; }
+.markdown-body h1:first-child, .markdown-body h2:first-child, .markdown-body h3:first-child, .markdown-body h4:first-child, .markdown-body h5:first-child, .markdown-body h6:first-child { margin-top: 0; }
 .markdown-body p { margin: .7em 0; }
 .markdown-body code { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
 .markdown-body pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px; overflow: auto; }
 .markdown-body pre code { border: 0; padding: 0; }
 .markdown-body blockquote { margin: .8em 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
 .markdown-body ul, .markdown-body ol { padding-left: 24px; }
+.markdown-body .math-block { margin: 1em 0; overflow-x: auto; overflow-y: hidden; }
+.markdown-body mjx-container[display="true"] { margin: .9em 0; }
+.math-render-error { margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--danger); border-radius: 6px; color: var(--danger); font-size: 12px; }
 .actions { padding: 12px 16px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .history { border-top: 1px solid var(--line); padding: 12px 16px 16px; display: none; }
 .history.open { display: block; }
@@ -1387,6 +1419,29 @@ textarea.memo-body { width: 100%; min-height: 54vh; resize: vertical; line-heigh
     <div class="action-dialog-actions"><button id="cancelRestoreArtifact">Cancel</button><button class="primary" id="confirmRestoreArtifact">Restore</button></div>
   </dialog>
 </div>
+<script>
+window.MathJax = {
+  startup: {
+    typeset: false
+  },
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: true,
+    formatError: (jax, error) => {
+      console.warn('MathJax TeX error:', error.message);
+      return jax.formatError(error);
+    }
+  },
+  svg: {
+    fontCache: 'local'
+  },
+  options: {
+    skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+  }
+};
+</script>
+<script src="/assets/mathjax/tex-svg-full.js"></script>
 <script>
 const app = {
   state: null,
@@ -1641,15 +1696,190 @@ function setMemoMode(mode) {
   if (preview) updateMemoPreview();
 }
 function updateMemoPreview() {
-  $('memoPreviewPane').innerHTML = renderMarkdown($('memoBody').value);
+  const pane = $('memoPreviewPane');
+  renderMarkdownInto(pane, $('memoBody').value, !pane.hidden);
+}
+
+function renderMarkdownInto(element, source, typeset = true) {
+  if (window.MathJax?.typesetClear) {
+    MathJax.typesetClear([element]);
+  }
+
+  element.innerHTML = renderMarkdown(source);
+
+  if (!typeset || !window.MathJax?.typesetPromise) return;
+
+  const runTypeset = () => MathJax.typesetPromise([element]);
+  const ready = window.MathJax?.startup?.promise;
+  const promise = ready ? ready.then(runTypeset) : runTypeset();
+
+  promise.catch(error => {
+    console.error('MathJax rendering failed:', error);
+    const existing = element.querySelector('.math-render-error');
+    if (existing) return;
+    const notice = document.createElement('div');
+    notice.className = 'math-render-error';
+    notice.textContent =
+      'Some mathematical expressions could not be rendered. Check the TeX syntax.';
+    element.prepend(notice);
+  });
 }
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
+function protectInlineCodeLine(line, store) {
+  let result = '';
+  let index = 0;
+
+  while (index < line.length) {
+    if (line[index] !== '`') {
+      result += line[index];
+      index += 1;
+      continue;
+    }
+
+    const openStart = index;
+    while (index < line.length && line[index] === '`') index += 1;
+    const delimiterLength = index - openStart;
+    let closeStart = -1;
+    let cursor = index;
+
+    while (cursor < line.length) {
+      if (line[cursor] !== '`') {
+        cursor += 1;
+        continue;
+      }
+      const runStart = cursor;
+      while (cursor < line.length && line[cursor] === '`') cursor += 1;
+      if (cursor - runStart === delimiterLength) {
+        closeStart = runStart;
+        break;
+      }
+    }
+
+    if (closeStart < 0) {
+      result += line.slice(openStart, index);
+      continue;
+    }
+
+    result += store(line.slice(index, closeStart));
+    index = closeStart + delimiterLength;
+  }
+
+  return result;
+}
+
+function protectInlineCode(source) {
+  const spans = [];
+  const store = value => {
+    const index = spans.length;
+    spans.push(value);
+    return `TEALCODEINLINE${index}TOKEN`;
+  };
+
+  const lines = String(source || '').replace(/\r\n/g, '\n').split('\n');
+  let inFence = false;
+  const protectedLines = lines.map(line => {
+    if (line.startsWith('```')) {
+      inFence = !inFence;
+      return line;
+    }
+    return inFence ? line : protectInlineCodeLine(line, store);
+  });
+
+  return {text: protectedLines.join('\n'), spans};
+}
+
+function restoreInlineCode(html, spans) {
+  let restored = html;
+  spans.forEach((value, index) => {
+    restored = restored.replaceAll(
+      `TEALCODEINLINE${index}TOKEN`,
+      `<code>${escapeHtml(value)}</code>`
+    );
+  });
+  return restored;
+}
+
+function protectDollarMath(source, store) {
+  let result = '';
+  let index = 0;
+
+  while (index < source.length) {
+    if (
+      source[index] !== '$' ||
+      source[index + 1] === '$' ||
+      (index > 0 && source[index - 1] === '\\')
+    ) {
+      result += source[index];
+      index += 1;
+      continue;
+    }
+
+    const start = index;
+    index += 1;
+    if (index >= source.length || /\s/.test(source[index])) {
+      result += '$';
+      continue;
+    }
+
+    let end = index;
+    while (end < source.length && source[end] !== '\n') {
+      if (
+        source[end] === '$' &&
+        source[end - 1] !== '\\' &&
+        !/\s/.test(source[end - 1])
+      ) {
+        break;
+      }
+      end += 1;
+    }
+
+    if (end >= source.length || source[end] !== '$') {
+      result += source.slice(start, index);
+      continue;
+    }
+
+    result += store(source.slice(start, end + 1));
+    index = end + 1;
+  }
+
+  return result;
+}
+
+function protectMath(source) {
+  const expressions = [];
+  const store = (value, display = false) => {
+    const index = expressions.length;
+    expressions.push({value, display});
+    return display
+      ? `TEALMATHBLOCK${index}TOKEN`
+      : `TEALMATHINLINE${index}TOKEN`;
+  };
+
+  let text = String(source || '');
+  text = text.replace(/\$\$[\s\S]*?\$\$/g, value => `\n${store(value, true)}\n`);
+  text = text.replace(/\\\[[\s\S]*?\\\]/g, value => `\n${store(value, true)}\n`);
+  text = text.replace(/\\\([^\n]*?\\\)/g, value => store(value));
+  text = protectDollarMath(text, value => store(value));
+
+  return {text, expressions};
+}
+
+function restoreMath(html, expressions) {
+  let restored = html;
+  expressions.forEach((expression, index) => {
+    const token = expression.display
+      ? `TEALMATHBLOCK${index}TOKEN`
+      : `TEALMATHINLINE${index}TOKEN`;
+    restored = restored.replaceAll(token, escapeHtml(expression.value));
+  });
+  return restored;
+}
+
 function inlineMarkdown(value) {
   let text = escapeHtml(value);
-  text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
   text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   text = text.replace(/__([^_]+)__/g, '<strong>$1</strong>');
   text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
@@ -1658,7 +1888,9 @@ function inlineMarkdown(value) {
   return text;
 }
 function renderMarkdown(source) {
-  const lines = String(source || '').replace(/\r\n/g, '\n').split('\n');
+  const protectedCode = protectInlineCode(source);
+  const protectedMath = protectMath(protectedCode.text);
+  const lines = protectedMath.text.replace(/\r\n/g, '\n').split('\n');
   const out = [];
   let inFence = false;
   let fence = [];
@@ -1677,7 +1909,15 @@ function renderMarkdown(source) {
       continue;
     }
     if (inFence) { fence.push(line); continue; }
-    const heading = line.match(/^(#{1,3})\s+(.*)$/);
+
+    const mathBlock = line.trim().match(/^TEALMATHBLOCK(\d+)TOKEN$/);
+    if (mathBlock) {
+      closeList();
+      out.push(`<div class="math-block">${line.trim()}</div>`);
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
     if (heading) {
       closeList();
       const level = heading[1].length;
@@ -1706,7 +1946,10 @@ function renderMarkdown(source) {
   }
   closeList();
   if (inFence) out.push(`<pre><code>${escapeHtml(fence.join('\n'))}</code></pre>`);
-  return out.join('\n');
+  return restoreInlineCode(
+    restoreMath(out.join('\n'), protectedMath.expressions),
+    protectedCode.spans
+  );
 }
 
 async function loadArtifactGraph(preserve = true) {
@@ -2195,7 +2438,7 @@ function setInspectorTargetMemoMode(kind, mode) {
   $(`${config.prefix}Raw`).classList.toggle('active', !showPreview);
   $(`${config.prefix}Preview`).classList.toggle('active', showPreview);
   body.hidden = showPreview; preview.hidden = !showPreview;
-  if (showPreview) preview.innerHTML = renderMarkdown(body.value);
+  if (showPreview) renderMarkdownInto(preview, body.value);
 }
 async function saveInspectorTargetMemo(kind) {
   const config = inspectorTargetMemoConfig(kind);
@@ -2269,7 +2512,7 @@ function setArtifactMemoMode(mode) {
   const showPreview = mode === 'preview';
   $('artifactMemoRaw').classList.toggle('active', !showPreview); $('artifactMemoPreview').classList.toggle('active', showPreview);
   body.hidden = showPreview; preview.hidden = !showPreview;
-  if (showPreview) preview.innerHTML = renderMarkdown(body.value);
+  if (showPreview) renderMarkdownInto(preview, body.value);
 }
 async function saveArtifactMemo() {
   const title = $('artifactMemoTitle'); const body = $('artifactMemoBody');
