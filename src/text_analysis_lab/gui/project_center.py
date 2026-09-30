@@ -1896,7 +1896,8 @@ function renderMarkdown(source) {
   let fence = [];
   let listType = null;
   const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
     if (line.startsWith('```')) {
       closeList();
       if (inFence) {
@@ -1930,14 +1931,35 @@ function renderMarkdown(source) {
       out.push(`<li>${inlineMarkdown(unordered[1])}</li>`);
       continue;
     }
-    const ordered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    const ordered = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
     if (ordered) {
-      if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol'; }
-      out.push(`<li>${inlineMarkdown(ordered[1])}</li>`);
+      if (listType !== 'ol') {
+        closeList();
+        const start = Number(ordered[1]);
+        out.push(start === 1 ? '<ol>' : `<ol start="${start}">`);
+        listType = 'ol';
+      }
+      out.push(`<li>${inlineMarkdown(ordered[2])}</li>`);
+      continue;
+    }
+    if (!line.trim()) {
+      if (listType) {
+        let nextIndex = lineIndex + 1;
+        while (nextIndex < lines.length && !lines[nextIndex].trim()) nextIndex += 1;
+        const nextLine = nextIndex < lines.length ? lines[nextIndex] : '';
+        const continuesList = listType === 'ol'
+          ? /^\s*\d+[.)]\s+/.test(nextLine)
+          : /^\s*[-*+]\s+/.test(nextLine);
+        if (continuesList) {
+          out.push('');
+          continue;
+        }
+      }
+      closeList();
+      out.push('');
       continue;
     }
     closeList();
-    if (!line.trim()) { out.push(''); continue; }
     if (line.startsWith('> ')) {
       out.push(`<blockquote>${inlineMarkdown(line.slice(2))}</blockquote>`);
     } else {
