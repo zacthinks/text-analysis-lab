@@ -116,6 +116,15 @@ def test_transform_texts_like_replays_frozen_count_tfidf_pipeline(
     )
     _record(project, "tfidfop", count_matrix, tfidf_matrix, tfidf)
 
+    # Frozen replay must use the real standalone translate(...) contracts rather
+    # than the legacy compatibility shims.
+    count.transform_external_texts = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("legacy text shim should not be called")
+    )
+    tfidf.transform_external_matrix = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("legacy matrix shim should not be called")
+    )
+
     expected = tfidf._require_transformer().transform(
         count._require_vectorizer().transform(["alpha gamma"])
     )
@@ -160,6 +169,9 @@ def test_transform_texts_like_replays_frozen_feature_trim_mask(tmp_path: Path) -
     )
     _record(project, "trimop", count_matrix, trimmed, trim)
 
+    trim.transform_external_matrix = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("legacy matrix shim should not be called")
+    )
     actual = transform_texts_like(project, trimmed, ["alpha beta gamma"], query=True)
     assert actual.shape == (1, 2)
     np.testing.assert_array_equal(actual.toarray(), [[1, 1]])
