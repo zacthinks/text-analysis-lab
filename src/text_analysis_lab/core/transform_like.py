@@ -8,12 +8,14 @@ an existing TeAL matrix artifact.
 
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
+from text_analysis_lab.core.operator import BaseTranslator
 from text_analysis_lab.core.types import ArtifactType
 
 if TYPE_CHECKING:
@@ -66,18 +68,13 @@ def transform_texts_like(
         operator = stage["operator"]
         params = stage["params"]
         kind = stage["kind"]
-        if kind == "texts":
-            values = operator.transform_external_texts(
-                values,
-                query=query,
-                params=params,
-            )
-        else:
-            values = operator.transform_external_matrix(
-                values,
-                query=query,
-                params=params,
-            )
+        values = _replay_stage(
+            operator,
+            values,
+            kind=kind,
+            query=query,
+            params=params,
+        )
     _validate_transformed_rows(values, len(normalized), target)
     return values
 
@@ -136,32 +133,16 @@ def _build_transform_plan(
     params = dict(operator.deserialize_operation_params(raw_params))
 
     if source.artifact_type == ArtifactType.TABLE:
-        method = getattr(operator, "transform_external_texts", None)
-        if not callable(method):
+        if not _supports_text_root(operator):
             raise TransformLikeError(
                 f"Frozen operator {operator.__class__.__name__} cannot transform new raw text."
-            )
-        if not _operator_allows_external_transform(
-            operator, query=query, input_kind="texts"
-        ):
-            raise TransformLikeError(
-                f"Frozen operator {operator.__class__.__name__} does not support "
-                f"{'query' if query else 'new-text'} replay for this configuration."
             )
         return [{"kind": "texts", "operator": operator, "params": params}]
 
     if source.artifact_type in _MATRIX_TYPES:
-        method = getattr(operator, "transform_external_matrix", None)
-        if not callable(method):
+        if not _supports_matrix_stage(operator):
             raise TransformLikeError(
                 f"Frozen operator {operator.__class__.__name__} cannot replay new matrix rows."
-            )
-        if not _operator_allows_external_transform(
-            operator, query=query, input_kind="matrix"
-        ):
-            raise TransformLikeError(
-                f"Frozen operator {operator.__class__.__name__} does not support "
-                f"{'query' if query else 'new-text'} replay for this configuration."
             )
         return [
             *_build_transform_plan(project, source, query=query),
@@ -175,16 +156,93 @@ def _build_transform_plan(
     )
 
 
-def _operator_allows_external_transform(
+def _replay_stage(
     operator: Any,
+    values: Any,
     *,
+    kind: str,
     query: bool,
-    input_kind: str,
-) -> bool:
-    checker = getattr(operator, "supports_external_transform", None)
-    if callable(checker):
-        return bool(checker(query=query, input_kind=input_kind))
-    return True
+    params: Mapping[str, Any],
+) -> Any:
+    """Execute one frozen replay stage through the ordinary translation contract."""
+    if kind == "texts":
+        if operator.__class__.__name__ == "SentenceTransformerEncoder":
+            return operator.translate(
+                values,
+                task="query" if query else None,
+                device="auto",
+                model_batch_size=int(params.get("model_batch_size", 32)),
+            )
+        return operator.translate(values)
+
+    if _has_standalone_translate(operator):
+        return operator.translate(values)
+
+    # Core positional feature-subset operators are internal TeAL operations rather
+    # than user-facing translators. Preserve their narrow in-memory replay hook
+    # without requiring them to invent a public standalone translator contract.
+    fallback = getattr(operator, "transform_external_matrix", None)
+    if callable(fallback):
+        return fallback(values, query=query, params=params)
+    raise TransformLikeError(
+        f"Frozen operator {operator.__class__.__name__} cannot replay matrix rows."
+    )
+
+
+def _supports_text_root(operator: Any) -> bool:
+    """Return whether an operator is a raw-text representation root."""
+    if operator.__class__.__name__ not in {
+        "CountVectorizer",
+        "SentenceTransformerEncoder",
+    }:
+        return False
+    if bool(getattr(operator, "requires_fit", False)) and not bool(
+        getattr(operator, "is_fitted", False)
+    ):
+        return False
+    return _has_standalone_translate(operator)
+
+
+def _supports_matrix_stage(operator: Any) -> bool:
+    """Return whether a frozen one-input matrix stage can replay new rows."""
+    if getattr(operator, "axis", None) == "columns":
+        # Column normalization depends on the fitted corpus row population.
+        return False
+    if bool(getattr(operator, "requires_fit", False)) and not bool(
+        getattr(operator, "is_fitted", False)
+    ):
+        return False
+    if _has_standalone_translate(operator):
+        signature = inspect.signature(operator.translate)
+        required = [
+            parameter
+            for parameter in signature.parameters.values()
+            if parameter.default is inspect.Parameter.empty
+            and parameter.kind
+            in {
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            }
+        ]
+        # Bound method signatures omit self. Replay can supply only the matrix.
+        return (
+            len(required) == 1
+            and required[0].kind
+            in {
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            }
+        )
+
+    # Internal positional feature-subset operators intentionally remain outside
+    # the standalone translator contract.
+    return callable(getattr(operator, "transform_external_matrix", None))
+
+
+def _has_standalone_translate(operator: Any) -> bool:
+    method = getattr(type(operator), "translate", None)
+    return callable(method) and method is not BaseTranslator.translate
 
 
 def _operation_descriptor(project: Project, operation_id: str) -> Mapping[str, Any]:
