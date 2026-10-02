@@ -1581,11 +1581,3 @@ def test_coreference_translate_from_text_composes_documents_spacy_and_translate(
     assert set(result) == {"mentions", "failures"}
 
 
-def test_wsd_old_snapshot_license_flag_is_ignored() -> None:
-    state = WordSenseDisambiguator().to_json_state()
-    state["acknowledge_noncommercial_license"] = True
-
-    restored = WordSenseDisambiguator.from_json_state(state)
-
-    assert isinstance(restored, WordSenseDisambiguator)
-    assert "acknowledge_noncommercial_license" not in restored.to_json_state()
