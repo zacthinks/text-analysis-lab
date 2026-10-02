@@ -90,6 +90,48 @@ class RegexCleaner(BaseTranslator):
         self.strip = bool(strip)
         self.preserve_null = bool(preserve_null)
 
+    def translate(
+        self,
+        texts: str | None | Sequence[str | None] | pd.Series,
+    ) -> str | None | pd.Series:
+        """Clean ordinary text values without creating TeAL artifacts.
+
+        Scalar input returns a scalar. A pandas Series returns a Series with its
+        index preserved; other sequences return a new Series.
+        """
+        scalar = isinstance(texts, str) or texts is None
+        if isinstance(texts, pd.Series):
+            source = texts.copy()
+        elif scalar:
+            source = pd.Series([texts])
+        elif isinstance(texts, Sequence) and not isinstance(texts, (str, bytes)):
+            source = pd.Series(list(texts))
+        else:
+            raise TypeError(
+                "RegexCleaner.translate(...) expects a string, None, a sequence "
+                "of text values, or a pandas Series."
+            )
+
+        null_mask = source.isna()
+        cleaned = source.fillna("").astype("string")
+        for rule in self.rules:
+            cleaned = cleaned.str.replace(
+                rule.pattern,
+                rule.replacement,
+                n=-1 if rule.count == 0 else int(rule.count),
+                flags=_compile_flags(rule.flags),
+                regex=True,
+            )
+        if self.strip:
+            cleaned = cleaned.str.strip()
+        if self.preserve_null:
+            cleaned = cleaned.mask(null_mask, pd.NA)
+
+        if scalar:
+            value = cleaned.iloc[0]
+            return None if pd.isna(value) else str(value)
+        return cleaned
+
     def output_specs(
         self,
         *,
@@ -167,21 +209,7 @@ class RegexCleaner(BaseTranslator):
                 f"RegexCleaner source batch is missing columns {missing}."
             )
 
-        source = frame[self.text_field]
-        null_mask = source.isna()
-        cleaned = source.fillna("").astype("string")
-        for rule in self.rules:
-            cleaned = cleaned.str.replace(
-                rule.pattern,
-                rule.replacement,
-                n=-1 if rule.count == 0 else int(rule.count),
-                flags=_compile_flags(rule.flags),
-                regex=True,
-            )
-        if self.strip:
-            cleaned = cleaned.str.strip()
-        if self.preserve_null:
-            cleaned = cleaned.mask(null_mask, pd.NA)
+        cleaned = cast(pd.Series, self.translate(frame[self.text_field]))
 
         keys = frame.loc[:, key_columns].reset_index(drop=True)
         data = pd.DataFrame({self.output_field: cleaned.reset_index(drop=True)})

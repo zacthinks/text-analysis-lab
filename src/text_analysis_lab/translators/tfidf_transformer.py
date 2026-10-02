@@ -90,6 +90,27 @@ class TfidfTransformer(BaseTranslator):
             or (mode == "translate" and route == "parallel")
         )
 
+    def translate(self, matrix: Any):
+        """Apply fitted TF-IDF weights to an ordinary two-dimensional matrix."""
+        shape = getattr(matrix, "shape", None)
+        if shape is None or len(shape) != 2:
+            raise ValueError(
+                "TfidfTransformer.translate(...) requires a two-dimensional matrix."
+            )
+        require_nonnegative(matrix, name="TfidfTransformer")
+        transformer = self._require_transformer()
+        expected_width = (
+            len(self.source_features_)
+            if self.source_features_ is not None
+            else getattr(transformer, "n_features_in_", None)
+        )
+        if expected_width is not None and int(shape[1]) != int(expected_width):
+            raise ValueError(
+                "TfidfTransformer.translate(...) requires the fitted feature width "
+                f"{int(expected_width)}; got {int(shape[1])}."
+            )
+        return transformer.transform(matrix).tocsr()
+
     def output_specs(
         self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest
     ) -> OutputSpec:
@@ -157,8 +178,8 @@ class TfidfTransformer(BaseTranslator):
         info, matrix, key_columns = native_matrix_packet(
             packet, name="TfidfTransformer"
         )
-        require_nonnegative(matrix, name="TfidfTransformer")
         if mode == "fit_translate":
+            require_nonnegative(matrix, name="TfidfTransformer")
             if self.is_fitted:
                 raise OperatorError(
                     "fit_translate received an already fitted TfidfTransformer."
@@ -167,7 +188,7 @@ class TfidfTransformer(BaseTranslator):
             values = transformer.fit_transform(matrix)
             self._transformer = transformer
         elif mode == "translate":
-            values = self._require_transformer().transform(matrix)
+            values = self.translate(matrix)
         else:  # pragma: no cover
             raise OperatorError(f"Unsupported TfidfTransformer mode {mode!r}.")
         return BatchResult(
@@ -189,10 +210,9 @@ class TfidfTransformer(BaseTranslator):
         query: bool = False,
         params: Mapping[str, Any] | None = None,
     ):
-        """Apply the frozen IDF weighting to new matrix rows in memory."""
+        """Compatibility shim for frozen-lineage replay on new matrix rows."""
         _ = query, params
-        require_nonnegative(matrix, name="TfidfTransformer")
-        return self._require_transformer().transform(matrix).tocsr()
+        return self.translate(matrix)
 
     def supports_external_transform(self, *, query: bool, input_kind: str) -> bool:
         _ = query

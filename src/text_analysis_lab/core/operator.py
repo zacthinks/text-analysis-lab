@@ -21,6 +21,7 @@ from text_analysis_lab.core.errors import (
     FrozenOperatorError,
     OperatorError,
     OutputSpecError,
+    StandaloneTranslationNotSupportedError,
 )
 from text_analysis_lab.core.lineage import validate_lineage_mode
 from text_analysis_lab.core.types import (
@@ -622,17 +623,29 @@ class BaseOperator(ABC):
 
 
 class BaseTranslator(BaseOperator):
-    """Base class for user-extensible artifact translators.
+    """Base class for reusable translation procedures and TeAL execution adapters.
 
-    The concrete translation runner lives outside this module. This class defines
-    the developer-facing translation protocol; ``translate.py`` implements the
-    project-side runner for that protocol. User-facing translators may also expose
-    a typed ``translate(project, ...)`` convenience method that delegates to
-    ``project.translate(...)``; internal translators used by core operations do
-    not need to provide one.
+    User-facing translators can implement ``translate(...)`` over ordinary
+    Python/scientific-Python inputs while the project-side runner supplies durable
+    artifact execution through the batch protocol below. Internal translator-backed
+    TeAL operations do not need a standalone contract and may rely on the default
+    unsupported implementation.
     """
 
     operation_type: ClassVar[OperationType] = "translate"
+
+    def translate(self, *args: Any, **kwargs: Any) -> Any:
+        """Apply this translator directly to ordinary in-memory inputs.
+
+        Concrete user-facing translators should override this with the scientific
+        input/output contract natural to the operation. The default intentionally
+        stays non-abstract so internal TeAL operations can continue to use the
+        translation engine without inventing an artificial standalone API.
+        """
+        _ = args, kwargs
+        raise StandaloneTranslationNotSupportedError(
+            f"{self.__class__.__name__} does not expose a standalone translate(...) contract."
+        )
 
     @property
     def requires_fit(self) -> bool:
