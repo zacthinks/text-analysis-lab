@@ -130,7 +130,7 @@ def test_transform_texts_like_replays_frozen_count_tfidf_pipeline(
     )
     actual = _replay_texts_like(project, tfidf_matrix, ["alpha gamma"], query=True)
     np.testing.assert_allclose(actual.toarray(), expected.toarray())
-    assert can__replay_texts_like(project, tfidf_matrix, query=True)
+    assert _can_replay_texts_like(project, tfidf_matrix, query=True)
 
 
 def test_column_normalization_is_not_replayable_for_single_new_text(
@@ -148,7 +148,7 @@ def test_column_normalization_is_not_replayable_for_single_new_text(
         project, "norm", ArtifactType.SPARSE_MATRIX, ["alpha", "beta"]
     )
     _record(project, "normop", count_matrix, norm_matrix, normalizer)
-    assert not can__replay_texts_like(project, norm_matrix)
+    assert not _can_replay_texts_like(project, norm_matrix)
 
 
 def test_transform_texts_like_replays_frozen_feature_trim_mask(tmp_path: Path) -> None:
@@ -175,4 +175,4 @@ def test_transform_texts_like_replays_frozen_feature_trim_mask(tmp_path: Path) -
     actual = _replay_texts_like(project, trimmed, ["alpha beta gamma"], query=True)
     assert actual.shape == (1, 2)
     np.testing.assert_array_equal(actual.toarray(), [[1, 1]])
-    assert can__replay_texts_like(project, trimmed, query=True)
+    assert _can_replay_texts_like(project, trimmed, query=True)
