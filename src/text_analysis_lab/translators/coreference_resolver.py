@@ -131,6 +131,48 @@ class CoreferenceResolver(BaseTranslator):
             for label, payload in outputs.items()
         }
 
+    def translate_from_text(
+        self,
+        texts: str | Sequence[str | None] | pd.Series,
+        *,
+        spacy_model: str = "en_core_web_sm",
+        spacy_batch_size: int = 128,
+        spacy_disable: Sequence[str] = (),
+    ) -> dict[str, pd.DataFrame]:
+        """Parse ordinary text with spaCy, then resolve document coreference."""
+        from text_analysis_lab.translators.spacy_translator import SpacyTranslator
+
+        if isinstance(texts, pd.Series):
+            values = texts.fillna("").astype(str).tolist()
+        elif isinstance(texts, str):
+            values = [texts]
+        elif isinstance(texts, Sequence) and not isinstance(texts, (str, bytes)):
+            values = ["" if value is None else str(value) for value in texts]
+        else:
+            raise TypeError(
+                "CoreferenceResolver.translate_from_text(...) expects a string, "
+                "sequence of strings, or pandas Series."
+            )
+
+        parsed = SpacyTranslator(
+            model=spacy_model,
+            sentence_key=self.sentence_key,
+            token_key=self.token_key,
+            spacy_batch_size=spacy_batch_size,
+            disable=spacy_disable,
+        ).translate(values)
+        documents = pd.DataFrame(
+            {
+                "source_position": range(len(values)),
+                self.text_field: values,
+            }
+        )
+        return self.translate(
+            documents,
+            parsed[TOKENS],
+            document_keys=["source_position"],
+        )
+
     def output_specs(
         self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest
     ):
