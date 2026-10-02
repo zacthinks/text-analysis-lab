@@ -250,6 +250,13 @@ class FeatureTrimmer(BaseTranslator):
     ) -> Any:
         """Compatibility shim for frozen-lineage replay on new matrix rows."""
         _ = query, params
+        source_width = self._require_source_width()
+        shape = getattr(matrix, "shape", None)
+        if shape is None or len(shape) != 2 or int(shape[1]) != source_width:
+            raise OperatorError(
+                "FeatureTrimmer replay requires the fitted source width "
+                f"{source_width}; got shape={shape!r}."
+            )
         return self.translate(matrix)
 
     def supports_external_transform(self, *, query: bool, input_kind: str) -> bool:
