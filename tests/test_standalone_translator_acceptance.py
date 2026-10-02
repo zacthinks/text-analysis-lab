@@ -260,7 +260,7 @@ def test_cardinality_changing_translation_is_invariant_to_batch_size(
         source = project.read_csv(
             source_path,
             text_fields="text",
-            metadata_fields=False,
+            metadata_fields=None,
             batch_size=2,
         )
         small = project.translate(
@@ -375,13 +375,18 @@ def test_built_wheel_imports_and_standalone_translation_works_outside_checkout(
     )
     outside = tmp_path / "outside-checkout"
     outside.mkdir()
-    subprocess.run(
+    smoke_run = subprocess.run(
         [str(venv_python), "-c", smoke],
-        check=True,
+        check=False,
         cwd=outside,
         capture_output=True,
         text=True,
         timeout=120,
+    )
+    assert smoke_run.returncode == 0, (
+        "wheel-installed smoke process failed\n"
+        f"stdout:\n{smoke_run.stdout}\n"
+        f"stderr:\n{smoke_run.stderr}"
     )
     result = json.loads((outside / "result.json").read_text(encoding="utf-8"))
     assert result["values"] == [[2, 1], [0, 1]]
