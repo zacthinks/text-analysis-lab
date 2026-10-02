@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 _MATRIX_TYPES = {ArtifactType.SPARSE_MATRIX, ArtifactType.DENSE_MATRIX}
 
 
-class TransformLikeError(OperatorError):
-    """Raised when an artifact's frozen lineage cannot transform new text."""
+class _RepresentationReplayError(OperatorError):
+    """Raised when a frozen representation lineage cannot replay new text."""
 
 
 def _can_replay_texts_like(
@@ -36,8 +36,8 @@ def _can_replay_texts_like(
 ) -> bool:
     """Return whether TeAL can replay ``artifact``'s frozen lineage on new text."""
     try:
-        _build_transform_plan(project, project.get_artifact(artifact), query=query)
-    except (ArtifactError, OperatorError, TransformLikeError, KeyError, ValueError):
+        _build_replay_plan(project, project.get_artifact(artifact), query=query)
+    except (ArtifactError, OperatorError, _RepresentationReplayError, KeyError, ValueError):
         return False
     return True
 
@@ -49,7 +49,7 @@ def _replay_texts_like(
     *,
     query: bool = False,
 ) -> Any:
-    """Transform raw texts into the representation of an existing matrix artifact.
+    """Replay raw texts into the representation of an existing matrix artifact.
 
     The existing artifact is not modified and no new TeAL artifact is written.
     Every fitted operator is loaded from its durable snapshot and executed with
@@ -57,12 +57,12 @@ def _replay_texts_like(
     """
     target = project.get_artifact(artifact)
     if target.artifact_type not in _MATRIX_TYPES:
-        raise TransformLikeError(
+        raise _RepresentationReplayError(
             "Frozen representation replay requires a dense_matrix or sparse_matrix "
             f"artifact; got {target.artifact_type.value!r}."
         )
     normalized = ["" if value is None else str(value) for value in texts]
-    plan = _build_transform_plan(project, target, query=query)
+    plan = _build_replay_plan(project, target, query=query)
     values: Any = normalized
     for stage in plan:
         operator = stage["operator"]
@@ -75,24 +75,24 @@ def _replay_texts_like(
             query=query,
             params=params,
         )
-    _validate_transformed_rows(values, len(normalized), target)
+    _validate_replayed_rows(values, len(normalized), target)
     return values
 
 
-def _build_transform_plan(
+def _build_replay_plan(
     project: Project,
     artifact: BaseArtifact,
     *,
     query: bool,
 ) -> list[dict[str, Any]]:
     if artifact.artifact_type not in _MATRIX_TYPES:
-        raise TransformLikeError(
+        raise _RepresentationReplayError(
             f"Artifact {artifact.artifact_id!r} is not a matrix representation."
         )
 
     operation = project.operation_for_artifact(artifact)
     if operation is None:
-        raise TransformLikeError(
+        raise _RepresentationReplayError(
             f"Artifact {artifact.artifact_id!r} has no producing operation to replay."
         )
     operation_id = str(operation["operation_id"])
@@ -102,7 +102,7 @@ def _build_transform_plan(
         None,
     )
     if output_edge is None:
-        raise TransformLikeError(
+        raise _RepresentationReplayError(
             f"Operation {operation_id!r} does not record artifact {artifact.artifact_id!r} "
             "as an output."
         )
@@ -111,7 +111,7 @@ def _build_transform_plan(
     output_label = str(output_edge.get("output_label"))
     spec = dict(descriptor.get("output_specs", {})).get(output_label)
     if isinstance(spec, Mapping) and str(spec.get("lineage_mode")) != "preserved_key":
-        raise TransformLikeError(
+        raise _RepresentationReplayError(
             "Only preserved-key representation outputs can be replayed on new documents; "
             f"artifact {artifact.artifact_id!r} is output {output_label!r} with "
             f"lineage_mode={spec.get('lineage_mode')!r}."
@@ -119,7 +119,7 @@ def _build_transform_plan(
 
     sources = project.operation_sources(operation_id)
     if len(sources) != 1:
-        raise TransformLikeError(
+        raise _RepresentationReplayError(
             "New-text replay currently supports only single-source representation "
             f"pipelines; operation {operation_id!r} has {len(sources)} sources."
         )
@@ -127,29 +127,29 @@ def _build_transform_plan(
     operator = project.get_operator(str(operation["operator_id"]))
     raw_params = descriptor.get("request", {}).get("params", {})
     if not isinstance(raw_params, Mapping):
-        raise TransformLikeError(
+        raise _RepresentationReplayError(
             f"Operation {operation_id!r} has invalid persisted request parameters."
         )
     params = dict(operator.deserialize_operation_params(raw_params))
 
     if source.artifact_type == ArtifactType.TABLE:
         if not _supports_text_root(operator):
-            raise TransformLikeError(
+            raise _RepresentationReplayError(
                 f"Frozen operator {operator.__class__.__name__} cannot transform new raw text."
             )
         return [{"kind": "texts", "operator": operator, "params": params}]
 
     if source.artifact_type in _MATRIX_TYPES:
         if not _supports_matrix_stage(operator):
-            raise TransformLikeError(
+            raise _RepresentationReplayError(
                 f"Frozen operator {operator.__class__.__name__} cannot replay new matrix rows."
             )
         return [
-            *_build_transform_plan(project, source, query=query),
+            *_build_replay_plan(project, source, query=query),
             {"kind": "matrix", "operator": operator, "params": params},
         ]
 
-    raise TransformLikeError(
+    raise _RepresentationReplayError(
         "New-text replay requires a representation lineage rooted in a table and "
         f"continuing through matrix artifacts; source {source.artifact_id!r} has type "
         f"{source.artifact_type.value!r}."
@@ -184,7 +184,7 @@ def _replay_stage(
     fallback = getattr(operator, "transform_external_matrix", None)
     if callable(fallback):
         return fallback(values, query=query, params=params)
-    raise TransformLikeError(
+    raise _RepresentationReplayError(
         f"Frozen operator {operator.__class__.__name__} cannot replay matrix rows."
     )
 
@@ -248,29 +248,29 @@ def _has_standalone_translate(operator: Any) -> bool:
 def _operation_descriptor(project: Project, operation_id: str) -> Mapping[str, Any]:
     path = project.storage.operation_descriptor_path(operation_id)
     if not path.exists():
-        raise TransformLikeError(
+        raise _RepresentationReplayError(
             f"Operation {operation_id!r} has no durable operation descriptor."
         )
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, Mapping):
-        raise TransformLikeError(
+        raise _RepresentationReplayError(
             f"Operation descriptor for {operation_id!r} must contain a mapping."
         )
     return payload
 
 
-def _validate_transformed_rows(
+def _validate_replayed_rows(
     values: Any, expected: int, artifact: BaseArtifact
 ) -> None:
     shape = getattr(values, "shape", None)
     if shape is None or len(shape) != 2 or int(shape[0]) != int(expected):
-        raise TransformLikeError(
+        raise _RepresentationReplayError(
             f"Replaying artifact {artifact.artifact_id!r} expected {expected} transformed "
             f"row(s), received shape={shape!r}."
         )
     expected_columns = len(artifact.get_data_columns())
     if int(shape[1]) != expected_columns:
-        raise TransformLikeError(
+        raise _RepresentationReplayError(
             f"Replaying artifact {artifact.artifact_id!r} expected {expected_columns} "
             f"feature columns, received shape={shape!r}."
         )
