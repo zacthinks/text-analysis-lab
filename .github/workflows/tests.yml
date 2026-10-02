@@ -24,7 +24,7 @@ jobs:
       - name: Install TeAL and test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[visualization,transformers,linguistics]" pytest
+          python -m pip install -e ".[all]" pytest
 
       - name: Run pytest
         run: pytest -q
