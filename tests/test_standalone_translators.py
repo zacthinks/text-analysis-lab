@@ -52,6 +52,7 @@ from text_analysis_lab.translators import (
     TfidfTransformer,
     UMAP,
     Word2Vec,
+    WordSenseDisambiguator,
 )
 
 
@@ -1399,6 +1400,52 @@ def test_semantic_role_labeler_standalone_matches_teal_batch(monkeypatch) -> Non
         request=TranslationRequest(),
     ).outputs
     for label in ("predicates", "roles", "failures"):
+        combined = pd.concat(
+            [batch[label]["keys"], batch[label]["data"]],
+            axis=1,
+        )
+        pd.testing.assert_frame_equal(combined, direct[label])
+
+
+def test_word_sense_disambiguator_standalone_matches_teal_batch_without_targets() -> None:
+    tokens = pd.DataFrame(
+        {
+            "row_id": [1, 1],
+            "sentence_id": [0, 0],
+            "token_id": [0, 1],
+            "text": [".", "!"],
+            "lemma": [".", "!"],
+            "pos": ["PUNCT", "PUNCT"],
+            "ent_type": ["", ""],
+        }
+    )
+    translator = WordSenseDisambiguator(
+        device="cpu",
+        acknowledge_noncommercial_license=True,
+    )
+    token_keys = ["row_id", "sentence_id", "token_id"]
+    direct = translator.translate(tokens, token_keys=token_keys)
+    assert direct["senses"].empty
+    assert direct["candidates"].empty
+    assert direct["unresolved"].empty
+
+    batch = translator.translate_batch(
+        {
+            "tokens": InputBatch(
+                "tokens",
+                "art_tokens",
+                tuple(token_keys),
+                tokens,
+                0,
+                1,
+                True,
+                True,
+            )
+        },
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs
+    for label in ("senses", "candidates", "unresolved"):
         combined = pd.concat(
             [batch[label]["keys"], batch[label]["data"]],
             axis=1,
