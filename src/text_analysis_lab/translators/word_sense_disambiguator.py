@@ -88,10 +88,13 @@ UNRESOLVED_DATA_COLUMNS = ("surface_form", "parser_lemma", "pos", "reason")
 class WordSenseDisambiguator(BaseTranslator):
     """Disambiguate every WordNet-eligible token in a selected TeAL token artifact.
 
-    This translator intentionally has no artificial token cap.  Unit 10 should run it on a
+    This translator intentionally has no artificial token cap. Unit 10 should run it on a
     sentence or another tiny subset so students can see the computational cost of modern
-    lexical-semantic models.  The same artifact contract can later support the TeAL-native
+    lexical-semantic models. The same artifact contract can later support the TeAL-native
     Bag-of-Ideas rewrite, including semantic-head targets.
+
+    The default Babelscape WSL reader checkpoint is licensed CC BY-NC-SA 4.0.
+    See https://huggingface.co/Babelscape/wsl-reader-deberta-v3-base.
     """
 
     operation_type = "translate"
@@ -109,7 +112,6 @@ class WordSenseDisambiguator(BaseTranslator):
         include_multiword_candidates: bool = True,
         target_span_policy: str = "carrier_only",
         local_files_only: bool = False,
-        acknowledge_noncommercial_license: bool = False,
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
@@ -125,12 +127,6 @@ class WordSenseDisambiguator(BaseTranslator):
             raise ValueError(
                 "target_span_policy must be 'carrier_only' or 'unique_mwe_envelope'."
             )
-        if not acknowledge_noncommercial_license:
-            raise ValueError(
-                "The Babelscape WSL reader is CC BY-NC-SA 4.0. Pass "
-                "acknowledge_noncommercial_license=True only for eligible non-commercial "
-                "research or education use."
-            )
         self.lexicon = str(lexicon)
         self.model_name = str(model_name)
         self.model_revision = None if model_revision is None else str(model_revision)
@@ -141,7 +137,6 @@ class WordSenseDisambiguator(BaseTranslator):
         self.include_multiword_candidates = bool(include_multiword_candidates)
         self.target_span_policy = str(target_span_policy)
         self.local_files_only = bool(local_files_only)
-        self.acknowledge_noncommercial_license = True
 
     def translate(
         self,
@@ -174,6 +169,29 @@ class WordSenseDisambiguator(BaseTranslator):
             )
             for label, payload in outputs.items()
         }
+
+    def translate_from_text(
+        self,
+        texts: str | Sequence[str | None] | pd.Series,
+        *,
+        spacy_model: str = "en_core_web_sm",
+        spacy_batch_size: int = 128,
+        spacy_disable: Sequence[str] = (),
+    ) -> dict[str, pd.DataFrame]:
+        """Parse ordinary text with spaCy, then disambiguate eligible tokens."""
+        from text_analysis_lab.translators.spacy_translator import SpacyTranslator
+
+        parsed = SpacyTranslator(
+            model=spacy_model,
+            sentence_key=self.sentence_key,
+            token_key=self.token_key,
+            spacy_batch_size=spacy_batch_size,
+            disable=spacy_disable,
+        ).translate(texts)
+        return self.translate(
+            parsed[TOKENS],
+            token_keys=["source_position", self.sentence_key, self.token_key],
+        )
 
     def _translate_frame(
         self,
@@ -484,12 +502,15 @@ class WordSenseDisambiguator(BaseTranslator):
             "include_multiword_candidates": self.include_multiword_candidates,
             "target_span_policy": self.target_span_policy,
             "local_files_only": self.local_files_only,
-            "acknowledge_noncommercial_license": True,
         }
 
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> WordSenseDisambiguator:
-        return cls(**cast(dict[str, Any], dict(state)))
+        payload = cast(dict[str, Any], dict(state))
+        # Backward compatibility with WSD snapshots created before the runtime
+        # acknowledgement parameter was removed.
+        payload.pop("acknowledge_noncommercial_license", None)
+        return cls(**payload)
 
 
 def _make_ontology(*, lexicon: str, include_multiword_candidates: bool):
@@ -512,7 +533,6 @@ def _make_backend(*, model_name, model_revision, device, precision, local_files_
         precision=precision,
         cache_dir=user_cache_paths().huggingface_hub,
         local_files_only=local_files_only,
-        acknowledge_noncommercial_license=True,
     )
 
 
