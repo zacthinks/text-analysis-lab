@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
@@ -56,6 +56,73 @@ class EmbeddingLookup(BaseTranslator):
         self.field = field
         self.oov_policy = oov_policy
         self.drop_empty = bool(drop_empty)
+
+    def translate(
+        self,
+        tokens: pd.DataFrame | pd.Series | Sequence[Any],
+        embeddings: Any,
+        *,
+        row_names: Sequence[str],
+    ) -> dict[str, Any]:
+        """Look up ordinary token values in an ordinary named-row matrix."""
+        if isinstance(tokens, pd.DataFrame):
+            if self.field not in tokens.columns:
+                raise ValueError(f"Token data is missing field {self.field!r}.")
+            raw_words = tokens[self.field]
+        elif isinstance(tokens, pd.Series):
+            raw_words = tokens
+        elif isinstance(tokens, Sequence) and not isinstance(tokens, (str, bytes)):
+            raw_words = pd.Series(list(tokens))
+        else:
+            raise TypeError(
+                "EmbeddingLookup.translate(...) expects a DataFrame, Series, or "
+                "sequence of token values."
+            )
+
+        shape = getattr(embeddings, "shape", None)
+        if shape is None or len(shape) != 2:
+            raise ValueError(
+                "EmbeddingLookup.translate(...) requires a two-dimensional matrix."
+            )
+        names = [str(value) for value in row_names]
+        if len(names) != int(shape[0]):
+            raise ValueError(
+                "Embedding row_names are not aligned with matrix rows."
+            )
+        position_by_name = {name: position for position, name in enumerate(names)}
+        if len(position_by_name) != len(names):
+            raise ValueError("Embedding matrix row_names must be unique.")
+
+        words = raw_words.astype("string")
+        valid = raw_words.notna()
+        if self.drop_empty:
+            valid &= words.str.len().fillna(0).gt(0)
+        positions = words.map(position_by_name).fillna(-1).to_numpy(dtype=np.int64)
+        positions[~valid.to_numpy(dtype=bool)] = -1
+        in_vocabulary = positions >= 0
+        if self.oov_policy == "error" and not bool(np.all(in_vocabulary)):
+            examples = (
+                words.loc[~pd.Series(in_vocabulary, index=raw_words.index)]
+                .fillna("<null>")
+                .astype(str)
+                .drop_duplicates()
+                .head(5)
+                .tolist()
+            )
+            raise ArtifactError(
+                f"EmbeddingLookup encountered {int((~in_vocabulary).sum())} "
+                f"out-of-vocabulary row(s). Example(s): {examples}."
+            )
+
+        return {
+            "values": _lookup_rows(embeddings, positions, in_vocabulary),
+            "metadata": pd.DataFrame(
+                {
+                    self.field: words.fillna("<null>").astype(str).to_numpy(),
+                    "in_vocabulary": in_vocabulary,
+                }
+            ),
+        }
 
     def output_specs(
         self,
@@ -148,48 +215,17 @@ class EmbeddingLookup(BaseTranslator):
             raise ArtifactError(
                 "EmbeddingLookup requires a matrix source with named rows."
             )
-        row_names = [str(value) for value in row_names]
-        if len(row_names) != int(matrix.shape[0]):
-            raise ArtifactError("Embedding row_names are not aligned with matrix rows.")
-        position_by_name = {name: position for position, name in enumerate(row_names)}
-        if len(position_by_name) != len(row_names):
-            raise ArtifactError("Embedding matrix row_names must be unique.")
-
-        raw_words = tokens[self.field]
-        words = raw_words.astype("string")
-        valid = raw_words.notna()
-        if self.drop_empty:
-            valid &= words.str.len().fillna(0).gt(0)
-        positions = words.map(position_by_name).fillna(-1).to_numpy(dtype=np.int64)
-        positions[~valid.to_numpy(dtype=bool)] = -1
-        in_vocabulary = positions >= 0
-        if self.oov_policy == "error" and not bool(np.all(in_vocabulary)):
-            examples = (
-                words.loc[~pd.Series(in_vocabulary, index=tokens.index)]
-                .fillna("<null>")
-                .astype(str)
-                .drop_duplicates()
-                .head(5)
-                .tolist()
-            )
-            raise ArtifactError(
-                f"EmbeddingLookup encountered {int((~in_vocabulary).sum())} "
-                f"out-of-vocabulary row(s). Example(s): {examples}."
-            )
-
-        output = _lookup_rows(matrix, positions, in_vocabulary)
+        looked_up = self.translate(tokens, matrix, row_names=row_names)
         key_columns = list(token_packet.primary_key)
         return BatchResult(
             outputs={
                 "output": {
                     "keys": tokens.loc[:, key_columns].reset_index(drop=True),
-                    "metadata": pd.DataFrame(
-                        {
-                            self.field: words.fillna("<null>").astype(str).to_numpy(),
-                            "in_vocabulary": in_vocabulary,
-                        }
-                    ),
-                    "data": {"values": output, "columns": list(columns)},
+                    "metadata": looked_up["metadata"],
+                    "data": {
+                        "values": looked_up["values"],
+                        "columns": list(columns),
+                    },
                 }
             }
         )

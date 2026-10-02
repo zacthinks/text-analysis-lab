@@ -24,10 +24,13 @@ from text_analysis_lab.core.operator import (
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.translators import (
     CountVectorizer,
+    EmbeddingLookup,
     FeatureTrimmer,
     FittedPredictor,
+    FunctionMapper,
     LDA,
     MatrixNormalizer,
+    MatrixRowAggregator,
     RegexCleaner,
     RegexReplaceRule,
     SVD,
@@ -470,3 +473,153 @@ def test_sentence_transformer_standalone_matches_teal_batch_and_supports_task_ov
     ).outputs["output"]
     np.testing.assert_allclose(batch["data"]["values"], direct)
     assert batch["metadata"]["token_count"].tolist() == [2, 1]
+
+
+
+def test_matrix_row_aggregator_standalone_matches_teal_batch() -> None:
+    matrix = np.asarray(
+        [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
+        dtype=float,
+    )
+    info = pd.DataFrame(
+        {
+            "doc_id": [1, 1, 2],
+            "sentence_id": [0, 0, 0],
+            "token_id": [0, 1, 0],
+        }
+    )
+    translator = MatrixRowAggregator(group_by=["doc_id"], pooling="mean")
+
+    direct = translator.translate(matrix, info)
+    np.testing.assert_allclose(direct["values"], [[2.0, 3.0], [5.0, 6.0]])
+    assert direct["groups"].to_dict("list") == {"doc_id": [1, 2]}
+    assert direct["counts"].tolist() == [2, 1]
+
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_matrix",
+        primary_key=("doc_id", "sentence_id", "token_id"),
+        data={"info": info, "matrix": matrix, "columns": ["d0", "d1"]},
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    np.testing.assert_allclose(batch["data"]["values"], direct["values"])
+    pd.testing.assert_frame_equal(batch["keys"], direct["groups"])
+    assert batch["metadata"]["n_rows"].tolist() == direct["counts"].tolist()
+
+
+def test_function_mapper_standalone_matches_teal_batch() -> None:
+    translator = FunctionMapper(
+        lambda packet: {
+            "data": pd.DataFrame(
+                {"doubled": packet["data"]["value"].to_numpy() * 2}
+            ),
+            "metadata": pd.DataFrame(
+                {"label": packet["metadata"]["group"].astype(str).str.lower()}
+            ),
+        }
+    )
+    data = pd.DataFrame({"value": [1, 2, 3]})
+    metadata = pd.DataFrame({"group": ["A", "B", "A"]})
+
+    direct = translator.translate({"data": data, "metadata": metadata})
+    assert direct["data"]["doubled"].tolist() == [2, 4, 6]
+    assert direct["metadata"]["label"].tolist() == ["a", "b", "a"]
+
+    translator._data_columns = ("value",)
+    translator._metadata_columns = ("group",)
+    frame = pd.DataFrame(
+        {
+            "doc_id": [10, 11, 12],
+            "value": [1, 2, 3],
+            "group": ["A", "B", "A"],
+        }
+    )
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_table",
+        primary_key=("doc_id",),
+        data=frame,
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    pd.testing.assert_frame_equal(batch["data"], direct["data"])
+    pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
+    assert batch["keys"]["doc_id"].tolist() == [10, 11, 12]
+
+
+@pytest.mark.parametrize("sparse_embeddings", [False, True])
+def test_embedding_lookup_standalone_matches_teal_batch(
+    sparse_embeddings: bool,
+) -> None:
+    dense = np.asarray([[1, 2], [3, 4]], dtype=np.float32)
+    embeddings = sparse.csr_matrix(dense) if sparse_embeddings else dense
+    row_names = ["a", "b"]
+    tokens = pd.DataFrame(
+        {
+            "doc_id": [1, 1, 1],
+            "token_id": [0, 1, 2],
+            "lemma": ["b", "missing", "a"],
+        }
+    )
+    translator = EmbeddingLookup(field="lemma")
+
+    direct = translator.translate(tokens, embeddings, row_names=row_names)
+    direct_values = (
+        direct["values"].toarray()
+        if sparse.issparse(direct["values"])
+        else direct["values"]
+    )
+    np.testing.assert_array_equal(direct_values, [[3, 4], [0, 0], [1, 2]])
+
+    token_packet = InputBatch(
+        source_label="tokens",
+        artifact_id="art_tokens",
+        primary_key=("doc_id", "token_id"),
+        data=tokens,
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    embedding_packet = InputBatch(
+        source_label="embeddings",
+        artifact_id="art_embeddings",
+        primary_key=("word_id",),
+        data={
+            "info": pd.DataFrame({"_position": [0, 1]}),
+            "matrix": embeddings,
+            "columns": ["d0", "d1"],
+            "row_names": row_names,
+        },
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"tokens": token_packet, "embeddings": embedding_packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+
+    batch_values = batch["data"]["values"]
+    batch_values = (
+        batch_values.toarray() if sparse.issparse(batch_values) else batch_values
+    )
+    np.testing.assert_array_equal(batch_values, direct_values)
+    pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
