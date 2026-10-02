@@ -143,7 +143,6 @@ class WordSenseDisambiguator(BaseTranslator):
         self.local_files_only = bool(local_files_only)
         self.acknowledge_noncommercial_license = True
 
-
     def translate(
         self,
         tokens: pd.DataFrame,
@@ -183,75 +182,6 @@ class WordSenseDisambiguator(BaseTranslator):
         token_keys: Sequence[str],
     ) -> dict[str, Mapping[str, Any]]:
         token_keys = [str(value) for value in token_keys]
-        required = [*token_keys, "text", "lemma", "pos", "ent_type"]
-        missing = [name for name in required if name not in tokens]
-        if missing:
-            raise ArtifactError(
-                f"WordSenseDisambiguator token source is missing {missing}."
-            )
-
-        document_keys = token_keys[:-2]
-        sentence_group_keys = [*document_keys, self.sentence_key]
-        sentence_tokens: dict[tuple[int, ...], pd.DataFrame] = {}
-        for raw_key, group in token
-    def translate_batch(self, inputs, *, mode, request):
-        _ = mode, request
-        if set(inputs) != {TOKENS}:
-            raise OperatorError(
-                f"WordSenseDisambiguator expects one input under {TOKENS!r}."
-            )
-        packet = inputs[TOKENS]
-        tokens = _frame(packet.data)
-        token_keys = [str(value) for value in packet.primary_key]
-        if len(token_keys) < 2 or token_keys[-2:] != [
-            self.sentence_key,
-            self.token_key,
-        ]:
-            raise ArtifactError(
-                "WordSenseDisambiguator expects token primary keys to end in "
-                f"{self.sentence_key!r}, {self.token_key!r}."
-            )
-        return BatchResult(
-            outputs=self._translate_frame(
-                tokens,
-                token_keys=token_keys,
-            )
-        )
-
-sentence_key=self.sentence_key, token_key=self.token_key
-        )
-        return {
-            TOKENS: SourceRequest(
-                artifact_type="table",
-                mode="full_artifact",
-                columns=ColumnRequest(
-                    keys=True,
-                    data=("text", "lemma", "pos", "ent_type"),
-                    metadata=False,
-                ),
-                form="table",
-                metadata_mode="none",
-                include_position=False,
-            )
-        }
-
-    def translate_batch(self, inputs, *, mode, request):
-        _ = mode, request
-        if set(inputs) != {TOKENS}:
-            raise OperatorError(
-                f"WordSenseDisambiguator expects one input under {TOKENS!r}."
-            )
-        packet = inputs[TOKENS]
-        tokens = _frame(packet.data)
-        token_keys = list(packet.primary_key)
-        if len(token_keys) < 2 or token_keys[-2:] != [
-            self.sentence_key,
-            self.token_key,
-        ]:
-            raise ArtifactError(
-                "WordSenseDisambiguator expects token primary keys to end in "
-                f"{self.sentence_key!r}, {self.token_key!r}."
-            )
         required = [*token_keys, "text", "lemma", "pos", "ent_type"]
         missing = [name for name in required if name not in tokens]
         if missing:
@@ -334,22 +264,20 @@ sentence_key=self.sentence_key, token_key=self.token_key
             )
 
         if not targets:
-            return BatchResult(
-                outputs={
-                    SENSES: {
-                        "keys": pd.DataFrame(columns=token_keys),
-                        "data": pd.DataFrame(columns=list(SENSE_DATA_COLUMNS)),
-                    },
-                    CANDIDATES: {
-                        "keys": pd.DataFrame(columns=[*token_keys, "candidate_id"]),
-                        "data": pd.DataFrame(columns=list(CANDIDATE_DATA_COLUMNS)),
-                    },
-                    UNRESOLVED: {
-                        "keys": pd.DataFrame(columns=token_keys),
-                        "data": pd.DataFrame(columns=list(UNRESOLVED_DATA_COLUMNS)),
-                    },
-                }
-            )
+            return {
+                SENSES: {
+                    "keys": pd.DataFrame(columns=token_keys),
+                    "data": pd.DataFrame(columns=list(SENSE_DATA_COLUMNS)),
+                },
+                CANDIDATES: {
+                    "keys": pd.DataFrame(columns=[*token_keys, "candidate_id"]),
+                    "data": pd.DataFrame(columns=list(CANDIDATE_DATA_COLUMNS)),
+                },
+                UNRESOLVED: {
+                    "keys": pd.DataFrame(columns=token_keys),
+                    "data": pd.DataFrame(columns=list(UNRESOLVED_DATA_COLUMNS)),
+                },
+            }
 
         cache = user_cache_paths()
         ontology = _make_ontology(
@@ -459,7 +387,83 @@ sentence_key=self.sentence_key, token_key=self.token_key
                 ),
             },
         }
-        return BatchResult(outputs=outputs)
+        return outputs
+
+
+    def output_specs(
+        self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest
+    ):
+        _ = request
+        tokens = _validate_sources(
+            sources, sentence_key=self.sentence_key, token_key=self.token_key
+        )
+        if "candidate_id" in tokens.primary_key:
+            raise OperatorError(
+                "WordSenseDisambiguator candidate_id collides with token keys."
+            )
+        return {
+            SENSES: OutputSpec(
+                artifact_type="table", lineage_mode="preserved_key", basis_labels=TOKENS
+            ),
+            CANDIDATES: OutputSpec(
+                artifact_type="table", lineage_mode="extended_key", basis_labels=TOKENS
+            ),
+            UNRESOLVED: OutputSpec(
+                artifact_type="table", lineage_mode="preserved_key", basis_labels=TOKENS
+            ),
+        }
+
+    def validate_operation_params(self, params, *, sources, mode):
+        _ = sources, mode
+        if params:
+            raise OperatorError(
+                f"WordSenseDisambiguator does not accept operation parameters; got {sorted(params)}."
+            )
+        return {}
+
+    def input_request(self, *, sources, mode, request):
+        _ = mode, request
+        _validate_sources(
+            sources, sentence_key=self.sentence_key, token_key=self.token_key
+        )
+        return {
+            TOKENS: SourceRequest(
+                artifact_type="table",
+                mode="full_artifact",
+                columns=ColumnRequest(
+                    keys=True,
+                    data=("text", "lemma", "pos", "ent_type"),
+                    metadata=False,
+                ),
+                form="table",
+                metadata_mode="none",
+                include_position=False,
+            )
+        }
+
+    def translate_batch(self, inputs, *, mode, request):
+        _ = mode, request
+        if set(inputs) != {TOKENS}:
+            raise OperatorError(
+                f"WordSenseDisambiguator expects one input under {TOKENS!r}."
+            )
+        packet = inputs[TOKENS]
+        tokens = _frame(packet.data)
+        token_keys = [str(value) for value in packet.primary_key]
+        if len(token_keys) < 2 or token_keys[-2:] != [
+            self.sentence_key,
+            self.token_key,
+        ]:
+            raise ArtifactError(
+                "WordSenseDisambiguator expects token primary keys to end in "
+                f"{self.sentence_key!r}, {self.token_key!r}."
+            )
+        return BatchResult(
+            outputs=self._translate_frame(
+                tokens,
+                token_keys=token_keys,
+            )
+        )
 
     def handle_batch_result(self, result, *, batch_index, mode, request):
         _ = batch_index, mode, request
