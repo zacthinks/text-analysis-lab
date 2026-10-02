@@ -143,6 +143,7 @@ class SemanticRoleLabeler(BaseTranslator):
         sentence_keys: Sequence[str],
     ) -> dict[str, Mapping[str, Any]]:
         sentence_keys = [str(value) for value in sentence_keys]
+        expected_token_keys = [*sentence_keys, self.token_key]
         required_sentence = [*sentence_keys, "text", "char_start", "char_end"]
         required_token = [
             *expected_token_keys,
