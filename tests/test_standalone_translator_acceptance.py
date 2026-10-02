@@ -248,7 +248,8 @@ def test_cardinality_changing_translation_is_invariant_to_batch_size(
                 "epsilon|zeta",
                 "",
                 "eta|theta|iota|kappa",
-            ]
+            ],
+            "group": [0, 0, 1, 1, 2],
         }
     ).to_csv(source_path, index=False)
 
@@ -260,7 +261,7 @@ def test_cardinality_changing_translation_is_invariant_to_batch_size(
         source = project.read_csv(
             source_path,
             text_fields="text",
-            metadata_fields=None,
+            metadata_fields="group",
             batch_size=2,
         )
         small = project.translate(
@@ -322,7 +323,6 @@ def test_built_wheel_imports_and_standalone_translation_works_outside_checkout(
             "venv",
             "--python",
             sys.executable,
-            "--system-site-packages",
             str(venv_dir),
         ],
         check=True,
@@ -343,7 +343,6 @@ def test_built_wheel_imports_and_standalone_translation_works_outside_checkout(
             "install",
             "--python",
             str(venv_python),
-            "--no-deps",
             str(wheels[0]),
         ],
         check=True,
