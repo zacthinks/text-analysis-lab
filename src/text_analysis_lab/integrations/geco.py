@@ -840,11 +840,11 @@ class GeCoManager:
             metadata_fields=metadata,
         )
         ordered_keys = _key_records(document_frame, documents_artifact.primary_key)
-        text_replay = self.project.can_transform_texts_like(
-            geometry_artifact, query=False
+        text_replay = _can_replay_texts_like(
+            self.project, geometry_artifact, query=False
         )
-        query_replay = self.project.can_transform_texts_like(
-            geometry_artifact, query=True
+        query_replay = _can_replay_texts_like(
+            self.project, geometry_artifact, query=True
         )
         provider = TeALGeCoProvider(self.project)
         resolved_supports_query = (
