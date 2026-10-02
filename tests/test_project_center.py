@@ -43,7 +43,7 @@ def test_project_center_serves_tabs_and_initializes_project_memo(tmp_path):
         assert 'id="focusSelected"' in html
         assert "app.graph.lineage_edges" in html
         assert "function graphNodeMetrics(node)" in html
-        assert "barycentric sweeps" in html
+        assert "Barycentric sweeps" in html
         assert "/assets/mathjax/tex-svg-full.js" in html
         assert "function protectMath" in html
         assert "function protectInlineCode" in html
