@@ -257,7 +257,7 @@ def test_cardinality_changing_translation_is_invariant_to_batch_size(
         name="segments_acceptance",
     )
     try:
-        source = project.read_csv(source_path, text_fields="text", batch_size=2)
+        source = project.read_csv(\n            source_path,\n            text_fields="text",\n            metadata_fields=False,\n            batch_size=2,\n        )
         small = project.translate(
             DelimiterDecomposer(delimiter="|", new_key="segment_id"),
             source,
@@ -295,15 +295,12 @@ def test_built_wheel_imports_and_standalone_translation_works_outside_checkout(
 
     subprocess.run(
         [
-            sys.executable,
-            "-m",
-            "pip",
-            "wheel",
-            str(repo_root),
-            "--no-deps",
-            "--no-build-isolation",
-            "--wheel-dir",
+            "uv",
+            "build",
+            "--wheel",
+            "--out-dir",
             str(wheel_dir),
+            str(repo_root),
         ],
         check=True,
         capture_output=True,
@@ -315,7 +312,14 @@ def test_built_wheel_imports_and_standalone_translation_works_outside_checkout(
 
     venv_dir = tmp_path / "venv"
     subprocess.run(
-        [sys.executable, "-m", "venv", "--system-site-packages", str(venv_dir)],
+        [
+            "uv",
+            "venv",
+            "--python",
+            sys.executable,
+            "--system-site-packages",
+            str(venv_dir),
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -329,10 +333,11 @@ def test_built_wheel_imports_and_standalone_translation_works_outside_checkout(
 
     subprocess.run(
         [
-            str(venv_python),
-            "-m",
+            "uv",
             "pip",
             "install",
+            "--python",
+            str(venv_python),
             "--no-deps",
             str(wheels[0]),
         ],
