@@ -108,7 +108,7 @@ def test_feature_trimmer_replays_exact_frozen_mask_and_round_trips(
     )
 
     new_rows = sparse.csr_matrix([[9, 8, 7, 6, 5], [1, 2, 3, 4, 5]])
-    replayed = trimmer.transform_external_matrix(new_rows, query=True)
+    replayed = trimmer.translate(new_rows)
     assert np.array_equal(replayed.toarray(), new_rows[:, [1, 3]].toarray())
 
     path = tmp_path / "feature_trimmer"
@@ -118,7 +118,7 @@ def test_feature_trimmer_replays_exact_frozen_mask_and_round_trips(
     assert restored.source_width_ == 5
     assert restored.kept_indices_ == (1, 3)
     assert np.array_equal(
-        restored.transform_external_matrix(new_rows).toarray(),
+        restored.translate(new_rows).toarray(),
         new_rows[:, [1, 3]].toarray(),
     )
 
@@ -135,7 +135,7 @@ def test_feature_trimmer_dense_external_replay_stays_dense() -> None:
         {"source": _packet(dense)}, mode="fit_translate", request=TranslationRequest()
     )
     assert result.outputs["output"]["feature_indices"] == [1, 3]
-    replayed = trimmer.transform_external_matrix(dense)
+    replayed = trimmer.translate(dense)
     assert isinstance(replayed, np.ndarray)
     assert np.array_equal(replayed, dense[:, [1, 3]])
 
