@@ -194,7 +194,6 @@ def test_real_unit10_models_on_one_sentence(tmp_path: Path) -> None:
             WordSenseDisambiguator(
                 device="cpu",
                 include_multiword_candidates=False,
-                acknowledge_noncommercial_license=True,
             ),
             {"tokens": tiny_tokens},
         )
@@ -269,7 +268,6 @@ def test_real_wsd_ignores_spacy_space_token_in_reader_context(tmp_path: Path) ->
             WordSenseDisambiguator(
                 device="cpu",
                 include_multiword_candidates=False,
-                acknowledge_noncommercial_license=True,
             ),
             {"tokens": tokens},
         )
