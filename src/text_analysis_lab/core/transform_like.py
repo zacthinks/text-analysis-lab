@@ -28,7 +28,7 @@ class TransformLikeError(OperatorError):
     """Raised when an artifact's frozen lineage cannot transform new text."""
 
 
-def can_transform_texts_like(
+def _can_replay_texts_like(
     project: Project,
     artifact: BaseArtifact | str,
     *,
@@ -42,7 +42,7 @@ def can_transform_texts_like(
     return True
 
 
-def transform_texts_like(
+def _replay_texts_like(
     project: Project,
     artifact: BaseArtifact | str,
     texts: Sequence[str],
@@ -58,7 +58,7 @@ def transform_texts_like(
     target = project.get_artifact(artifact)
     if target.artifact_type not in _MATRIX_TYPES:
         raise TransformLikeError(
-            "transform_texts_like(...) requires a dense_matrix or sparse_matrix "
+            "Frozen representation replay requires a dense_matrix or sparse_matrix "
             f"artifact; got {target.artifact_type.value!r}."
         )
     normalized = ["" if value is None else str(value) for value in texts]

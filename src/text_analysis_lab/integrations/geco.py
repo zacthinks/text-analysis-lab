@@ -24,6 +24,10 @@ from scipy import sparse
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
 from text_analysis_lab.core.errors import ArtifactNotFoundError
+from text_analysis_lab.core.transform_like import (
+    _can_replay_texts_like,
+    _replay_texts_like,
+)
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.core.utils import utc_now_iso
 from text_analysis_lab.translators.geco_predictor import GeCoPredictor
@@ -178,7 +182,7 @@ class TeALGeCoProvider:
         with self._project_session() as project:
             artifact = self._matrix_artifact(project, external_ref, purpose="geometry")
             try:
-                values = project.transform_texts_like(artifact, texts, query=False)
+                values = _replay_texts_like(project, artifact, texts, query=False)
             except Exception as exc:
                 raise GeCoIntegrationError(
                     f"Could not transform new text through TeAL geometry "
@@ -191,8 +195,8 @@ class TeALGeCoProvider:
         with self._project_session() as project:
             artifact = self._matrix_artifact(project, external_ref, purpose="geometry")
             try:
-                values = project.transform_texts_like(
-                    artifact, [str(query)], query=True
+                values = _replay_texts_like(
+                    project, artifact, [str(query)], query=True
                 )
             except Exception as exc:
                 raise GeCoIntegrationError(
@@ -662,8 +666,12 @@ class LinkedGeCoWorkspace:
             )
         keys = self._manager._document_keys(self.documents)
         self._provider.geometry_matrix(_external_ref(geometry), keys)
-        text_replay = self._project.can_transform_texts_like(geometry, query=False)
-        query_replay = self._project.can_transform_texts_like(geometry, query=True)
+        text_replay = _can_replay_texts_like(
+            self._project, geometry, query=False
+        )
+        query_replay = _can_replay_texts_like(
+            self._project, geometry, query=True
+        )
         resolved_supports_query = (
             query_replay if supports_query is None else bool(supports_query)
         )
