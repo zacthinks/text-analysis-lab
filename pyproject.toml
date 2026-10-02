@@ -109,6 +109,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "acceptance: slower architectural tests; opt in with --acceptance",
+]
 
 [tool.setuptools.package-data]
 "text_analysis_lab.linguistics" = ["resources/*.json"]
