@@ -8,6 +8,7 @@ import pytest
 from scipy import sparse
 
 from text_analysis_lab.core.errors import (
+    ArtifactError,
     OperatorNotFittedError,
     StandaloneTranslationNotSupportedError,
 )
@@ -331,7 +332,7 @@ def test_lda_standalone_matches_teal_batch_and_validates_counts() -> None:
     ).outputs["output"]["data"]["values"]
     np.testing.assert_allclose(batch, direct)
 
-    with pytest.raises(ValueError, match="nonnegative"):
+    with pytest.raises(ArtifactError, match="non-negative"):
         translator.translate(np.array([[1.0, -1.0, 0.0]]))
     with pytest.raises(OperatorNotFittedError, match="fitted model"):
         LDA().translate(new_rows)

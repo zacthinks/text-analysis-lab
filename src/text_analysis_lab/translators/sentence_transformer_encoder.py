@@ -252,7 +252,8 @@ class SentenceTransformerEncoder(BaseTranslator):
             raise ContextWindowExceededError(
                 "SentenceTransformerEncoder refuses silent truncation: "
                 f"{len(too_long)} of {len(values_in)} row(s) exceed the effective "
-                f"context limit of {context_limit} model tokens.{suffix}"
+                f"context limit of {context_limit} model tokens "
+                f"(including any model prompt and special tokens).{suffix}"
             )
         if too_long:
             warnings.warn(
