@@ -43,6 +43,7 @@ from text_analysis_lab.translators import (
     RegexCleaner,
     RegexReplaceRule,
     SVD,
+    SemanticRoleLabeler,
     SentenceTransformerEncoder,
     SpacyTranslator,
     TextFileExtractor,
@@ -1300,3 +1301,106 @@ def test_coreference_standalone_matches_teal_batch(monkeypatch) -> None:
         [batch["mentions"]["keys"], batch["mentions"]["data"]], axis=1
     )
     pd.testing.assert_frame_equal(batch_mentions, direct["mentions"])
+
+
+def test_semantic_role_labeler_standalone_matches_teal_batch(monkeypatch) -> None:
+    import text_analysis_lab.translators.semantic_role_labeler as module
+    from text_analysis_lab.linguistics.srl.runtime import SrlTokenPrediction
+    from text_analysis_lab.linguistics.srl.structures import BioSpan
+
+    class FakeRuntime:
+        def encode_tokens(self, tokens):
+            return tuple(tokens)
+
+        def predict_encoded_batch(self, instances):
+            tokens = tuple(instances[0][0])
+            return (
+                SrlTokenPrediction(
+                    tokens=tokens,
+                    predicate_index=1,
+                    predicate="runs",
+                    wordpieces=tokens,
+                    input_ids=(1, 2, 3, 4),
+                    predicate_indicator=(0, 1, 0, 0),
+                    wordpiece_offsets=(0, 1, 2, 3),
+                    wordpiece_tags=("B-ARG0", "B-V", "B-ARGM-MNR", "O"),
+                    raw_tags=("B-ARG0", "B-V", "B-ARGM-MNR", "O"),
+                    tags=("B-ARG0", "B-V", "B-ARGM-MNR", "O"),
+                    bio_repairs=(),
+                    word_scores=(0.9, 0.95, 0.8, 0.99),
+                    spans=(
+                        BioSpan("ARG0", 0, 1),
+                        BioSpan("V", 1, 2),
+                        BioSpan("ARGM-MNR", 2, 3),
+                    ),
+                    description="",
+                ),
+            )
+
+    monkeypatch.setattr(module, "_make_runtime", lambda **kwargs: FakeRuntime())
+    sentences = pd.DataFrame(
+        {
+            "row_id": [2],
+            "sentence_id": [0],
+            "text": ["Alice runs quickly."],
+            "char_start": [0],
+            "char_end": [19],
+        }
+    )
+    tokens = pd.DataFrame(
+        {
+            "row_id": [2, 2, 2, 2],
+            "sentence_id": [0, 0, 0, 0],
+            "token_id": [0, 1, 2, 3],
+            "text": ["Alice", "runs", "quickly", "."],
+            "lemma": ["Alice", "run", "quickly", "."],
+            "pos": ["PROPN", "VERB", "ADV", "PUNCT"],
+            "tag": ["NNP", "VBZ", "RB", "."],
+            "dep": ["nsubj", "ROOT", "advmod", "punct"],
+            "head_token_id": [1, 1, 1, 1],
+            "ent_type": ["PERSON", "", "", ""],
+            "char_start": [0, 6, 11, 18],
+            "char_end": [5, 10, 18, 19],
+        }
+    )
+    translator = SemanticRoleLabeler(device="cpu")
+    direct = translator.translate(
+        sentences,
+        tokens,
+        sentence_keys=["row_id", "sentence_id"],
+    )
+    assert direct["predicates"]["text"].tolist() == ["runs"]
+    assert direct["roles"]["role"].tolist() == ["ARG0", "V", "ARGM-MNR"]
+
+    batch = translator.translate_batch(
+        {
+            "sentences": InputBatch(
+                "sentences",
+                "art_sentences",
+                ("row_id", "sentence_id"),
+                sentences,
+                0,
+                1,
+                True,
+                True,
+            ),
+            "tokens": InputBatch(
+                "tokens",
+                "art_tokens",
+                ("row_id", "sentence_id", "token_id"),
+                tokens,
+                0,
+                1,
+                True,
+                True,
+            ),
+        },
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs
+    for label in ("predicates", "roles", "failures"):
+        combined = pd.concat(
+            [batch[label]["keys"], batch[label]["data"]],
+            axis=1,
+        )
+        pd.testing.assert_frame_equal(combined, direct[label])

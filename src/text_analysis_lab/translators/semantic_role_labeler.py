@@ -101,64 +101,106 @@ class SemanticRoleLabeler(BaseTranslator):
         self.mixed_precision = bool(mixed_precision)
         self.show_progress = bool(show_progress)
 
-    def output_specs(
-        self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest
-    ):
-        _ = request
-        sentences, tokens = _validate_sources(
-            sources, sentence_key=self.sentence_key, token_key=self.token_key
-        )
-        _ = tokens
-        if "predicate_id" in sentences.primary_key:
-            raise OperatorError(
-                "SemanticRoleLabeler predicate_id collides with sentence keys."
+
+    def translate(
+        self,
+        sentences: pd.DataFrame,
+        tokens: pd.DataFrame,
+        *,
+        sentence_keys: Sequence[str],
+    ) -> dict[str, pd.DataFrame]:
+        """Label semantic roles from ordinary sentence and token tables."""
+        if not isinstance(sentences, pd.DataFrame) or not isinstance(tokens, pd.DataFrame):
+            raise TypeError(
+                "SemanticRoleLabeler.translate(...) requires pandas DataFrames "
+                "for sentences and tokens."
             )
+        keys = [str(value) for value in sentence_keys]
+        if not keys or keys[-1] != self.sentence_key:
+            raise ValueError(
+                f"sentence_keys must end in {self.sentence_key!r}; got {keys}."
+            )
+        outputs = self._translate_frames(
+            sentences.reset_index(drop=True),
+            tokens.reset_index(drop=True),
+            sentence_keys=keys,
+        )
         return {
-            PREDICATES: OutputSpec(
-                artifact_type="table",
-                lineage_mode="extended_key",
-                basis_labels=SENTENCES,
-            ),
-            ROLES: OutputSpec(
-                artifact_type="table",
-                lineage_mode="extended_key",
-                basis_labels=PREDICATES,
-            ),
-            FAILURES: OutputSpec(
-                artifact_type="table",
-                lineage_mode="preserved_key",
-                basis_labels=SENTENCES,
-            ),
+            label: pd.concat(
+                [
+                    payload["keys"].reset_index(drop=True),
+                    payload["data"].reset_index(drop=True),
+                ],
+                axis=1,
+            )
+            for label, payload in outputs.items()
         }
 
-    def validate_operation_params(self, params, *, sources, mode):
-        _ = sources, mode
-        if params:
-            raise OperatorError(
-                f"SemanticRoleLabeler does not accept operation parameters; got {sorted(params)}."
+    def _translate_frames(
+        self,
+        sentences: pd.DataFrame,
+        tokens: pd.DataFrame,
+        *,
+        sentence_keys: Sequence[str],
+    ) -> dict[str, Mapping[str, Any]]:
+        sentence_keys = [str(value) for value in sentence_keys]
+        required_sentence = [*sentence_keys, "text", "char_start", "char_end"]
+        required_token = [
+            *expected_token_keys,
+            "text",
+            "lemma",
+            "pos",
+            "tag",
+            "dep",
+            "head_token_id",
+            "ent_type",
+            "char_start",
+            "char_end",
+        ]
+        missing_sentence = [name for name in required_sentence if name not in sentences]
+        missing_token = [name for name in required_token if name not in tokens]
+        if missing_sentence or missing_token:
+            raise ArtifactError(
+                f"SemanticRoleLabeler missing sentence columns {missing_sentence} and token columns {missing_token}."
             )
-        return {}
 
-    def input_request(self, *, sources, mode, request):
-        _ = mode, request
-        _validate_sources(
-            sources, sentence_key=self.sentence_key, token_key=self.token_key
+        runtime = _make_runtime(
+            device=self.device,
+            strict_device=self.strict_device,
+            mixed_precision=self.mixed_precision,
+            max_length=self.max_length,
+            show_progress=self.show_progress,
         )
-        return {
-            SENTENCES: SourceRequest(
-                artifact_type="table",
-                mode="full_artifact",
-                columns=ColumnRequest(
-                    keys=True, data=("text", "char_start", "char_end"), metadata=False
-                ),
-                form="table",
-                metadata_mode="none",
-                include_position=False,
-            ),
-            TOKENS: SourceRequest(
-                artifact_type="table",
-                mode="full_artifact",
-                columns=ColumnRequest(
+
+        grouped_tokens = tokens.groupby(sentence_keys, sort=False, dropna=False)
+        token_groups: dict[tuple[int, ...], pd.DataFrame] = {}
+ 
+    def translate_batch(self, inputs, *, mode, request):
+        _ = mode, request
+        if set(inputs) != {SENTENCES, TOKENS}:
+            raise OperatorError(
+                f"SemanticRoleLabeler expects inputs {SENTENCES!r} and {TOKENS!r}."
+            )
+        sentence_packet = inputs[SENTENCES]
+        token_packet = inputs[TOKENS]
+        sentences = _frame(sentence_packet.data, "sentences")
+        tokens = _frame(token_packet.data, "tokens")
+        sentence_keys = [str(value) for value in sentence_packet.primary_key]
+        expected_token_keys = [*sentence_keys, self.token_key]
+        if list(token_packet.primary_key) != expected_token_keys:
+            raise ArtifactError(
+                "SemanticRoleLabeler requires token primary keys to equal sentence keys + "
+                f"{self.token_key!r}; got {list(token_packet.primary_key)}."
+            )
+        return BatchResult(
+            outputs=self._translate_frames(
+                sentences,
+                tokens,
+                sentence_keys=sentence_keys,
+            )
+        )
+
+mns=ColumnRequest(
                     keys=True,
                     data=(
                         "text",
