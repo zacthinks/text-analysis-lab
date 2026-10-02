@@ -132,6 +132,128 @@ class ContextualTransformer(BaseTranslator):
         self._effective_context_limit: int | None = None
         self._warned_unpinned = False
 
+    def translate(
+        self,
+        texts: str | Sequence[str] | pd.Series,
+        *,
+        device: str = "cpu",
+        model_batch_size: int = 16,
+    ) -> dict[str, Any]:
+        """Tokenize ordinary text and return aligned token records and embeddings."""
+        if isinstance(texts, pd.Series):
+            values = texts.fillna("").astype(str).tolist()
+        elif isinstance(texts, str):
+            values = [texts]
+        elif isinstance(texts, Sequence) and not isinstance(texts, (str, bytes)):
+            values = ["" if value is None else str(value) for value in texts]
+        else:
+            raise TypeError(
+                "ContextualTransformer.translate(...) expects a string, sequence "
+                "of strings, or pandas Series."
+            )
+        if int(model_batch_size) <= 0:
+            raise ValueError("model_batch_size must be a positive integer.")
+        resolved_device = resolve_device(str(device))
+        model, tokenizer = self._runtime_components(device=resolved_device)
+        context_limit = self._context_limit(tokenizer=tokenizer, model=model)
+        source_counts = count_tokens(tokenizer, values)
+        too_long = [i for i, count in enumerate(source_counts) if count > context_limit]
+        if too_long and self.truncation == "error":
+            examples = [
+                f"source_position={index}: {source_counts[index]} tokens"
+                for index in too_long[:5]
+            ]
+            raise ContextWindowExceededError(
+                "ContextualTransformer refuses silent truncation: "
+                f"{len(too_long)} of {len(values)} source row(s) exceed the effective "
+                f"context limit of {context_limit} tokens (including special tokens). "
+                f"Examples: {', '.join(examples)}. Decompose/chunk the text upstream, "
+                "choose a longer-context model, or explicitly set truncation='truncate'."
+            )
+        if too_long:
+            warnings.warn(
+                "ContextualTransformer is explicitly truncating "
+                f"{len(too_long)} of {len(values)} row(s) to {context_limit} model tokens. "
+                "The returned token metadata records the truncation.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        token_rows: list[dict[str, Any]] = []
+        token_metadata_rows: list[dict[str, Any]] = []
+        embedding_blocks: list[np.ndarray] = []
+        for start in range(0, len(values), int(model_batch_size)):
+            stop = min(start + int(model_batch_size), len(values))
+            block = self._encode_block(
+                model=model,
+                tokenizer=tokenizer,
+                texts=values[start:stop],
+                device=resolved_device,
+                context_limit=context_limit,
+            )
+            for local_index, row in enumerate(block):
+                source_index = start + local_index
+                embedded_count = len(row["input_ids"])
+                is_truncated = embedded_count < source_counts[source_index]
+                for token_id in range(embedded_count):
+                    special = bool(row["special_tokens_mask"][token_id])
+                    offset = row["offsets"][token_id]
+                    token_rows.append(
+                        {
+                            "source_position": int(source_index),
+                            self.token_key: int(token_id),
+                            "token": row["tokens"][token_id],
+                            "input_id": int(row["input_ids"][token_id]),
+                            "char_start": None if special else int(offset[0]),
+                            "char_end": None if special else int(offset[1]),
+                            "is_special": special,
+                            "token_type_id": (
+                                None
+                                if row["token_type_ids"] is None
+                                else int(row["token_type_ids"][token_id])
+                            ),
+                        }
+                    )
+                    token_metadata_rows.append(
+                        {
+                            "source_token_count": int(source_counts[source_index]),
+                            "embedded_token_count": int(embedded_count),
+                            "truncated": bool(is_truncated),
+                        }
+                    )
+                embedding_blocks.append(row["embeddings"])
+
+        token_frame = pd.DataFrame(
+            token_rows,
+            columns=["source_position", self.token_key, *TOKEN_COLUMNS],
+        )
+        metadata = pd.DataFrame(
+            token_metadata_rows, columns=list(TOKEN_METADATA_COLUMNS)
+        )
+        if not token_frame.empty:
+            token_frame["input_id"] = token_frame["input_id"].astype("int64")
+            token_frame["char_start"] = token_frame["char_start"].astype("Int64")
+            token_frame["char_end"] = token_frame["char_end"].astype("Int64")
+            token_frame["is_special"] = token_frame["is_special"].astype(bool)
+            token_frame["token_type_id"] = token_frame["token_type_id"].astype("Int64")
+        if embedding_blocks:
+            embeddings = np.concatenate(embedding_blocks, axis=0).astype(
+                np.float32, copy=False
+            )
+        else:
+            embeddings = np.empty((0, hidden_size(model)), dtype=np.float32)
+        if len(embeddings) != len(token_frame):
+            raise ArtifactError(
+                "ContextualTransformer internal alignment failure: token rows and contextual "
+                f"embedding rows differ ({len(token_frame)} vs {len(embeddings)})."
+            )
+        return {
+            "tokens": token_frame,
+            "metadata": metadata,
+            "values": embeddings,
+            "columns": [f"dim_{index}" for index in range(embeddings.shape[1])],
+        }
+
     @property
     def supports_parallel_translate(self) -> bool:
         # Avoid multiplying large model weights across TeAL process workers.
@@ -222,129 +344,36 @@ class ContextualTransformer(BaseTranslator):
         frame = require_frame(packet.data, translator_name="ContextualTransformer")
         key_columns = [str(name) for name in packet.primary_key]
         missing = [
-            name
-            for name in [*key_columns, self.text_field]
-            if name not in frame.columns
+            name for name in [*key_columns, self.text_field] if name not in frame.columns
         ]
         if missing:
             raise ArtifactError(
                 f"ContextualTransformer source batch is missing columns {missing}."
             )
 
-        device = str(request.params.get("device", "cpu"))
-        model_batch_size = int(request.params.get("model_batch_size", 16))
-        model, tokenizer = self._runtime_components(device=device)
-        context_limit = self._context_limit(tokenizer=tokenizer, model=model)
-
-        texts = frame[self.text_field].fillna("").astype(str).tolist()
-        source_counts = count_tokens(tokenizer, texts)
-        too_long = [i for i, count in enumerate(source_counts) if count > context_limit]
-        if too_long and self.truncation == "error":
-            examples: list[str] = []
-            for index in too_long[:5]:
-                key = {name: int(frame.iloc[index][name]) for name in key_columns}
-                examples.append(f"{key}: {source_counts[index]} tokens")
-            raise ContextWindowExceededError(
-                "ContextualTransformer refuses silent truncation: "
-                f"{len(too_long)} of {len(texts)} source row(s) exceed the effective "
-                f"context limit of {context_limit} tokens (including special tokens). "
-                f"Examples: {', '.join(examples)}. Decompose/chunk the text upstream, "
-                "choose a longer-context model, or explicitly set truncation='truncate'."
-            )
-        if too_long:
-            warnings.warn(
-                "ContextualTransformer is explicitly truncating "
-                f"{len(too_long)} of {len(texts)} row(s) to {context_limit} model tokens. "
-                "The retained token artifact and audit metadata record the truncation.",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        key_records = frame.loc[:, key_columns].to_dict(orient="records")
-        token_key_rows: list[dict[str, Any]] = []
-        token_rows: list[dict[str, Any]] = []
-        token_metadata_rows: list[dict[str, Any]] = []
-        embedding_blocks: list[np.ndarray] = []
-
-        for start in range(0, len(texts), model_batch_size):
-            stop = min(start + model_batch_size, len(texts))
-            block = self._encode_block(
-                model=model,
-                tokenizer=tokenizer,
-                texts=texts[start:stop],
-                device=device,
-                context_limit=context_limit,
-            )
-            for local_index, row in enumerate(block):
-                source_index = start + local_index
-                source_key = key_records[source_index]
-                embedded_count = len(row["input_ids"])
-                is_truncated = embedded_count < source_counts[source_index]
-                for token_id in range(embedded_count):
-                    key = dict(source_key)
-                    key[self.token_key] = token_id
-                    token_key_rows.append(key)
-                    special = bool(row["special_tokens_mask"][token_id])
-                    offset = row["offsets"][token_id]
-                    token_rows.append(
-                        {
-                            "token": row["tokens"][token_id],
-                            "input_id": int(row["input_ids"][token_id]),
-                            "char_start": None if special else int(offset[0]),
-                            "char_end": None if special else int(offset[1]),
-                            "is_special": special,
-                            "token_type_id": (
-                                None
-                                if row["token_type_ids"] is None
-                                else int(row["token_type_ids"][token_id])
-                            ),
-                        }
-                    )
-                    token_metadata_rows.append(
-                        {
-                            "source_token_count": int(source_counts[source_index]),
-                            "embedded_token_count": int(embedded_count),
-                            "truncated": bool(is_truncated),
-                        }
-                    )
-                embedding_blocks.append(row["embeddings"])
-
-        token_keys = pd.DataFrame(
-            token_key_rows, columns=[*key_columns, self.token_key]
+        translated = self.translate(
+            frame[self.text_field],
+            device=str(request.params.get("device", "cpu")),
+            model_batch_size=int(request.params.get("model_batch_size", 16)),
         )
-        token_data = pd.DataFrame(token_rows, columns=list(TOKEN_COLUMNS))
-        token_metadata = pd.DataFrame(
-            token_metadata_rows, columns=list(TOKEN_METADATA_COLUMNS)
-        )
-        if not token_data.empty:
-            token_data["input_id"] = token_data["input_id"].astype("int64")
-            token_data["char_start"] = token_data["char_start"].astype("Int64")
-            token_data["char_end"] = token_data["char_end"].astype("Int64")
-            token_data["is_special"] = token_data["is_special"].astype(bool)
-            token_data["token_type_id"] = token_data["token_type_id"].astype("Int64")
-        if embedding_blocks:
-            values = np.concatenate(embedding_blocks, axis=0).astype(
-                np.float32, copy=False
-            )
-        else:  # pragma: no cover - standard tokenizers emit at least special tokens
-            values = np.empty((0, hidden_size(model)), dtype=np.float32)
-        if len(values) != len(token_keys):
-            raise ArtifactError(
-                "ContextualTransformer internal alignment failure: token rows and contextual "
-                f"embedding rows differ ({len(token_keys)} vs {len(values)})."
-            )
-        columns = [f"dim_{index}" for index in range(values.shape[1])]
-
+        token_frame = translated["tokens"]
+        positions = token_frame["source_position"].to_numpy(dtype="int64")
+        token_keys = frame.iloc[positions].loc[:, key_columns].reset_index(drop=True)
+        token_keys[self.token_key] = token_frame[self.token_key].to_numpy()
+        token_data = token_frame.loc[:, list(TOKEN_COLUMNS)].reset_index(drop=True)
         return BatchResult(
             outputs={
                 TOKENS_LABEL: {
                     "keys": token_keys,
                     "data": token_data,
-                    "metadata": token_metadata,
+                    "metadata": translated["metadata"],
                 },
                 CONTEXTUAL_EMBEDDINGS_LABEL: {
                     "keys": token_keys.copy(),
-                    "data": {"values": values, "columns": columns},
+                    "data": {
+                        "values": translated["values"],
+                        "columns": translated["columns"],
+                    },
                 },
             }
         )

@@ -25,6 +25,7 @@ from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab import dictionaries
 from text_analysis_lab.translators import (
     ArtifactCountVectorizer,
+    ContextualTransformer,
     CountVectorizer,
     DelimiterDecomposer,
     DictionaryTranslator,
@@ -1143,3 +1144,67 @@ def test_openai_responses_standalone_matches_teal_batch(monkeypatch) -> None:
     ).outputs["output"]
     pd.testing.assert_frame_equal(batch["data"], direct["data"])
     pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
+
+
+def test_contextual_transformer_standalone_matches_teal_batch(monkeypatch) -> None:
+    import text_analysis_lab.translators.contextual_transformer as module
+
+    class FakeModel:
+        pass
+
+    class FakeTokenizer:
+        pass
+
+    translator = ContextualTransformer("fake-model")
+    monkeypatch.setattr(module, "resolve_device", lambda value: "cpu")
+    monkeypatch.setattr(module, "count_tokens", lambda tokenizer, texts: [4 for _ in texts])
+    monkeypatch.setattr(translator, "_runtime_components", lambda *, device: (FakeModel(), FakeTokenizer()))
+    monkeypatch.setattr(translator, "_context_limit", lambda *, tokenizer, model: 8)
+    monkeypatch.setattr(
+        translator,
+        "_encode_block",
+        lambda *, model, tokenizer, texts, device, context_limit: [
+            {
+                "tokens": ["[CLS]", "tok", "[SEP]"],
+                "input_ids": [101, 1001, 102],
+                "offsets": [(0, 0), (0, len(text)), (0, 0)],
+                "special_tokens_mask": [1, 0, 1],
+                "token_type_ids": [0, 0, 0],
+                "embeddings": np.asarray(
+                    [[1.0, 0.0], [2.0, 0.0], [3.0, 0.0]], dtype=np.float32
+                ),
+            }
+            for text in texts
+        ],
+    )
+
+    direct = translator.translate(["hello"], device="cpu", model_batch_size=2)
+    assert direct["tokens"]["source_position"].tolist() == [0, 0, 0]
+    assert direct["tokens"]["token_id"].tolist() == [0, 1, 2]
+    assert direct["values"].shape == (3, 2)
+
+    frame = pd.DataFrame({"doc_id": [9], "text": ["hello"]})
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_docs",
+        primary_key=("doc_id",),
+        data=frame,
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(params={"device": "cpu", "model_batch_size": 2}),
+    ).outputs
+    assert batch["tokens"]["keys"].to_dict("records") == [
+        {"doc_id": 9, "token_id": 0},
+        {"doc_id": 9, "token_id": 1},
+        {"doc_id": 9, "token_id": 2},
+    ]
+    np.testing.assert_array_equal(
+        batch["contextual_embeddings"]["data"]["values"],
+        direct["values"],
+    )
