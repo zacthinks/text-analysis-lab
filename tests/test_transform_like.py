@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 from scipy import sparse
 
-from text_analysis_lab.core.transform_like import (
+from text_analysis_lab.integrations._representation_replay import (
     _can_replay_texts_like,
     _replay_texts_like,
 )

@@ -1,4 +1,4 @@
-"""Replay a frozen matrix-producing TeAL pipeline on new text without artifacts.
+"""Private frozen-representation replay for TeAL-backed GeCo geometries.
 
 This is intentionally narrower than ordinary translation.  It exists for
 runtime consumers such as externally backed GeCo geometries that need to embed
