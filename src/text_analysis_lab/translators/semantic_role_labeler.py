@@ -135,6 +135,30 @@ class SemanticRoleLabeler(BaseTranslator):
             for label, payload in outputs.items()
         }
 
+    def translate_from_text(
+        self,
+        texts: str | Sequence[str | None] | pd.Series,
+        *,
+        spacy_model: str = "en_core_web_sm",
+        spacy_batch_size: int = 128,
+        spacy_disable: Sequence[str] = (),
+    ) -> dict[str, pd.DataFrame]:
+        """Parse ordinary text with spaCy, then label semantic roles."""
+        from text_analysis_lab.translators.spacy_translator import SpacyTranslator
+
+        parsed = SpacyTranslator(
+            model=spacy_model,
+            sentence_key=self.sentence_key,
+            token_key=self.token_key,
+            spacy_batch_size=spacy_batch_size,
+            disable=spacy_disable,
+        ).translate(texts)
+        return self.translate(
+            parsed[SENTENCES],
+            parsed[TOKENS],
+            sentence_keys=["source_position", self.sentence_key],
+        )
+
     def _translate_frames(
         self,
         sentences: pd.DataFrame,
