@@ -1468,3 +1468,124 @@ def test_word_sense_disambiguator_standalone_matches_teal_batch_without_targets(
             axis=1,
         )
         pd.testing.assert_frame_equal(combined, direct[label])
+
+
+def test_srl_translate_from_text_composes_spacy_and_structured_translate(
+    monkeypatch,
+) -> None:
+    parsed = {
+        "sentences": pd.DataFrame(
+            {
+                "source_position": [0],
+                "sentence_id": [0],
+                "text": ["Alice runs."],
+                "char_start": [0],
+                "char_end": [11],
+            }
+        ),
+        "tokens": pd.DataFrame({"source_position": [0], "sentence_id": [0], "token_id": [0]}),
+    }
+    parser_calls = []
+
+    def fake_parse(self, texts):
+        parser_calls.append((self.model, self.spacy_batch_size, tuple(self.disable), texts))
+        return parsed
+
+    monkeypatch.setattr(SpacyTranslator, "translate", fake_parse)
+    translator = SemanticRoleLabeler(sentence_key="sentence_id", token_key="token_id")
+    structured_calls = []
+
+    def fake_translate(sentences, tokens, *, sentence_keys):
+        structured_calls.append((sentences, tokens, sentence_keys))
+        return {"predicates": pd.DataFrame(), "roles": pd.DataFrame(), "failures": pd.DataFrame()}
+
+    monkeypatch.setattr(translator, "translate", fake_translate)
+    result = translator.translate_from_text(
+        ["Alice runs."],
+        spacy_model="fake-spacy",
+        spacy_batch_size=7,
+        spacy_disable=("ner",),
+    )
+
+    assert parser_calls == [("fake-spacy", 7, ("ner",), ["Alice runs."])]
+    assert structured_calls[0][0] is parsed["sentences"]
+    assert structured_calls[0][1] is parsed["tokens"]
+    assert structured_calls[0][2] == ["source_position", "sentence_id"]
+    assert set(result) == {"predicates", "roles", "failures"}
+
+
+def test_wsd_translate_from_text_composes_spacy_and_structured_translate(
+    monkeypatch,
+) -> None:
+    parsed = {
+        "sentences": pd.DataFrame(),
+        "tokens": pd.DataFrame(
+            {
+                "source_position": [0],
+                "sentence_id": [0],
+                "token_id": [0],
+                "text": ["bank"],
+            }
+        ),
+    }
+
+    monkeypatch.setattr(SpacyTranslator, "translate", lambda self, texts: parsed)
+    translator = WordSenseDisambiguator(sentence_key="sentence_id", token_key="token_id")
+    seen = {}
+
+    def fake_translate(tokens, *, token_keys):
+        seen["tokens"] = tokens
+        seen["token_keys"] = token_keys
+        return {"senses": pd.DataFrame(), "candidates": pd.DataFrame(), "unresolved": pd.DataFrame()}
+
+    monkeypatch.setattr(translator, "translate", fake_translate)
+    result = translator.translate_from_text("The bank approved the loan.")
+
+    assert seen["tokens"] is parsed["tokens"]
+    assert seen["token_keys"] == ["source_position", "sentence_id", "token_id"]
+    assert set(result) == {"senses", "candidates", "unresolved"}
+
+
+def test_coreference_translate_from_text_composes_documents_spacy_and_translate(
+    monkeypatch,
+) -> None:
+    parsed = {
+        "sentences": pd.DataFrame(),
+        "tokens": pd.DataFrame(
+            {
+                "source_position": [0, 1],
+                "sentence_id": [0, 0],
+                "token_id": [0, 0],
+            }
+        ),
+    }
+    monkeypatch.setattr(SpacyTranslator, "translate", lambda self, texts: parsed)
+    translator = CoreferenceResolver(text_field="body")
+    seen = {}
+
+    def fake_translate(documents, tokens, *, document_keys):
+        seen["documents"] = documents
+        seen["tokens"] = tokens
+        seen["document_keys"] = document_keys
+        return {"mentions": pd.DataFrame(), "failures": pd.DataFrame()}
+
+    monkeypatch.setattr(translator, "translate", fake_translate)
+    result = translator.translate_from_text(["Alice left.", "She returned."])
+
+    assert seen["documents"].to_dict("list") == {
+        "source_position": [0, 1],
+        "body": ["Alice left.", "She returned."],
+    }
+    assert seen["tokens"] is parsed["tokens"]
+    assert seen["document_keys"] == ["source_position"]
+    assert set(result) == {"mentions", "failures"}
+
+
+def test_wsd_old_snapshot_license_flag_is_ignored() -> None:
+    state = WordSenseDisambiguator().to_json_state()
+    state["acknowledge_noncommercial_license"] = True
+
+    restored = WordSenseDisambiguator.from_json_state(state)
+
+    assert isinstance(restored, WordSenseDisambiguator)
+    assert "acknowledge_noncommercial_license" not in restored.to_json_state()
