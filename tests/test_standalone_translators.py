@@ -1439,7 +1439,6 @@ def test_word_sense_disambiguator_standalone_matches_teal_batch_without_targets(
     )
     translator = WordSenseDisambiguator(
         device="cpu",
-        acknowledge_noncommercial_license=True,
     )
     token_keys = ["row_id", "sentence_id", "token_id"]
     direct = translator.translate(tokens, token_keys=token_keys)
