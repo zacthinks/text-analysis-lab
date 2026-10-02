@@ -203,21 +203,6 @@ class TfidfTransformer(BaseTranslator):
             }
         )
 
-    def transform_external_matrix(
-        self,
-        matrix: Any,
-        *,
-        query: bool = False,
-        params: Mapping[str, Any] | None = None,
-    ):
-        """Compatibility shim for frozen-lineage replay on new matrix rows."""
-        _ = query, params
-        return self.translate(matrix)
-
-    def supports_external_transform(self, *, query: bool, input_kind: str) -> bool:
-        _ = query
-        return input_kind == "matrix" and self.is_fitted
-
     def handle_batch_result(
         self,
         result: BatchResult,
