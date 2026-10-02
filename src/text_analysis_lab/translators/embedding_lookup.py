@@ -86,12 +86,12 @@ class EmbeddingLookup(BaseTranslator):
             )
         names = [str(value) for value in row_names]
         if len(names) != int(shape[0]):
-            raise ValueError(
+            raise ArtifactError(
                 "Embedding row_names are not aligned with matrix rows."
             )
         position_by_name = {name: position for position, name in enumerate(names)}
         if len(position_by_name) != len(names):
-            raise ValueError("Embedding matrix row_names must be unique.")
+            raise ArtifactError("Embedding matrix row_names must be unique.")
 
         words = raw_words.astype("string")
         valid = raw_words.notna()

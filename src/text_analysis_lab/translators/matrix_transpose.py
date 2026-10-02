@@ -83,7 +83,7 @@ class MatrixTranspose(BaseTranslator):
             )
         feature_names = [str(value) for value in features]
         if len(feature_names) != int(shape[1]):
-            raise ValueError(
+            raise ArtifactError(
                 "MatrixTranspose features must match the matrix feature width: "
                 f"{len(feature_names)} != {int(shape[1])}."
             )
@@ -93,12 +93,12 @@ class MatrixTranspose(BaseTranslator):
         else:
             columns = [str(value) for value in row_labels]
             if len(columns) != int(shape[0]):
-                raise ValueError(
+                raise ArtifactError(
                     "MatrixTranspose row_labels must match the matrix row count: "
                     f"{len(columns)} != {int(shape[0])}."
                 )
             if len(set(columns)) != len(columns):
-                raise ValueError(
+                raise ArtifactError(
                     "MatrixTranspose requires unique row_labels after string conversion."
                 )
 

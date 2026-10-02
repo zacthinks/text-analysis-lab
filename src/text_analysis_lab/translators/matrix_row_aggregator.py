@@ -69,7 +69,7 @@ class MatrixRowAggregator(BaseTranslator):
             )
         missing = [name for name in self.group_by if name not in groups.columns]
         if missing:
-            raise ValueError(
+            raise ArtifactError(
                 f"Grouping data is missing configured column(s) {missing}."
             )
 
