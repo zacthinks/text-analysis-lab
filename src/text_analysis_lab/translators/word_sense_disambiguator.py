@@ -506,11 +506,7 @@ class WordSenseDisambiguator(BaseTranslator):
 
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> WordSenseDisambiguator:
-        payload = cast(dict[str, Any], dict(state))
-        # Backward compatibility with WSD snapshots created before the runtime
-        # acknowledgement parameter was removed.
-        payload.pop("acknowledge_noncommercial_license", None)
-        return cls(**payload)
+        return cls(**cast(dict[str, Any], dict(state)))
 
 
 def _make_ontology(*, lexicon: str, include_multiword_candidates: bool):
