@@ -334,7 +334,7 @@ def test_lda_standalone_matches_teal_batch_and_validates_counts() -> None:
 
     with pytest.raises(ArtifactError, match="non-negative"):
         translator.translate(np.array([[1.0, -1.0, 0.0]]))
-    with pytest.raises(OperatorNotFittedError, match="fitted model"):
+    with pytest.raises(OperatorNotFittedError, match="fitted topic model"):
         LDA().translate(new_rows)
 
 
