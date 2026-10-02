@@ -37,6 +37,8 @@ from text_analysis_lab.translators import (
     RegexReplaceRule,
     SVD,
     SentenceTransformerEncoder,
+    TextFileExtractor,
+    PdfTextExtractor,
     TextLength,
     TfidfTransformer,
 )
@@ -729,3 +731,65 @@ def test_matrix_transpose_standalone_matches_teal_batch() -> None:
     assert batch["data"]["columns"] == direct["columns"]
     assert batch["data"]["row_names"] == direct["row_names"]
     pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
+
+
+
+def test_text_file_extractor_standalone_matches_teal_batch(tmp_path) -> None:
+    text_path = tmp_path / "document.txt"
+    text_path.write_bytes(b"alpha\r\nbeta\rgamma\n")
+    missing = tmp_path / "missing.txt"
+    translator = TextFileExtractor()
+
+    direct = translator.translate([text_path, missing, None])
+    assert direct["text"].tolist() == ["alpha\nbeta\ngamma\n", "", ""]
+    assert direct["extraction_status"].tolist() == ["ok", "failed", "failed"]
+    assert str(direct["text"].dtype) == "string"
+    assert str(direct["page_count"].dtype) == "Int64"
+
+    frame = pd.DataFrame(
+        {"file_id": [1, 2, 3], "path": [str(text_path), str(missing), None]}
+    )
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_files",
+        primary_key=("file_id",),
+        data=frame,
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    pd.testing.assert_frame_equal(batch["data"], direct)
+    assert batch["keys"]["file_id"].tolist() == [1, 2, 3]
+
+
+def test_pdf_text_extractor_standalone_matches_teal_batch_for_failures() -> None:
+    pytest.importorskip("pdfplumber")
+    translator = PdfTextExtractor()
+    direct = translator.translate([None, None])
+    assert direct["extraction_status"].tolist() == ["failed", "failed"]
+    assert direct["pages_extracted"].astype(int).tolist() == [0, 0]
+
+    frame = pd.DataFrame({"file_id": [10, 11], "path": [None, None]})
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_pdfs",
+        primary_key=("file_id",),
+        data=frame,
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    pd.testing.assert_frame_equal(batch["data"], direct)
+    assert batch["keys"]["file_id"].tolist() == [10, 11]
