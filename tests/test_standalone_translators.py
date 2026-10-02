@@ -41,10 +41,12 @@ from text_analysis_lab.translators import (
     RegexReplaceRule,
     SVD,
     SentenceTransformerEncoder,
+    SpacyTranslator,
     TextFileExtractor,
     PdfTextExtractor,
     TextLength,
     TfidfTransformer,
+    UMAP,
     Word2Vec,
 )
 
@@ -1015,3 +1017,85 @@ def test_word2vec_standalone_matches_teal_batch(monkeypatch) -> None:
     np.testing.assert_array_equal(batch["data"]["values"], direct["values"])
     assert batch["data"]["row_names"] == direct["words"]
     assert batch["metadata"]["count"].tolist() == direct["counts"].tolist()
+
+
+def test_spacy_standalone_matches_teal_batch(monkeypatch) -> None:
+    pytest.importorskip("spacy")
+    import spacy as spacy_module
+    import text_analysis_lab.translators.spacy_translator as module
+    from spacy.tokens import Doc
+
+    nlp = spacy_module.blank("en")
+    doc = Doc(
+        nlp.vocab,
+        words=["Hello", "world", "."],
+        spaces=[True, False, False],
+        heads=[1, 1, 1],
+        deps=["dep", "ROOT", "punct"],
+        sent_starts=[True, False, False],
+    )
+
+    class FakeNLP:
+        def pipe(self, texts, *, batch_size, n_process):
+            assert list(texts) == [doc.text]
+            assert batch_size == 8
+            assert n_process == 1
+            yield doc
+
+    monkeypatch.setattr(module, "_load_spacy_pipeline", lambda model, disable: FakeNLP())
+    translator = SpacyTranslator(model="fake", spacy_batch_size=8)
+    direct = translator.translate([doc.text])
+    assert direct["sentences"]["source_position"].tolist() == [0]
+    assert direct["tokens"]["token_id"].tolist() == [0, 1, 2]
+
+    frame = pd.DataFrame({"doc_id": [7], "text": [doc.text]})
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_docs",
+        primary_key=("doc_id",),
+        data=frame,
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs
+    assert batch["sentences"]["keys"].to_dict("records") == [
+        {"doc_id": 7, "sentence_id": 0}
+    ]
+    assert batch["tokens"]["keys"]["token_id"].tolist() == [0, 1, 2]
+    pd.testing.assert_frame_equal(
+        batch["tokens"]["data"],
+        direct["tokens"].loc[:, list(module.TOKEN_DATA_COLUMNS)].reset_index(drop=True),
+    )
+
+
+def test_umap_standalone_requires_available_fitted_state() -> None:
+    class FakeEstimator:
+        def transform(self, matrix):
+            dense = matrix.toarray() if sparse.issparse(matrix) else np.asarray(matrix)
+            return dense[:, :2] + 1.0
+
+    translator = UMAP(n_components=2, reuse="stored")
+    translator.source_features_ = ("a", "b", "c")
+    translator._estimator = FakeEstimator()
+    matrix = sparse.csr_matrix([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+
+    direct = translator.translate(matrix)
+    np.testing.assert_allclose(direct, [[2.0, 3.0], [5.0, 6.0]])
+
+    batch = translator.translate_batch(
+        {"source": _matrix_packet(matrix)},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]["data"]["values"]
+    np.testing.assert_allclose(batch, direct)
+
+    recompute = UMAP(n_components=2, reuse="recompute")
+    recompute._fit_completed = True
+    with pytest.raises(OperatorNotFittedError, match="no fitted reducer"):
+        recompute.translate(matrix)
