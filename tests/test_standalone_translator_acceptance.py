@@ -257,7 +257,12 @@ def test_cardinality_changing_translation_is_invariant_to_batch_size(
         name="segments_acceptance",
     )
     try:
-        source = project.read_csv(\n            source_path,\n            text_fields="text",\n            metadata_fields=False,\n            batch_size=2,\n        )
+        source = project.read_csv(
+            source_path,
+            text_fields="text",
+            metadata_fields=False,
+            batch_size=2,
+        )
         small = project.translate(
             DelimiterDecomposer(delimiter="|", new_key="segment_id"),
             source,
