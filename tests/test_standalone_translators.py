@@ -37,6 +37,7 @@ from text_analysis_lab.translators import (
     MatrixNormalizer,
     MatrixRowAggregator,
     MatrixTranspose,
+    OpenAIResponsesTranslator,
     RegexCleaner,
     RegexReplaceRule,
     SVD,
@@ -1099,3 +1100,46 @@ def test_umap_standalone_requires_available_fitted_state() -> None:
     recompute._fit_completed = True
     with pytest.raises(OperatorNotFittedError, match="no fitted reducer"):
         recompute.translate(matrix)
+
+
+def test_openai_responses_standalone_matches_teal_batch(monkeypatch) -> None:
+    translator = OpenAIResponsesTranslator(
+        model="fake-model",
+        prompt="Classify: {text}",
+        output_field="response",
+    )
+
+    class Usage:
+        input_tokens = 5
+        output_tokens = 2
+        total_tokens = 7
+
+    class Response:
+        id = "resp_1"
+        model = "fake-model"
+        output_text = "yes"
+        usage = Usage()
+
+    monkeypatch.setattr(translator, "_request", lambda prompt: Response())
+    direct = translator.translate({"text": "hello"})
+    assert direct["data"]["response"].tolist() == ["yes"]
+    assert direct["metadata"]["openai_total_tokens"].tolist() == [7]
+
+    frame = pd.DataFrame({"doc_id": [1], "text": ["hello"]})
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_docs",
+        primary_key=("doc_id",),
+        data=frame,
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    pd.testing.assert_frame_equal(batch["data"], direct["data"])
+    pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])

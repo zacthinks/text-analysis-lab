@@ -107,6 +107,26 @@ class OpenAIResponsesTranslator(BaseTranslator):
         self._data_fields: tuple[str, ...] = ()
         self._metadata_fields: tuple[str, ...] = ()
 
+    def translate(self, record: Mapping[str, Any]) -> dict[str, pd.DataFrame]:
+        """Send one ordinary record through the configured Responses request."""
+        if not isinstance(record, Mapping):
+            raise TypeError(
+                "OpenAIResponsesTranslator.translate(...) requires a mapping record."
+            )
+        try:
+            rendered = self.prompt.format_map(_StrictFormatMap(dict(record)))
+        except KeyError as exc:
+            raise ArtifactError(
+                f"Prompt template field {exc.args[0]!r} is unavailable in the input row."
+            ) from exc
+        response = self._request(rendered)
+        return {
+            "data": self._response_data(response),
+            "metadata": pd.DataFrame(
+                [_response_metadata(response, requested_model=self.model)]
+            ),
+        }
+
     @property
     def supports_parallel_translate(self) -> bool:
         # Keep the MVP deterministic and cost-transparent. TeAL can add bounded
@@ -198,22 +218,15 @@ class OpenAIResponsesTranslator(BaseTranslator):
                 "OpenAIResponsesTranslator requires exactly one input row per execution batch "
                 "so completed API calls can be resumed without duplicate billing."
             )
-        row = frame.iloc[0].to_dict()
-        try:
-            rendered = self.prompt.format_map(_StrictFormatMap(row))
-        except KeyError as exc:
-            raise ArtifactError(
-                f"Prompt template field {exc.args[0]!r} is unavailable in the input row."
-            ) from exc
-        response = self._request(rendered)
-        data = self._response_data(response)
-        metadata = pd.DataFrame(
-            [_response_metadata(response, requested_model=self.model)]
-        )
+        translated = self.translate(frame.iloc[0].to_dict())
         keys = frame.loc[:, list(packet.primary_key)].reset_index(drop=True)
         return BatchResult(
             outputs={
-                DEFAULT_OUTPUT_LABEL: {"keys": keys, "data": data, "metadata": metadata}
+                DEFAULT_OUTPUT_LABEL: {
+                    "keys": keys,
+                    "data": translated["data"],
+                    "metadata": translated["metadata"],
+                }
             }
         )
 
