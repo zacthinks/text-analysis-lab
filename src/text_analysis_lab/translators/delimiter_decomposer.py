@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
@@ -66,6 +66,62 @@ class DelimiterDecomposer(BaseTranslator):
         self.output_text_field = output_field
         self.drop_empty = bool(drop_empty)
         self.strip = bool(strip)
+
+    def translate(
+        self,
+        texts: str | None | Sequence[str | None] | pd.Series,
+    ) -> dict[str, Any]:
+        """Split ordinary text values and retain their source row positions."""
+        scalar = isinstance(texts, str) or texts is None
+        if isinstance(texts, pd.Series):
+            source = texts.reset_index(drop=True)
+        elif scalar:
+            source = pd.Series([texts])
+        elif isinstance(texts, Sequence) and not isinstance(texts, (str, bytes)):
+            source = pd.Series(list(texts))
+        else:
+            raise TypeError(
+                "DelimiterDecomposer.translate(...) expects a string, None, a "
+                "sequence of text values, or a pandas Series."
+            )
+
+        working = pd.DataFrame(
+            {
+                "__source_position": np.arange(len(source), dtype="int64"),
+                "__part": source.fillna("").astype("string").str.split(
+                    self.delimiter, regex=False
+                ),
+            }
+        )
+        exploded = working.explode("__part", ignore_index=True)
+        values = exploded["__part"].astype("string")
+        if self.strip:
+            values = values.str.strip()
+        exploded["__part"] = values
+        if self.drop_empty:
+            exploded = exploded.loc[
+                exploded["__part"].fillna("").ne("")
+            ].copy()
+
+        if exploded.empty:
+            return {
+                "source_positions": np.asarray([], dtype=np.int64),
+                "segment_ids": np.asarray([], dtype=np.int64),
+                "texts": pd.Series([], dtype="string"),
+            }
+
+        segment_ids = (
+            exploded.groupby("__source_position", sort=False, dropna=False)
+            .cumcount()
+            .to_numpy(dtype=np.int64)
+        )
+        return {
+            "source_positions": exploded["__source_position"].to_numpy(
+                dtype=np.int64
+            ),
+            "segment_ids": segment_ids,
+            "texts": exploded["__part"].reset_index(drop=True),
+        }
 
     def output_specs(
         self,
@@ -153,32 +209,18 @@ class DelimiterDecomposer(BaseTranslator):
                 f"DelimiterDecomposer new_key {self.new_key!r} collides with a source column."
             )
 
-        working = frame.loc[:, [*key_columns, self.text_field]].copy()
-        working["__teal_source_row"] = np.arange(len(working), dtype="int64")
-        text = working[self.text_field].fillna("").astype("string")
-        working["__teal_part"] = text.str.split(self.delimiter, regex=False)
-        exploded = working.explode("__teal_part", ignore_index=True)
-
-        values = exploded["__teal_part"].astype("string")
-        if self.strip:
-            values = values.str.strip()
-        exploded["__teal_part"] = values
-        if self.drop_empty:
-            exploded = exploded.loc[exploded["__teal_part"].fillna("").ne("")].copy()
-
-        if exploded.empty:
+        decomposed = self.translate(frame[self.text_field])
+        source_positions = decomposed["source_positions"]
+        if len(source_positions) == 0:
             return BatchResult(outputs={})
 
-        exploded[self.new_key] = (
-            exploded.groupby("__teal_source_row", sort=False, dropna=False)
-            .cumcount()
-            .astype("int64")
-        )
-        keys = exploded.loc[:, [*key_columns, self.new_key]].reset_index(drop=True)
-        data = (
-            exploded.loc[:, ["__teal_part"]]
-            .rename(columns={"__teal_part": self.output_text_field})
-            .reset_index(drop=True)
+        keys = frame.iloc[source_positions].loc[:, key_columns].reset_index(drop=True)
+        keys[self.new_key] = decomposed["segment_ids"]
+        data = pd.DataFrame(
+            {
+                self.output_text_field: cast(pd.Series, decomposed["texts"])
+                .reset_index(drop=True)
+            }
         )
         return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: {"keys": keys, "data": data}})
 

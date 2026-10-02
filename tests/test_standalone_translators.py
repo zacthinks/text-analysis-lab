@@ -24,6 +24,7 @@ from text_analysis_lab.core.operator import (
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.translators import (
     CountVectorizer,
+    DelimiterDecomposer,
     EmbeddingLookup,
     FeatureTrimmer,
     FittedPredictor,
@@ -31,6 +32,7 @@ from text_analysis_lab.translators import (
     LDA,
     MatrixNormalizer,
     MatrixRowAggregator,
+    MatrixTranspose,
     RegexCleaner,
     RegexReplaceRule,
     SVD,
@@ -622,4 +624,108 @@ def test_embedding_lookup_standalone_matches_teal_batch(
         batch_values.toarray() if sparse.issparse(batch_values) else batch_values
     )
     np.testing.assert_array_equal(batch_values, direct_values)
+    pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
+
+
+
+def test_delimiter_decomposer_standalone_matches_teal_batch() -> None:
+    translator = DelimiterDecomposer(delimiter="\n", new_key="line_id")
+    texts = pd.Series(["first\n\n second ", None, "third\nfourth"])
+
+    direct = translator.translate(texts)
+    assert direct["source_positions"].tolist() == [0, 0, 2, 2]
+    assert direct["segment_ids"].tolist() == [0, 1, 0, 1]
+    assert direct["texts"].tolist() == ["first", "second", "third", "fourth"]
+
+    frame = pd.DataFrame({"doc_id": [10, 11, 12], "text": texts})
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_text",
+        primary_key=("doc_id",),
+        data=frame,
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    assert batch["keys"].to_dict("records") == [
+        {"doc_id": 10, "line_id": 0},
+        {"doc_id": 10, "line_id": 1},
+        {"doc_id": 12, "line_id": 0},
+        {"doc_id": 12, "line_id": 1},
+    ]
+    assert batch["data"]["text"].tolist() == direct["texts"].tolist()
+
+
+def test_matrix_transpose_standalone_matches_teal_batch() -> None:
+    matrix = sparse.csr_matrix(
+        np.asarray([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    )
+    features = ["alpha", "beta", "gamma"]
+    row_labels = ["doc_id=10", "doc_id=11"]
+    feature_metadata = pd.DataFrame(
+        {
+            "column_index": [0, 1, 2],
+            "column": features,
+            "family": ["a", "b", "b"],
+        }
+    )
+    translator = MatrixTranspose()
+
+    direct = translator.translate(
+        matrix,
+        features=features,
+        row_labels=row_labels,
+        feature_metadata=feature_metadata,
+    )
+    assert sparse.isspmatrix_csr(direct["values"])
+    np.testing.assert_array_equal(
+        direct["values"].toarray(),
+        matrix.toarray().T,
+    )
+    assert direct["columns"] == row_labels
+    assert direct["row_names"] == features
+    assert direct["metadata"].columns.tolist() == ["column", "family"]
+
+    source = SimpleNamespace(
+        artifact_type=ArtifactType.SPARSE_MATRIX,
+        primary_key=["doc_id"],
+        get_data_columns=lambda: list(features),
+        get_feature_frame=lambda: feature_metadata.copy(),
+        has_row_names=False,
+    )
+    translator.input_request(
+        sources={"source": source},
+        mode="translate",
+        request=TranslationRequest(),
+    )
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_matrix",
+        primary_key=("doc_id",),
+        data={
+            "info": pd.DataFrame({"doc_id": [10, 11]}),
+            "matrix": matrix,
+        },
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    np.testing.assert_array_equal(
+        batch["data"]["values"].toarray(),
+        direct["values"].toarray(),
+    )
+    assert batch["data"]["columns"] == direct["columns"]
+    assert batch["data"]["row_names"] == direct["row_names"]
     pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
