@@ -372,26 +372,6 @@ class SentenceTransformerEncoder(BaseTranslator):
             values = model.encode(list(texts), **kwargs)
         return np.asarray(values)
 
-    def transform_external_texts(
-        self,
-        texts: Sequence[str],
-        *,
-        query: bool = False,
-        params: Mapping[str, Any] | None = None,
-    ) -> np.ndarray:
-        """Encode new documents/queries with the frozen SentenceTransformer recipe."""
-        operation_params = dict(params or {})
-        return self.translate(
-            texts,
-            task="query" if query else None,
-            device="auto",
-            model_batch_size=int(operation_params.get("model_batch_size", 32)),
-        )
-
-    def supports_external_transform(self, *, query: bool, input_kind: str) -> bool:
-        _ = query
-        return input_kind == "texts"
-
     def handle_batch_result(
         self,
         result: BatchResult,
