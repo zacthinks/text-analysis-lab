@@ -22,13 +22,17 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.core.types import ArtifactType
+from text_analysis_lab import dictionaries
 from text_analysis_lab.translators import (
+    ArtifactCountVectorizer,
     CountVectorizer,
     DelimiterDecomposer,
+    DictionaryTranslator,
     EmbeddingLookup,
     FeatureTrimmer,
     FittedPredictor,
     FunctionMapper,
+    GeCoPredictor,
     LDA,
     MatrixNormalizer,
     MatrixRowAggregator,
@@ -41,6 +45,7 @@ from text_analysis_lab.translators import (
     PdfTextExtractor,
     TextLength,
     TfidfTransformer,
+    Word2Vec,
 )
 
 
@@ -793,3 +798,220 @@ def test_pdf_text_extractor_standalone_matches_teal_batch_for_failures() -> None
     ).outputs["output"]
     pd.testing.assert_frame_equal(batch["data"], direct)
     assert batch["keys"]["file_id"].tolist() == [10, 11]
+
+
+def test_artifact_count_vectorizer_standalone_matches_teal_batch() -> None:
+    frame = pd.DataFrame(
+        {
+            "doc_id": [1, 1, 1, 2, 2],
+            "sentence_id": [0, 0, 1, 0, 0],
+            "token_id": [0, 1, 0, 0, 1],
+            "lemma": ["alpha", "beta", "alpha", "beta", "beta"],
+        }
+    )
+    translator = ArtifactCountVectorizer(
+        field="lemma",
+        group_by=("doc_id",),
+        vocabulary={"alpha": 0, "beta": 1},
+    )
+    source_key = ("doc_id", "sentence_id", "token_id")
+
+    direct = translator.translate(frame, source_key=source_key)
+    assert direct["groups"].to_dict("list") == {"doc_id": [1, 2]}
+    assert direct["columns"] == ["alpha", "beta"]
+    assert direct["values"].toarray().tolist() == [[2, 1], [0, 2]]
+
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_tokens",
+        primary_key=source_key,
+        data=frame,
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    pd.testing.assert_frame_equal(batch["keys"], direct["groups"])
+    np.testing.assert_array_equal(
+        batch["data"]["values"].toarray(),
+        direct["values"].toarray(),
+    )
+    assert batch["data"]["columns"] == direct["columns"]
+
+
+def test_dictionary_translator_standalone_matches_teal_batch() -> None:
+    features = ["Good", "bad", "economy", "neutral"]
+    matrix = sparse.csr_matrix(
+        np.asarray([[2, 1, 3, 0], [0, 2, 0, 1]], dtype=float)
+    )
+    dictionary = dictionaries.Dictionary(
+        {
+            "positive": ["good"],
+            "negative": ["bad"],
+            "neutral": ["neutral"],
+            "economy": ["econom*"],
+        },
+        valuetype="glob",
+        case_sensitive=False,
+    )
+    translator = DictionaryTranslator(dictionary)
+
+    direct = translator.translate(matrix, features=features)
+    assert direct["metadata"].to_dict("list") == {
+        "matched": [6, 3],
+        "unmatched": [0, 0],
+        "total": [6, 3],
+    }
+
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_counts",
+        primary_key=("doc_id",),
+        data={
+            "info": pd.DataFrame({"doc_id": [10, 11]}),
+            "matrix": matrix,
+        },
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    np.testing.assert_array_equal(
+        batch["data"]["values"].toarray(),
+        direct["values"].toarray(),
+    )
+    assert batch["data"]["columns"] == direct["columns"]
+    pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
+
+
+def test_geco_predictor_standalone_matches_teal_batch() -> None:
+    class ColumnProbability:
+        def __init__(self) -> None:
+            self.classes_ = np.asarray([0, 1])
+
+        def predict_proba(self, values):
+            if sparse.issparse(values):
+                p = np.asarray(values[:, 0].toarray()).reshape(-1)
+            else:
+                p = np.asarray(values)[:, 0]
+            p = np.clip(np.asarray(p, dtype=float), 0.0, 1.0)
+            return np.column_stack([1.0 - p, p])
+
+    predictor = GeCoPredictor(
+        [ColumnProbability(), ColumnProbability()],
+        source_specs=[
+            {"source_index": 0, "n_features": 1},
+            {"source_index": 1, "n_features": 1},
+        ],
+        member_specs=[
+            {"source_index": 0, "positive_class": 1},
+            {"source_index": 1, "positive_class": 1},
+        ],
+        aggregation="mean",
+    )
+    first = sparse.csr_matrix([[0.2], [0.8], [0.4]])
+    second = np.asarray([[0.6], [0.1], [0.9]])
+
+    direct = predictor.translate(first, second)
+    np.testing.assert_allclose(direct["probability"], [0.4, 0.45, 0.65])
+    assert direct["prediction"].tolist() == [0, 0, 1]
+
+    packets = {
+        "source_0": InputBatch(
+            source_label="source_0",
+            artifact_id="art_0",
+            primary_key=("row_id",),
+            data={
+                "info": pd.DataFrame({"row_id": [1, 2, 3]}),
+                "matrix": first,
+            },
+            batch_index=0,
+            batch_count=1,
+            is_first=True,
+            is_last=True,
+        ),
+        "source_1": InputBatch(
+            source_label="source_1",
+            artifact_id="art_1",
+            primary_key=("row_id",),
+            data={
+                "info": pd.DataFrame({"row_id": [1, 2, 3]}),
+                "matrix": second,
+            },
+            batch_index=0,
+            batch_count=1,
+            is_first=True,
+            is_last=True,
+        ),
+    }
+    batch = predictor.translate_batch(
+        packets,
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    pd.testing.assert_frame_equal(batch["data"], direct)
+
+
+def test_word2vec_standalone_matches_teal_batch(monkeypatch) -> None:
+    translator = Word2Vec(
+        field="lemma",
+        vector_size=3,
+        min_count=1,
+        epochs=2,
+    )
+    vectors = np.arange(9, dtype=np.float32).reshape(3, 3)
+    monkeypatch.setattr(
+        translator,
+        "_train",
+        lambda sequences: (
+            ["alpha", "beta", "gamma"],
+            np.asarray([3, 2, 1], dtype=np.int64),
+            vectors,
+            (4.0, 2.0),
+            "4.4.0",
+        ),
+    )
+    sequences = [["alpha", "beta"], ["alpha", "gamma"]]
+
+    direct = translator.translate(sequences)
+    assert direct["words"] == ["alpha", "beta", "gamma"]
+    assert direct["counts"].tolist() == [3, 2, 1]
+    np.testing.assert_array_equal(direct["values"], vectors)
+    assert direct["training_loss"] == (4.0, 2.0)
+
+    frame = pd.DataFrame(
+        {
+            "doc_id": [1, 1, 2, 2],
+            "sentence_id": [0, 0, 0, 0],
+            "token_id": [0, 1, 0, 1],
+            "lemma": ["alpha", "beta", "alpha", "gamma"],
+        }
+    )
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_tokens",
+        primary_key=("doc_id", "sentence_id", "token_id"),
+        data=frame,
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    np.testing.assert_array_equal(batch["data"]["values"], direct["values"])
+    assert batch["data"]["row_names"] == direct["words"]
+    assert batch["metadata"]["count"].tolist() == direct["counts"].tolist()

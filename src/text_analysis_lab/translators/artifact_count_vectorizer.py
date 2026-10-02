@@ -123,6 +123,59 @@ class ArtifactCountVectorizer(BaseTranslator):
     def supports_resume(self, *, mode: TranslationMode, route: RunRoute) -> bool:
         return route == "sequential" and mode in {"fit_translate", "translate"}
 
+    def translate(
+        self,
+        frame: pd.DataFrame,
+        *,
+        source_key: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        """Count a fitted vocabulary over an ordinary annotated row table.
+
+        source_key is required only when sequence_by was not configured,
+        because the default sequence boundary is the immediate parent of that
+        hierarchical key.
+        """
+        if not isinstance(frame, pd.DataFrame):
+            raise TypeError(
+                "ArtifactCountVectorizer.translate(...) requires a pandas DataFrame."
+            )
+        if not self.is_fitted:
+            raise OperatorNotFittedError(
+                "ArtifactCountVectorizer has no fitted vocabulary."
+            )
+
+        if self.sequence_by is None:
+            if source_key is None:
+                raise ValueError(
+                    "ArtifactCountVectorizer.translate(...) requires source_key "
+                    "when sequence_by was not configured."
+                )
+            sequence_by = self._validate_source_key(source_key)
+        else:
+            sequence_by = tuple(self.sequence_by)
+            if not _is_prefix(self.group_by, sequence_by):
+                raise OperatorError(
+                    "sequence_by must retain group_by as its prefix; got "
+                    f"group_by={list(self.group_by)}, sequence_by={list(sequence_by)}."
+                )
+
+        required = [*dict.fromkeys([*self.group_by, *sequence_by, self.field])]
+        missing = [name for name in required if name not in frame.columns]
+        if missing:
+            raise ArtifactError(
+                f"ArtifactCountVectorizer source is missing columns {missing}."
+            )
+        group_keys, events = _build_feature_events(
+            frame,
+            field=self.field,
+            group_by=self.group_by,
+            sequence_by=sequence_by,
+            ngram_range=self.ngram_range,
+            drop_empty=self.drop_empty,
+            ngram_separator=self.ngram_separator,
+        )
+        return self._translate_events(group_keys, events)
+
     def output_specs(
         self,
         *,
@@ -223,22 +276,18 @@ class ArtifactCountVectorizer(BaseTranslator):
                 raise OperatorNotFittedError(
                     "ArtifactCountVectorizer has no fitted vocabulary."
                 )
-        else:  # pragma: no cover - runner validates mode
+        else:
             raise OperatorError(f"Unsupported ArtifactCountVectorizer mode {mode!r}.")
 
-        vocabulary = cast(dict[str, int], self.vocabulary_)
-        matrix = _events_to_matrix(
-            events,
-            n_groups=len(group_keys),
-            vocabulary=vocabulary,
-            binary=self.binary,
-        )
-        columns = _feature_names(vocabulary)
+        translated = self._translate_events(group_keys, events)
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
-                    "keys": group_keys,
-                    "data": {"values": matrix, "columns": columns},
+                    "keys": translated["groups"],
+                    "data": {
+                        "values": translated["values"],
+                        "columns": translated["columns"],
+                    },
                 }
             }
         )
@@ -356,6 +405,27 @@ class ArtifactCountVectorizer(BaseTranslator):
         obj.load_assets(intermediate_dir, assets)
         obj.operator_id = operator_id
         return obj
+
+    def _translate_events(
+        self,
+        group_keys: pd.DataFrame,
+        events: pd.DataFrame,
+    ) -> dict[str, Any]:
+        if not self.is_fitted:
+            raise OperatorNotFittedError(
+                "ArtifactCountVectorizer has no fitted vocabulary."
+            )
+        vocabulary = cast(dict[str, int], self.vocabulary_)
+        return {
+            "groups": group_keys,
+            "values": _events_to_matrix(
+                events,
+                n_groups=len(group_keys),
+                vocabulary=vocabulary,
+                binary=self.binary,
+            ),
+            "columns": _feature_names(vocabulary),
+        }
 
     def _validate_source_key(self, source_key: Sequence[str]) -> tuple[str, ...]:
         source_key = tuple(str(name) for name in source_key)

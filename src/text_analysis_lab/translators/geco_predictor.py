@@ -190,6 +190,65 @@ class GeCoPredictor(BaseTranslator):
             stale_at_export=stale_at_export,
         )
 
+    def translate(self, *matrices: Any) -> pd.DataFrame:
+        """Run the frozen predictor on one or more ordered in-memory matrices."""
+        if len(matrices) != len(self.source_specs):
+            raise ValueError(
+                "GeCoPredictor.translate(...) requires one matrix per frozen source; "
+                f"expected {len(self.source_specs)}, got {len(matrices)}."
+            )
+
+        normalized: list[Any] = []
+        n_rows: int | None = None
+        for source_index, (matrix, spec) in enumerate(
+            zip(matrices, self.source_specs, strict=True)
+        ):
+            if sparse.issparse(matrix):
+                if len(matrix.shape) != 2:
+                    raise ArtifactError("GeCoPredictor source matrix must be two-dimensional.")
+                values = matrix
+            else:
+                values = np.asarray(matrix)
+                if values.ndim != 2:
+                    raise ArtifactError("GeCoPredictor source matrix must be two-dimensional.")
+            rows, width = int(values.shape[0]), int(values.shape[1])
+            if n_rows is None:
+                n_rows = rows
+            elif rows != n_rows:
+                raise ArtifactError(
+                    "GeCoPredictor source matrices must have the same number of rows."
+                )
+            required_width = spec.get("n_features")
+            if required_width is not None and width != int(required_width):
+                raise ArtifactError(
+                    f"GeCoPredictor source {source_index} requires "
+                    f"{int(required_width)} features, got {width}."
+                )
+            normalized.append(values)
+
+        assert n_rows is not None
+        member_probabilities: list[np.ndarray] = []
+        for index, (model, spec) in enumerate(
+            zip(self.member_models, self.member_specs, strict=True)
+        ):
+            fitted = _require_probability_model(model, name=f"member {index}")
+            source_index = int(spec["source_index"])
+            member_probabilities.append(
+                _positive_probability(
+                    fitted,
+                    normalized[source_index],
+                    positive_class=spec["positive_class"],
+                    expected_rows=n_rows,
+                    name=f"member {index}",
+                )
+            )
+
+        probability = self._combine_probabilities(member_probabilities)
+        prediction = (probability >= self.threshold).astype("int64")
+        return pd.DataFrame(
+            {"prediction": prediction, "probability": probability}
+        ).reset_index(drop=True)
+
     @property
     def supports_parallel_translate(self) -> bool:
         return True
@@ -270,34 +329,12 @@ class GeCoPredictor(BaseTranslator):
         labels = _ordered_input_labels(inputs, expected_count=len(self.source_specs))
         packets = [inputs[label] for label in labels]
         keys, matrices = _aligned_matrices(packets)
-
-        member_probabilities: list[np.ndarray] = []
-        for index, (model, spec) in enumerate(
-            zip(self.member_models, self.member_specs, strict=True)
-        ):
-            fitted = _require_probability_model(model, name=f"member {index}")
-            source_index = int(spec["source_index"])
-            probability = _positive_probability(
-                fitted,
-                matrices[source_index],
-                positive_class=spec["positive_class"],
-                expected_rows=len(keys),
-                name=f"member {index}",
-            )
-            member_probabilities.append(probability)
-
-        probability = self._combine_probabilities(member_probabilities)
-        prediction = (probability >= self.threshold).astype("int64")
+        data = self.translate(*matrices)
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
                     "keys": keys,
-                    "data": pd.DataFrame(
-                        {
-                            "prediction": prediction,
-                            "probability": probability,
-                        }
-                    ).reset_index(drop=True),
+                    "data": data,
                 }
             }
         )
