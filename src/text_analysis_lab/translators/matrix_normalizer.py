@@ -173,26 +173,6 @@ class MatrixNormalizer(BaseTranslator):
             }
         )
 
-    def transform_external_matrix(
-        self,
-        matrix: Any,
-        *,
-        query: bool = False,
-        params: Mapping[str, Any] | None = None,
-    ):
-        """Normalize new rows when this operator was configured row-wise."""
-        _ = query, params
-        if self.axis != "rows":
-            raise OperatorError(
-                "Column-wise MatrixNormalizer cannot replay a single new document: "
-                "its normalization depends on the fitted corpus rows."
-            )
-        return self.translate(matrix)
-
-    def supports_external_transform(self, *, query: bool, input_kind: str) -> bool:
-        _ = query
-        return input_kind == "matrix" and self.axis == "rows"
-
     def handle_batch_result(
         self,
         result: BatchResult,
