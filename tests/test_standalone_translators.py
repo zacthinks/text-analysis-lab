@@ -26,6 +26,7 @@ from text_analysis_lab import dictionaries
 from text_analysis_lab.translators import (
     ArtifactCountVectorizer,
     ContextualTransformer,
+    CoreferenceResolver,
     CountVectorizer,
     DelimiterDecomposer,
     DictionaryTranslator,
@@ -1208,3 +1209,94 @@ def test_contextual_transformer_standalone_matches_teal_batch(monkeypatch) -> No
         batch["contextual_embeddings"]["data"]["values"],
         direct["values"],
     )
+
+
+def test_coreference_standalone_matches_teal_batch(monkeypatch) -> None:
+    import text_analysis_lab.translators.coreference_resolver as module
+    from text_analysis_lab.linguistics.coreference.runtime import (
+        CorefBatchPrediction,
+        CorefMention,
+        CorefPrediction,
+    )
+
+    class FakeRuntime:
+        def document_token_counts(self, texts):
+            return [len(texts[0].split())], None
+
+        def predict_texts(self, texts, **kwargs):
+            _ = kwargs
+            return CorefBatchPrediction(
+                model="lingmess",
+                model_repository="fake",
+                device="cpu",
+                elapsed_seconds=0.0,
+                documents=(
+                    CorefPrediction(
+                        0,
+                        texts[0],
+                        (
+                            CorefMention(0, 0, 0, 5, "Alice"),
+                            CorefMention(0, 1, 12, 15, "She"),
+                        ),
+                    ),
+                ),
+            )
+
+    monkeypatch.setattr(module, "_make_runtime", lambda **kwargs: FakeRuntime())
+    documents = pd.DataFrame(
+        {"row_id": [7], "text": ["Alice left. She slept."]}
+    )
+    tokens = pd.DataFrame(
+        {
+            "row_id": [7, 7, 7, 7, 7, 7],
+            "sentence_id": [0, 0, 0, 1, 1, 1],
+            "token_id": [0, 1, 2, 0, 1, 2],
+            "text": ["Alice", "left", ".", "She", "slept", "."],
+            "lemma": ["Alice", "leave", ".", "she", "sleep", "."],
+            "pos": ["PROPN", "VERB", "PUNCT", "PRON", "VERB", "PUNCT"],
+            "dep": ["nsubj", "ROOT", "punct", "nsubj", "ROOT", "punct"],
+            "head_token_id": [1, 1, 1, 1, 1, 1],
+            "ent_type": ["PERSON", "", "", "", "", ""],
+            "char_start": [0, 6, 10, 12, 16, 21],
+            "char_end": [5, 10, 11, 15, 21, 22],
+        }
+    )
+    translator = CoreferenceResolver(device="cpu")
+    direct = translator.translate(
+        documents,
+        tokens,
+        document_keys=["row_id"],
+    )
+    assert direct["mentions"]["text"].tolist() == ["Alice", "She"]
+    assert direct["mentions"]["cluster_id"].tolist() == [0, 0]
+
+    batch = translator.translate_batch(
+        {
+            "documents": InputBatch(
+                "documents",
+                "art_documents",
+                ("row_id",),
+                documents,
+                0,
+                1,
+                True,
+                True,
+            ),
+            "tokens": InputBatch(
+                "tokens",
+                "art_tokens",
+                ("row_id", "sentence_id", "token_id"),
+                tokens,
+                0,
+                1,
+                True,
+                True,
+            ),
+        },
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs
+    batch_mentions = pd.concat(
+        [batch["mentions"]["keys"], batch["mentions"]["data"]], axis=1
+    )
+    pd.testing.assert_frame_equal(batch_mentions, direct["mentions"])
