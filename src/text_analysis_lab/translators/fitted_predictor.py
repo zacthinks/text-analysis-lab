@@ -12,7 +12,11 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from text_analysis_lab.core.errors import ArtifactError, OperatorError
+from text_analysis_lab.core.errors import (
+    ArtifactError,
+    OperatorError,
+    OperatorNotFittedError,
+)
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
@@ -133,22 +137,15 @@ class FittedPredictor(BaseTranslator):
             include_position=False,
         )
 
-    def translate_batch(
-        self,
-        inputs: Mapping[str, InputBatch],
-        *,
-        mode: TranslationMode,
-        request: TranslationRequest,
-    ) -> BatchResult:
-        _ = request
-        if mode != "translate":
-            raise OperatorError(f"Unsupported FittedPredictor mode {mode!r}.")
-        packet = _single_input(inputs)
-        keys, values = _prediction_input(packet, source_type=self._source_type)
-        model = self._require_model()
+    def translate(self, values: Any) -> pd.DataFrame:
+        """Apply the fitted prediction object to ordinary in-memory values."""
 
+        model = self._require_model()
+        expected_rows = _input_row_count(values)
         prediction = _one_dimensional(
-            model.predict(values), expected_rows=len(keys), name="model.predict"
+            model.predict(values),
+            expected_rows=expected_rows,
+            name="model.predict",
         )
         data: dict[str, Any] = {"prediction": prediction}
 
@@ -177,7 +174,7 @@ class FittedPredictor(BaseTranslator):
                     f"present in model.classes_={class_values!r}."
                 )
             probabilities = np.asarray(predict_proba(values))
-            if probabilities.ndim != 2 or probabilities.shape[0] != len(keys):
+            if probabilities.ndim != 2 or probabilities.shape[0] != expected_rows:
                 raise ArtifactError(
                     "model.predict_proba(...) must return a two-dimensional array with "
                     "one row per input observation."
@@ -189,11 +186,32 @@ class FittedPredictor(BaseTranslator):
                 )
             data["probability"] = probabilities[:, class_index]
 
+        return pd.DataFrame(data).reset_index(drop=True)
+
+    def translate_batch(
+        self,
+        inputs: Mapping[str, InputBatch],
+        *,
+        mode: TranslationMode,
+        request: TranslationRequest,
+    ) -> BatchResult:
+        _ = request
+        if mode != "translate":
+            raise OperatorError(f"Unsupported FittedPredictor mode {mode!r}.")
+        packet = _single_input(inputs)
+        keys, values = _prediction_input(packet, source_type=self._source_type)
+        data = self.translate(values)
+        if len(data) != len(keys):
+            raise ArtifactError(
+                "FittedPredictor standalone prediction returned a different row count "
+                "from the TeAL source batch."
+            )
+
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
                     "keys": keys,
-                    "data": pd.DataFrame(data).reset_index(drop=True),
+                    "data": data,
                 }
             }
         )
@@ -303,7 +321,7 @@ class FittedPredictor(BaseTranslator):
 
     def _require_model(self) -> Any:
         if self.model is None:
-            raise OperatorError("FittedPredictor estimator is unavailable.")
+            raise OperatorNotFittedError("FittedPredictor estimator is unavailable.")
         if not callable(getattr(self.model, "predict", None)):
             raise OperatorError(
                 "FittedPredictor estimator has no callable predict(...)."
@@ -371,6 +389,18 @@ def _prediction_input(
     keys = frame.loc[:, key_columns].reset_index(drop=True)
     values = frame.drop(columns=key_columns, errors="ignore").reset_index(drop=True)
     return keys, values
+
+
+def _input_row_count(values: Any) -> int:
+    shape = getattr(values, "shape", None)
+    if shape is not None and len(shape) >= 1:
+        return int(shape[0])
+    try:
+        return len(values)
+    except TypeError as exc:
+        raise ValueError(
+            "FittedPredictor standalone input must expose a row dimension."
+        ) from exc
 
 
 def _one_dimensional(value: Any, *, expected_rows: int, name: str) -> np.ndarray:

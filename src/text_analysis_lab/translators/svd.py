@@ -160,6 +160,27 @@ class SVD(BaseTranslator):
             include_position=False,
         )
 
+    def translate(self, matrix: Any) -> np.ndarray:
+        """Project ordinary matrix rows through the fitted decomposition."""
+
+        estimator = self._require_estimator()
+        shape = getattr(matrix, "shape", None)
+        if shape is None or len(shape) != 2:
+            raise ValueError(
+                f"SVD standalone translation requires a two-dimensional matrix; got shape={shape!r}."
+            )
+        expected_width = (
+            len(self.source_features_)
+            if self.source_features_ is not None
+            else getattr(estimator, "n_features_in_", None)
+        )
+        if expected_width is not None and int(shape[1]) != int(expected_width):
+            raise ValueError(
+                "SVD standalone translation requires the fitted feature width "
+                f"{int(expected_width)}; got shape={shape!r}."
+            )
+        return np.asarray(estimator.transform(matrix))
+
     def translate_batch(
         self,
         inputs: Mapping[str, InputBatch],
@@ -202,7 +223,7 @@ class SVD(BaseTranslator):
                 },
             }
         elif mode == "translate":
-            reduced = self._require_estimator().transform(matrix)
+            reduced = self.translate(matrix)
         else:  # pragma: no cover
             raise OperatorError(f"Unsupported SVD mode {mode!r}.")
         outputs[DEFAULT_OUTPUT_LABEL] = {
@@ -223,7 +244,7 @@ class SVD(BaseTranslator):
     ) -> np.ndarray:
         """Project new matrix rows through the frozen decomposition in memory."""
         _ = query, params
-        return np.asarray(self._require_estimator().transform(matrix))
+        return self.translate(matrix)
 
     def supports_external_transform(self, *, query: bool, input_kind: str) -> bool:
         _ = query

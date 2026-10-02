@@ -22,10 +22,16 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.translators import (
+    CountVectorizer,
     FeatureTrimmer,
+    FittedPredictor,
+    LDA,
     MatrixNormalizer,
     RegexCleaner,
     RegexReplaceRule,
+    SVD,
+    SentenceTransformerEncoder,
+    TextLength,
     TfidfTransformer,
 )
 
@@ -252,3 +258,214 @@ def test_matrix_normalizer_standalone_matches_teal_batch(
 
     with pytest.raises(ValueError, match="two-dimensional"):
         translator.translate(np.array([1.0, 2.0, 3.0]))
+
+
+
+def test_count_vectorizer_standalone_matches_teal_batch() -> None:
+    translator = CountVectorizer(vocabulary={"alpha": 0, "beta": 1})
+    texts = ["alpha beta alpha", None, "beta"]
+
+    direct = translator.translate(texts)
+    assert sparse.isspmatrix_csr(direct)
+
+    frame = pd.DataFrame({"doc_id": [0, 1, 2], "text": texts})
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_text",
+        primary_key=("doc_id",),
+        data=frame,
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]["data"]["values"]
+    np.testing.assert_array_equal(batch.toarray(), direct.toarray())
+
+    with pytest.raises(OperatorNotFittedError, match="fitted vocabulary"):
+        CountVectorizer().translate(["alpha"])
+
+
+def test_svd_standalone_matches_teal_batch_and_validates_width() -> None:
+    train = sparse.csr_matrix(
+        [[2.0, 0.0, 1.0], [0.0, 3.0, 1.0], [1.0, 1.0, 0.0]]
+    )
+    new_rows = sparse.csr_matrix([[1.0, 0.0, 2.0], [0.0, 1.0, 1.0]])
+    translator = SVD(n_components=2, random_state=0)
+    translator.source_features_ = ("alpha", "beta", "gamma")
+    translator._estimator = translator._make_estimator().fit(train)
+
+    direct = translator.translate(new_rows)
+    batch = translator.translate_batch(
+        {"source": _matrix_packet(new_rows)},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]["data"]["values"]
+    np.testing.assert_allclose(batch, direct)
+
+    with pytest.raises(ValueError, match="fitted feature width"):
+        translator.translate(np.array([[1.0, 2.0]]))
+    with pytest.raises(OperatorNotFittedError, match="fitted decomposition"):
+        SVD().translate(new_rows)
+
+
+def test_lda_standalone_matches_teal_batch_and_validates_counts() -> None:
+    train = sparse.csr_matrix(
+        [[2, 0, 1], [0, 3, 1], [1, 1, 0], [4, 0, 2]],
+        dtype=float,
+    )
+    new_rows = sparse.csr_matrix([[1, 0, 2], [0, 1, 1]], dtype=float)
+    translator = LDA(n_components=2, max_iter=3, random_state=0)
+    translator.source_features_ = ("alpha", "beta", "gamma")
+    translator._estimator = translator._make_estimator().fit(train)
+
+    direct = translator.translate(new_rows)
+    batch = translator.translate_batch(
+        {"source": _matrix_packet(new_rows)},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]["data"]["values"]
+    np.testing.assert_allclose(batch, direct)
+
+    with pytest.raises(ValueError, match="nonnegative"):
+        translator.translate(np.array([[1.0, -1.0, 0.0]]))
+    with pytest.raises(OperatorNotFittedError, match="fitted model"):
+        LDA().translate(new_rows)
+
+
+def test_fitted_predictor_standalone_matches_teal_batch() -> None:
+    from sklearn.linear_model import LogisticRegression
+
+    train_x = np.array([[0.0], [1.0], [2.0], [3.0]])
+    train_y = np.array([0, 0, 1, 1])
+    model = LogisticRegression(random_state=0).fit(train_x, train_y)
+    values = np.array([[0.5], [2.5]])
+    translator = FittedPredictor(model, probability_class=1)
+
+    direct = translator.translate(values)
+    assert list(direct.columns) == ["prediction", "probability"]
+
+    translator._source_type = "dense_matrix"
+    batch = translator.translate_batch(
+        {"source": _matrix_packet(values)},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]["data"]
+    pd.testing.assert_frame_equal(batch, direct)
+
+    with pytest.raises(OperatorNotFittedError, match="unavailable"):
+        FittedPredictor(None).translate(values)
+
+
+def test_text_length_standalone_supports_text_records_and_frames() -> None:
+    translator = TextLength(
+        {
+            "text": ("characters", "words"),
+            "title": "log_characters",
+        }
+    )
+    frame = pd.DataFrame(
+        {
+            "doc_id": [1, 2],
+            "text": ["hello world", None],
+            "title": ["abc", "longer"],
+        },
+        index=[10, 20],
+    )
+
+    direct = translator.translate(frame[["text", "title"]])
+    assert isinstance(direct, pd.DataFrame)
+    assert direct.index.tolist() == [10, 20]
+    assert direct.loc[10, "text_characters"] == 11
+    assert direct.loc[10, "text_words"] == 2
+
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_text",
+        primary_key=("doc_id",),
+        data=frame.reset_index(drop=True),
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]["metadata"]
+    pd.testing.assert_frame_equal(batch, direct.reset_index(drop=True))
+
+    single = TextLength({"text": "words"})
+    assert single.translate("one two") == {"text_words": 2}
+    assert single.translate({"text": "one two three"}) == {"text_words": 3}
+
+
+def test_sentence_transformer_standalone_matches_teal_batch_and_supports_task_override(
+    monkeypatch,
+) -> None:
+    import text_analysis_lab.translators.sentence_transformer_encoder as module
+
+    class FakeModel:
+        tokenizer = object()
+        prompts = {}
+
+        def encode_document(self, texts, **kwargs):
+            _ = kwargs
+            return np.asarray([[len(text), 1.0] for text in texts], dtype=float)
+
+        def encode_query(self, texts, **kwargs):
+            _ = kwargs
+            return np.asarray([[len(text), 2.0] for text in texts], dtype=float)
+
+        def encode(self, texts, **kwargs):
+            _ = kwargs
+            return np.asarray([[len(text), 0.0] for text in texts], dtype=float)
+
+    translator = SentenceTransformerEncoder("fake-model")
+    fake_model = FakeModel()
+    monkeypatch.setattr(module, "resolve_device", lambda value: "cpu")
+    monkeypatch.setattr(
+        module,
+        "count_tokens",
+        lambda tokenizer, texts: [len(text.split()) for text in texts],
+    )
+    monkeypatch.setattr(
+        translator,
+        "_runtime_component",
+        lambda *, device: fake_model,
+    )
+    monkeypatch.setattr(
+        translator,
+        "_context_limit",
+        lambda *, model, tokenizer: 100,
+    )
+
+    texts = ["hello world", "TeAL"]
+    direct = translator.translate(texts)
+    query = translator.translate(texts, task="query")
+    assert direct.dtype == np.float32
+    assert query[:, 1].tolist() == [2.0, 2.0]
+
+    frame = pd.DataFrame({"doc_id": [1, 2], "text": texts})
+    packet = InputBatch(
+        source_label="source",
+        artifact_id="art_text",
+        primary_key=("doc_id",),
+        data=frame,
+        batch_index=0,
+        batch_count=1,
+        is_first=True,
+        is_last=True,
+    )
+    batch = translator.translate_batch(
+        {"source": packet},
+        mode="translate",
+        request=TranslationRequest(params={"device": "cpu", "model_batch_size": 32}),
+    ).outputs["output"]
+    np.testing.assert_allclose(batch["data"]["values"], direct)
+    assert batch["metadata"]["token_count"].tolist() == [2, 1]
