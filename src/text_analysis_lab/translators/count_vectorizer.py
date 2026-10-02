@@ -234,21 +234,6 @@ class CountVectorizer(BaseTranslator):
             }
         )
 
-    def transform_external_texts(
-        self,
-        texts: Sequence[str],
-        *,
-        query: bool = False,
-        params: Mapping[str, Any] | None = None,
-    ):
-        """Vectorize new texts with the frozen vocabulary without writing artifacts."""
-        _ = query, params
-        return self.translate(texts)
-
-    def supports_external_transform(self, *, query: bool, input_kind: str) -> bool:
-        _ = query
-        return input_kind == "texts" and self.is_fitted
-
     def handle_batch_result(
         self,
         result: BatchResult,
