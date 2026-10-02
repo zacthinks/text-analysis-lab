@@ -45,15 +45,8 @@ class BabelscapeWSLBackend:
         precision: str | int = 32,
         cache_dir: str | Path | None = None,
         local_files_only: bool = False,
-        acknowledge_noncommercial_license: bool = False,
         model: Any | None = None,
     ) -> None:
-        if not acknowledge_noncommercial_license:
-            raise ValueError(
-                "WSL is licensed CC BY-NC-SA 4.0. Pass "
-                "acknowledge_noncommercial_license=True only for an eligible non-commercial "
-                "research or education use."
-            )
         self.model_name = model_name
         self.revision = revision
         self.device = resolve_devices(device).primary
