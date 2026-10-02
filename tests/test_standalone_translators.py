@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -23,6 +24,7 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab import dictionaries
+import text_analysis_lab.translators as translators_module
 from text_analysis_lab.translators import (
     ArtifactCountVectorizer,
     ContextualTransformer,
@@ -105,6 +107,22 @@ class _InternalOnlyTranslator(BaseTranslator):
     def finalize_translation(self, *, mode, request):
         _ = mode, request
         return None
+
+
+def test_every_public_translator_overrides_standalone_translate() -> None:
+    public_translators = {
+        value
+        for name in translators_module.__all__
+        if inspect.isclass(value := getattr(translators_module, name))
+        and issubclass(value, BaseTranslator)
+        and value is not BaseTranslator
+    }
+    missing = sorted(
+        cls.__name__
+        for cls in public_translators
+        if cls.translate is BaseTranslator.translate
+    )
+    assert missing == []
 
 
 def test_base_translator_allows_internal_execution_only_subclasses() -> None:
