@@ -163,6 +163,72 @@ class SpacyTranslator(BaseTranslator):
         self.spacy_batch_size = int(spacy_batch_size)
         self.disable = normalized_disable
 
+    def translate(
+        self,
+        texts: str | Sequence[str] | pd.Series,
+    ) -> dict[str, pd.DataFrame]:
+        """Run spaCy over ordinary text and return normalized sentence/token tables."""
+        if isinstance(texts, pd.Series):
+            values = texts.fillna("").astype(str).tolist()
+        elif isinstance(texts, str):
+            values = [texts]
+        elif isinstance(texts, Sequence) and not isinstance(texts, (str, bytes)):
+            values = ["" if value is None else str(value) for value in texts]
+        else:
+            raise TypeError(
+                "SpacyTranslator.translate(...) expects a string, sequence of strings, "
+                "or pandas Series."
+            )
+
+        nlp = _load_spacy_pipeline(self.model, self.disable)
+        docs = nlp.pipe(values, batch_size=self.spacy_batch_size, n_process=1)
+        sentence_rows: list[dict[str, Any]] = []
+        token_rows: list[dict[str, Any]] = []
+        doc_iterator = iter(docs)
+        for source_position, source_text in enumerate(values):
+            try:
+                doc = next(doc_iterator)
+            except StopIteration as exc:
+                raise ArtifactError("spaCy Language.pipe returned fewer Docs than source texts.") from exc
+            if doc.text != source_text:
+                raise ArtifactError(
+                    "spaCy changed source text during tokenization; character offsets "
+                    "must refer to the original source string."
+                )
+            sentence_keys: list[dict[str, Any]] = []
+            sentence_data: list[dict[str, Any]] = []
+            token_keys: list[dict[str, Any]] = []
+            token_data: list[dict[str, Any]] = []
+            _append_doc_rows(
+                source_key={"source_position": source_position},
+                doc=doc,
+                sentence_key=self.sentence_key,
+                token_key=self.token_key,
+                sentence_keys=sentence_keys,
+                sentence_data=sentence_data,
+                token_keys=token_keys,
+                token_data=token_data,
+            )
+            for key, data in zip(sentence_keys, sentence_data, strict=True):
+                sentence_rows.append({**key, **data})
+            for key, data in zip(token_keys, token_data, strict=True):
+                token_rows.append({**key, **data})
+        sentinel = object()
+        if next(doc_iterator, sentinel) is not sentinel:
+            raise ArtifactError("spaCy Language.pipe returned more Docs than source texts.")
+        return {
+            SENTENCES_LABEL: pd.DataFrame.from_records(
+                sentence_rows,
+                columns=["source_position", self.sentence_key, *SENTENCE_DATA_COLUMNS],
+            ),
+            TOKENS_LABEL: pd.DataFrame.from_records(
+                token_rows,
+                columns=[
+                    "source_position", self.sentence_key, self.token_key, *TOKEN_DATA_COLUMNS
+                ],
+            ),
+        }
+
     def output_specs(
         self,
         *,
@@ -247,81 +313,27 @@ class SpacyTranslator(BaseTranslator):
         packet = _single_input(inputs)
         frame = _require_frame(packet.data)
         key_columns = [str(name) for name in packet.primary_key]
-        missing = [
-            name
-            for name in [*key_columns, self.text_field]
-            if name not in frame.columns
-        ]
+        missing = [name for name in [*key_columns, self.text_field] if name not in frame.columns]
         if missing:
-            raise ArtifactError(
-                f"SpacyTranslator source batch is missing columns {missing}."
-            )
+            raise ArtifactError(f"SpacyTranslator source batch is missing columns {missing}.")
 
-        key_records = frame.loc[:, key_columns].to_dict(orient="records")
-        texts = frame[self.text_field].fillna("").astype(str).tolist()
-        nlp = _load_spacy_pipeline(self.model, self.disable)
-
-        # Explicitly keep spaCy multiprocessing inside each TeAL/Dask worker off.
-        # TeAL already owns process-level concurrency and resumable work units.
-        docs = nlp.pipe(
-            texts,
-            batch_size=self.spacy_batch_size,
-            n_process=1,
-        )
-
-        sentence_keys: list[dict[str, Any]] = []
-        sentence_data: list[dict[str, Any]] = []
-        token_keys: list[dict[str, Any]] = []
-        token_data: list[dict[str, Any]] = []
-
-        doc_iterator = iter(docs)
-        for source_key, source_text in zip(key_records, texts, strict=True):
-            try:
-                doc = next(doc_iterator)
-            except StopIteration as exc:
-                raise ArtifactError(
-                    "spaCy Language.pipe returned fewer Docs than source texts."
-                ) from exc
-            if doc.text != source_text:
-                raise ArtifactError(
-                    "spaCy changed source text during tokenization; TeAL requires "
-                    "Doc.text to preserve the exact source string for character offsets."
-                )
-            _append_doc_rows(
-                source_key=source_key,
-                doc=doc,
-                sentence_key=self.sentence_key,
-                token_key=self.token_key,
-                sentence_keys=sentence_keys,
-                sentence_data=sentence_data,
-                token_keys=token_keys,
-                token_data=token_data,
-            )
-
-        sentinel = object()
-        if next(doc_iterator, sentinel) is not sentinel:
-            raise ArtifactError(
-                "spaCy Language.pipe returned more Docs than source texts."
-            )
-
-        sentence_payload = _table_payload(
-            sentence_keys,
-            sentence_data,
-            key_columns=[*key_columns, self.sentence_key],
-            data_columns=SENTENCE_DATA_COLUMNS,
-        )
-        token_payload = _table_payload(
-            token_keys,
-            token_data,
-            key_columns=[*key_columns, self.sentence_key, self.token_key],
-            data_columns=TOKEN_DATA_COLUMNS,
-        )
-
+        translated = self.translate(frame[self.text_field])
+        sentence_frame = translated[SENTENCES_LABEL]
+        token_frame = translated[TOKENS_LABEL]
         outputs: dict[str, Mapping[str, Any]] = {}
-        if sentence_payload is not None:
-            outputs[SENTENCES_LABEL] = sentence_payload
-        if token_payload is not None:
-            outputs[TOKENS_LABEL] = token_payload
+        if not sentence_frame.empty:
+            positions = sentence_frame["source_position"].to_numpy(dtype="int64")
+            keys = frame.iloc[positions].loc[:, key_columns].reset_index(drop=True)
+            keys[self.sentence_key] = sentence_frame[self.sentence_key].to_numpy()
+            data = sentence_frame.loc[:, list(SENTENCE_DATA_COLUMNS)].reset_index(drop=True)
+            outputs[SENTENCES_LABEL] = {"keys": keys, "data": data}
+        if not token_frame.empty:
+            positions = token_frame["source_position"].to_numpy(dtype="int64")
+            keys = frame.iloc[positions].loc[:, key_columns].reset_index(drop=True)
+            keys[self.sentence_key] = token_frame[self.sentence_key].to_numpy()
+            keys[self.token_key] = token_frame[self.token_key].to_numpy()
+            data = token_frame.loc[:, list(TOKEN_DATA_COLUMNS)].reset_index(drop=True)
+            outputs[TOKENS_LABEL] = {"keys": keys, "data": data}
         return BatchResult(outputs=outputs)
 
     def handle_batch_result(

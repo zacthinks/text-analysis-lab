@@ -67,6 +67,71 @@ class MatrixTranspose(BaseTranslator):
         self._source_feature_metadata: pd.DataFrame | None = None
         self._source_has_row_names: bool = False
 
+    def translate(
+        self,
+        matrix: Any,
+        *,
+        features: Sequence[str],
+        row_labels: Sequence[str] | None = None,
+        feature_metadata: pd.DataFrame | None = None,
+    ) -> dict[str, Any]:
+        """Transpose an ordinary matrix while carrying explicit axis labels."""
+        shape = getattr(matrix, "shape", None)
+        if shape is None or len(shape) != 2:
+            raise ValueError(
+                "MatrixTranspose.translate(...) requires a two-dimensional matrix."
+            )
+        feature_names = [str(value) for value in features]
+        if len(feature_names) != int(shape[1]):
+            raise ArtifactError(
+                "MatrixTranspose features must match the matrix feature width: "
+                f"{len(feature_names)} != {int(shape[1])}."
+            )
+
+        if row_labels is None:
+            columns = [str(index) for index in range(int(shape[0]))]
+        else:
+            columns = [str(value) for value in row_labels]
+            if len(columns) != int(shape[0]):
+                raise ArtifactError(
+                    "MatrixTranspose row_labels must match the matrix row count: "
+                    f"{len(columns)} != {int(shape[0])}."
+                )
+            if len(set(columns)) != len(columns):
+                raise ArtifactError(
+                    "MatrixTranspose requires unique row_labels after string conversion."
+                )
+
+        try:
+            from scipy import sparse
+        except ImportError:  # pragma: no cover - scipy is a package dependency
+            sparse = None
+        if sparse is not None and sparse.issparse(matrix):
+            values = matrix.transpose().tocsr()
+        else:
+            values = np.asarray(matrix).T.copy()
+
+        result: dict[str, Any] = {
+            "values": values,
+            "columns": columns,
+            "row_names": feature_names,
+            "row_name": self.row_name,
+        }
+        if feature_metadata is not None:
+            if not isinstance(feature_metadata, pd.DataFrame):
+                raise TypeError(
+                    "MatrixTranspose feature_metadata must be a pandas DataFrame."
+                )
+            if len(feature_metadata) != len(feature_names):
+                raise ValueError(
+                    "MatrixTranspose feature_metadata rows must match the feature "
+                    f"width: {len(feature_metadata)} != {len(feature_names)}."
+                )
+            metadata = _transpose_feature_metadata(feature_metadata)
+            if len(metadata.columns) > 0:
+                result["metadata"] = metadata
+        return result
+
     def output_specs(
         self,
         *,
@@ -169,34 +234,24 @@ class MatrixTranspose(BaseTranslator):
             )
 
         row_labels = self._source_row_labels(packet, info, key_columns)
-        if len(row_labels) != int(matrix.shape[0]):
-            raise ArtifactError(
-                "MatrixTranspose source row-label count does not match matrix rows."
-            )
-        if len(set(row_labels)) != len(row_labels):
-            raise ArtifactError(
-                "MatrixTranspose requires unique source-row labels after string conversion."
-            )
-
-        if self._source_type == "sparse_matrix":
-            values = matrix.transpose().tocsr()
-        else:
-            values = np.asarray(matrix).T.copy()
-
+        translated = self.translate(
+            matrix,
+            features=source_features,
+            row_labels=row_labels,
+            feature_metadata=feature_metadata,
+        )
         keys = pd.DataFrame(
             {self.key_name: np.arange(len(source_features), dtype=np.int64)}
         )
-        output: dict[str, Any] = {
-            "keys": keys,
-            "data": {
-                "values": values,
-                "columns": row_labels,
-                "row_names": list(source_features),
-                "row_name": self.row_name,
-            },
+        data = {
+            "values": translated["values"],
+            "columns": translated["columns"],
+            "row_names": translated["row_names"],
+            "row_name": translated["row_name"],
         }
-        if len(feature_metadata.columns) > 0:
-            output["metadata"] = feature_metadata.copy()
+        output: dict[str, Any] = {"keys": keys, "data": data}
+        if "metadata" in translated:
+            output["metadata"] = translated["metadata"]
 
         return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: output})
 

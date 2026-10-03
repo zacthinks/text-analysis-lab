@@ -321,5 +321,5 @@ def test_count_vectorizer_porter_stemming_is_persisted_and_applied() -> None:
         translator.to_json_state(include_vocabulary=True)
     )
     assert restored.stemmer == "porter"
-    transformed = restored.transform_external_texts(["runs cats"])
+    transformed = restored.translate(["runs cats"])
     assert transformed.shape == (1, len(restored._feature_names()))

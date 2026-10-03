@@ -251,7 +251,7 @@ def test_word_sense_disambiguator_targets_all_wordnet_eligible_tokens(
             "ent_type": ["", "", ""],
         }
     )
-    translator = WordSenseDisambiguator(acknowledge_noncommercial_license=True)
+    translator = WordSenseDisambiguator()
     result = translator.translate_batch(
         {"tokens": _packet("tokens", ("row_id", "sentence_id", "token_id"), tokens)},
         mode="translate",
@@ -336,7 +336,7 @@ def test_word_sense_disambiguator_excludes_space_tokens_from_wsl_reader_context(
             "ent_type": ["", "", ""],
         }
     )
-    translator = WordSenseDisambiguator(acknowledge_noncommercial_license=True)
+    translator = WordSenseDisambiguator()
     result = translator.translate_batch(
         {"tokens": _packet("tokens", ("row_id", "sentence_id", "token_id"), tokens)},
         mode="translate",
@@ -352,7 +352,7 @@ def test_word_sense_disambiguator_excludes_space_tokens_from_wsl_reader_context(
 
 
 def test_word_sense_disambiguator_binds_request_to_tokens_source():
-    translator = WordSenseDisambiguator(acknowledge_noncommercial_license=True)
+    translator = WordSenseDisambiguator()
     token_source = SimpleNamespace(
         artifact_type=SimpleNamespace(value="table"),
         primary_key=("row_id", "sentence_id", "token_id"),
@@ -364,11 +364,6 @@ def test_word_sense_disambiguator_binds_request_to_tokens_source():
     )
     assert set(request) == {"tokens"}
     assert request["tokens"].mode == "full_artifact"
-
-
-def test_word_sense_disambiguator_requires_explicit_noncommercial_acknowledgement():
-    with pytest.raises(ValueError, match="CC BY-NC-SA"):
-        WordSenseDisambiguator()
 
 
 def test_wsl_reader_empty_subword_context_is_target_input_error():

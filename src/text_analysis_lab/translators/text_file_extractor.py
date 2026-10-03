@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import codecs
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -93,6 +93,25 @@ class TextFileExtractor(BaseTranslator):
         self.text_field = text_field
         self.encoding = encoding
         self.errors = errors
+
+    def translate(
+        self,
+        paths: str | Path | None | Sequence[str | Path | None] | pd.Series,
+    ) -> pd.DataFrame:
+        """Extract ordinary filesystem paths into a row-aligned DataFrame."""
+        if isinstance(paths, pd.Series):
+            values = paths.tolist()
+        elif isinstance(paths, (str, Path)) or paths is None:
+            values = [paths]
+        elif isinstance(paths, Sequence) and not isinstance(paths, (str, bytes)):
+            values = list(paths)
+        else:
+            raise TypeError(
+                "TextFileExtractor.translate(...) expects a path, None, a "
+                "sequence of paths, or a pandas Series."
+            )
+        data = pd.DataFrame([self._extract_row(value) for value in values])
+        return _coerce_extraction_frame(data, text_field=self.text_field)
 
     def output_specs(
         self,
@@ -186,22 +205,8 @@ class TextFileExtractor(BaseTranslator):
                 f"TextFileExtractor source batch is missing columns {missing}."
             )
 
-        rows = [self._extract_row(value) for value in frame[self.path_field].tolist()]
         keys = frame.loc[:, key_columns].reset_index(drop=True)
-        data = pd.DataFrame(rows)
-        if not data.empty:
-            for field in (
-                self.text_field,
-                _EXTRACTION_STATUS_FIELD,
-                _EXTRACTION_ERROR_FIELD,
-            ):
-                data[field] = pd.array(data[field], dtype="string")
-            # Not applicable to TXT, but keep a stable nullable integer physical
-            # type so the schema can be unioned with PdfTextExtractor output.
-            data[_PAGE_COUNT_FIELD] = pd.array(data[_PAGE_COUNT_FIELD], dtype="Int64")
-            data[_PAGES_EXTRACTED_FIELD] = pd.array(
-                data[_PAGES_EXTRACTED_FIELD], dtype="Int64"
-            )
+        data = self.translate(frame[self.path_field])
         return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: {"keys": keys, "data": data}})
 
     def _extract_row(self, path_value: Any) -> dict[str, Any]:
@@ -306,6 +311,23 @@ class TextFileExtractor(BaseTranslator):
         obj = cls.from_json_state(cast(Mapping[str, Any], state))
         obj.operator_id = operator_id
         return obj
+
+
+def _coerce_extraction_frame(data: pd.DataFrame, *, text_field: str) -> pd.DataFrame:
+    if data.empty:
+        return data
+    data = data.copy()
+    for field in (
+        text_field,
+        _EXTRACTION_STATUS_FIELD,
+        _EXTRACTION_ERROR_FIELD,
+    ):
+        data[field] = pd.array(data[field], dtype="string")
+    data[_PAGE_COUNT_FIELD] = pd.array(data[_PAGE_COUNT_FIELD], dtype="Int64")
+    data[_PAGES_EXTRACTED_FIELD] = pd.array(
+        data[_PAGES_EXTRACTED_FIELD], dtype="Int64"
+    )
+    return data
 
 
 def _normalize_newlines(text: str) -> str:

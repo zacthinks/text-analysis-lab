@@ -89,12 +89,6 @@ from text_analysis_lab.core.split import split as _split
 from text_analysis_lab.core.storage import ArtifactStorage, ProjectStorage
 from text_analysis_lab.core.subset import FunctionSpec
 from text_analysis_lab.core.subset import subset as _subset
-from text_analysis_lab.core.transform_like import (
-    can_transform_texts_like as _can_transform_texts_like,
-)
-from text_analysis_lab.core.transform_like import (
-    transform_texts_like as _transform_texts_like,
-)
 from text_analysis_lab.core.translate import (
     resume_translate as _resume_translate,
 )
@@ -1407,25 +1401,6 @@ class Project:
         )
         finalize_alias_plan(self, plan, {output_label: result})
         return result
-
-    def can_transform_texts_like(
-        self,
-        artifact: BaseArtifact | str,
-        *,
-        query: bool = False,
-    ) -> bool:
-        """Return whether a frozen matrix lineage can replay new text in memory."""
-        return _can_transform_texts_like(self, artifact, query=query)
-
-    def transform_texts_like(
-        self,
-        artifact: BaseArtifact | str,
-        texts: Sequence[str],
-        *,
-        query: bool = False,
-    ) -> Any:
-        """Replay an artifact's frozen fitted representation pipeline on new text."""
-        return _transform_texts_like(self, artifact, texts, query=query)
 
     def binary_code(
         self,

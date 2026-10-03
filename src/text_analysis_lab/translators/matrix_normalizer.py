@@ -65,6 +65,24 @@ class MatrixNormalizer(BaseTranslator):
             return False
         return route == "sequential" or (self.axis == "rows" and route == "parallel")
 
+    def translate(self, matrix: Any) -> Any:
+        """Normalize an ordinary dense or sparse matrix in memory."""
+        shape = getattr(matrix, "shape", None)
+        if shape is None or len(shape) != 2:
+            raise ValueError(
+                "MatrixNormalizer.translate(...) requires a two-dimensional matrix."
+            )
+        values = sklearn_normalize(
+            matrix, norm=self.norm, axis=1 if self.axis == "rows" else 0, copy=True
+        )
+        if sparse.issparse(matrix):
+            return (
+                values.tocsr()
+                if sparse.issparse(values)
+                else sparse.csr_matrix(values)
+            )
+        return values.toarray() if sparse.issparse(values) else np.asarray(values)
+
     def output_specs(
         self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest
     ) -> OutputSpec:
@@ -133,9 +151,7 @@ class MatrixNormalizer(BaseTranslator):
         info, matrix, key_columns = native_matrix_packet(
             packet, name="MatrixNormalizer"
         )
-        normalized = sklearn_normalize(
-            matrix, norm=self.norm, axis=1 if self.axis == "rows" else 0, copy=True
-        )
+        normalized = self.translate(matrix)
         if self._source_type == "sparse_matrix":
             values = (
                 normalized.tocsr()
@@ -156,31 +172,6 @@ class MatrixNormalizer(BaseTranslator):
                 }
             }
         )
-
-    def transform_external_matrix(
-        self,
-        matrix: Any,
-        *,
-        query: bool = False,
-        params: Mapping[str, Any] | None = None,
-    ):
-        """Normalize new rows when this operator was configured row-wise."""
-        _ = query, params
-        if self.axis != "rows":
-            raise OperatorError(
-                "Column-wise MatrixNormalizer cannot replay a single new document: "
-                "its normalization depends on the fitted corpus rows."
-            )
-        values = sklearn_normalize(matrix, norm=self.norm, axis=1, copy=True)
-        if sparse.issparse(matrix):
-            return (
-                values.tocsr() if sparse.issparse(values) else sparse.csr_matrix(values)
-            )
-        return values.toarray() if sparse.issparse(values) else np.asarray(values)
-
-    def supports_external_transform(self, *, query: bool, input_kind: str) -> bool:
-        _ = query
-        return input_kind == "matrix" and self.axis == "rows"
 
     def handle_batch_result(
         self,

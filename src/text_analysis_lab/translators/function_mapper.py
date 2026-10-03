@@ -71,6 +71,48 @@ class FunctionMapper(BaseTranslator):
         self._metadata_columns: tuple[str, ...] | None = None
         self._metadata_mode: MetadataMode = "none"
 
+    def translate(
+        self,
+        packet: Mapping[str, pd.DataFrame],
+    ) -> dict[str, pd.DataFrame]:
+        """Apply the mapper callable to ordinary data/metadata DataFrames."""
+        if not isinstance(packet, Mapping):
+            raise TypeError(
+                "FunctionMapper.translate(...) requires a mapping containing "
+                "'data' and/or 'metadata' DataFrames."
+            )
+        prepared: dict[str, pd.DataFrame] = {}
+        expected_rows: int | None = None
+        for component in ("data", "metadata"):
+            value = packet.get(component)
+            if value is None:
+                continue
+            if not isinstance(value, pd.DataFrame):
+                raise TypeError(
+                    f"FunctionMapper input {component!r} must be a pandas DataFrame."
+                )
+            frame = value.copy().reset_index(drop=True)
+            if expected_rows is None:
+                expected_rows = len(frame)
+            elif len(frame) != expected_rows:
+                raise ValueError(
+                    "FunctionMapper data and metadata inputs must have the same "
+                    "number of rows."
+                )
+            prepared[component] = frame
+        if expected_rows is None:
+            raise ValueError(
+                "FunctionMapper.translate(...) requires at least one data or "
+                "metadata DataFrame."
+            )
+
+        raw = self._require_function()(prepared)
+        return _normalize_mapper_packet(
+            raw,
+            expected_rows=expected_rows,
+            reserved_columns=(),
+        )
+
     @property
     def supports_parallel_translate(self) -> bool:
         return True
@@ -214,12 +256,19 @@ class FunctionMapper(BaseTranslator):
             data_columns=self._data_columns or (),
             metadata_columns=self._metadata_columns or (),
         )
-        raw = self._require_function()(callable_packet)
-        payload = _normalize_mapper_packet(
-            raw,
-            expected_rows=len(keys),
-            primary_key=source_batch.primary_key,
+        payload = self.translate(callable_packet)
+        reserved = (
+            *source_batch.primary_key,
+            "_position",
+            "_batch",
+            "_row_offset",
         )
+        for component, frame in payload.items():
+            _validate_output_columns(
+                frame,
+                reserved_columns=reserved,
+                component=component,
+            )
         return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: {"keys": keys, **payload}})
 
     def handle_batch_result(
@@ -530,7 +579,7 @@ def _normalize_mapper_packet(
     value: Any,
     *,
     expected_rows: int,
-    primary_key: Sequence[str],
+    reserved_columns: Sequence[str],
 ) -> dict[str, pd.DataFrame]:
     if not isinstance(value, Mapping):
         raise ArtifactError(
@@ -560,7 +609,11 @@ def _normalize_mapper_packet(
                 f"FunctionMapper {component!r} output must contain at least one column."
             )
         frame.columns = [str(column) for column in frame.columns]
-        _validate_output_columns(frame, primary_key=primary_key, component=component)
+        _validate_output_columns(
+            frame,
+            reserved_columns=reserved_columns,
+            component=component,
+        )
         out[component] = frame
     if not out:
         raise ArtifactError(
@@ -572,7 +625,7 @@ def _normalize_mapper_packet(
 def _validate_output_columns(
     frame: pd.DataFrame,
     *,
-    primary_key: Sequence[str],
+    reserved_columns: Sequence[str],
     component: str,
 ) -> None:
     columns = [str(column) for column in frame.columns]
@@ -584,7 +637,7 @@ def _validate_output_columns(
         raise ArtifactError(
             f"FunctionMapper {component} output column names must be unique."
         )
-    reserved = set(primary_key).union({"_position", "_batch", "_row_offset"})
+    reserved = {str(value) for value in reserved_columns}
     overlap = sorted(set(columns).intersection(reserved))
     if overlap:
         raise ArtifactError(

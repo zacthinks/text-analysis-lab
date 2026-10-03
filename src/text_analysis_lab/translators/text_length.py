@@ -135,6 +135,56 @@ class TextLength(BaseTranslator):
             f"{field}_{unit}" for field, units in self.lengths.items() for unit in units
         )
 
+    def translate(
+        self,
+        data: str | None | Mapping[str, Any] | pd.DataFrame,
+    ) -> dict[str, Any] | pd.DataFrame:
+        """Measure ordinary text records without creating TeAL artifacts."""
+
+        return_record = not isinstance(data, pd.DataFrame)
+        if isinstance(data, (str, type(None))):
+            if len(self.lengths) != 1:
+                raise ValueError(
+                    "Scalar TextLength translation requires exactly one configured text field."
+                )
+            field = next(iter(self.lengths))
+            frame = pd.DataFrame({field: [data]})
+        elif isinstance(data, Mapping):
+            frame = pd.DataFrame([dict(data)])
+        elif isinstance(data, pd.DataFrame):
+            frame = data
+        else:
+            raise TypeError(
+                "TextLength.translate(...) expects text, a mapping record, or a pandas DataFrame."
+            )
+
+        measured = self._measure_frame(frame)
+        if return_record:
+            return measured.iloc[0].to_dict()
+        return measured
+
+    def _measure_frame(self, frame: pd.DataFrame) -> pd.DataFrame:
+        missing = [field for field in self.lengths if field not in frame.columns]
+        if missing:
+            raise ValueError(f"TextLength input is missing field(s) {missing}.")
+
+        metadata: dict[str, Any] = {}
+        for field, units in self.lengths.items():
+            source = frame[field].fillna("").astype("string")
+            for unit in units:
+                base_unit = unit.removeprefix("log_")
+                if base_unit == "characters":
+                    values = source.str.len()
+                else:
+                    values = source.str.split().str.len()
+                integers = values.astype("int64").to_numpy()
+                metadata[f"{field}_{unit}"] = (
+                    np.log1p(integers.astype("float64"))
+                    if unit.startswith("log_")
+                    else integers
+                )
+        return pd.DataFrame(metadata, index=frame.index)
+
     def translate_batch(
         self,
         inputs: Mapping[str, InputBatch],
@@ -156,27 +206,13 @@ class TextLength(BaseTranslator):
                 f"TextLength source batch is missing columns {missing}."
             )
 
-        metadata: dict[str, Any] = {}
-        for field, units in self.lengths.items():
-            source = frame[field].fillna("").astype("string")
-            for unit in units:
-                base_unit = unit.removeprefix("log_")
-                if base_unit == "characters":
-                    values = source.str.len()
-                else:
-                    values = source.str.split().str.len()
-                integers = values.astype("int64").to_numpy()
-                metadata[f"{field}_{unit}"] = (
-                    np.log1p(integers.astype("float64"))
-                    if unit.startswith("log_")
-                    else integers
-                )
+        metadata = self._measure_frame(frame).reset_index(drop=True)
 
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
                     "keys": frame.loc[:, key_columns].reset_index(drop=True),
-                    "metadata": pd.DataFrame(metadata),
+                    "metadata": metadata,
                 }
             }
         )

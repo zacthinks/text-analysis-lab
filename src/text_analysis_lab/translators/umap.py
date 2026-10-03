@@ -186,6 +186,20 @@ class UMAP(BaseTranslator):
         if self.reuse == "recompute":
             self._recompute_from_project(project)
 
+    def translate(self, matrix: Any) -> np.ndarray:
+        """Apply an available fitted UMAP estimator to an in-memory matrix."""
+        shape = getattr(matrix, "shape", None)
+        if shape is None or len(shape) != 2:
+            raise ValueError("UMAP.translate(...) requires a two-dimensional matrix.")
+        estimator = self._require_estimator()
+        expected_width = len(self.source_features_) if self.source_features_ is not None else None
+        if expected_width is not None and int(shape[1]) != expected_width:
+            raise ValueError(
+                "UMAP.translate(...) requires the fitted feature width "
+                f"{expected_width}; got {int(shape[1])}."
+            )
+        return np.asarray(estimator.transform(matrix), dtype=float)
+
     def output_specs(
         self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest
     ) -> OutputSpec:
@@ -265,7 +279,7 @@ class UMAP(BaseTranslator):
             if self.reuse == "stored":
                 self._estimator = estimator
         elif mode == "translate":
-            values = self._require_estimator().transform(matrix)
+            values = self.translate(matrix)
         else:
             raise OperatorError(f"Unsupported UMAP mode {mode!r}.")
         return BatchResult(

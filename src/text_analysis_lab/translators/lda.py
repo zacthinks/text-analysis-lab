@@ -174,6 +174,28 @@ class LDA(BaseTranslator):
             include_position=False,
         )
 
+    def translate(self, matrix: Any) -> np.ndarray:
+        """Infer topic mixtures for ordinary rows using the fitted model."""
+
+        estimator = self._require_estimator()
+        shape = getattr(matrix, "shape", None)
+        if shape is None or len(shape) != 2:
+            raise ValueError(
+                f"LDA standalone translation requires a two-dimensional matrix; got shape={shape!r}."
+            )
+        expected_width = (
+            len(self.source_features_)
+            if self.source_features_ is not None
+            else getattr(estimator, "n_features_in_", None)
+        )
+        if expected_width is not None and int(shape[1]) != int(expected_width):
+            raise ValueError(
+                "LDA standalone translation requires the fitted feature width "
+                f"{int(expected_width)}; got shape={shape!r}."
+            )
+        require_nonnegative(matrix, name="LDA", integer=True)
+        return np.asarray(estimator.transform(matrix), dtype=float)
+
     def translate_batch(
         self,
         inputs: Mapping[str, InputBatch],
@@ -184,9 +206,9 @@ class LDA(BaseTranslator):
         _ = request
         packet = single_input(inputs, name="LDA")
         info, matrix, key_columns = native_matrix_packet(packet, name="LDA")
-        require_nonnegative(matrix, name="LDA", integer=True)
         outputs: dict[str, Any] = {}
         if mode == "fit_translate":
+            require_nonnegative(matrix, name="LDA", integer=True)
             if self.is_fitted:
                 raise OperatorError("fit_translate received an already fitted LDA.")
             estimator = self._make_estimator()
@@ -202,7 +224,7 @@ class LDA(BaseTranslator):
                 },
             }
         elif mode == "translate":
-            doc_topics = self._require_estimator().transform(matrix)
+            doc_topics = self.translate(matrix)
         else:
             raise OperatorError(f"Unsupported LDA mode {mode!r}.")
         outputs[DEFAULT_OUTPUT_LABEL] = {

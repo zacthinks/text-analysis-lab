@@ -172,6 +172,21 @@ class CountVectorizer(BaseTranslator):
             include_position=False,
         )
 
+    def translate(
+        self,
+        texts: str | None | Sequence[str | None] | pd.Series,
+    ) -> Any:
+        """Vectorize ordinary in-memory text with the fitted vocabulary."""
+
+        if isinstance(texts, (str, type(None))):
+            raw_values = [texts]
+        elif isinstance(texts, pd.Series):
+            raw_values = texts.tolist()
+        else:
+            raw_values = list(texts)
+        values = ["" if pd.isna(value) else str(value) for value in raw_values]
+        return self._require_vectorizer().transform(values).tocsr()
+
     def translate_batch(
         self,
         inputs: Mapping[str, InputBatch],
@@ -205,8 +220,7 @@ class CountVectorizer(BaseTranslator):
             matrix = self._vectorizer.fit_transform(texts)
             self.vocabulary_ = _normalize_vocabulary(self._vectorizer.vocabulary_)
         elif mode == "translate":
-            vectorizer = self._require_vectorizer()
-            matrix = vectorizer.transform(texts)
+            matrix = self.translate(texts)
         else:  # pragma: no cover - runner validates mode
             raise OperatorError(f"Unsupported CountVectorizer mode {mode!r}.")
 
@@ -219,22 +233,6 @@ class CountVectorizer(BaseTranslator):
                 }
             }
         )
-
-    def transform_external_texts(
-        self,
-        texts: Sequence[str],
-        *,
-        query: bool = False,
-        params: Mapping[str, Any] | None = None,
-    ):
-        """Vectorize new texts with the frozen vocabulary without writing artifacts."""
-        _ = query, params
-        values = ["" if value is None else str(value) for value in texts]
-        return self._require_vectorizer().transform(values)
-
-    def supports_external_transform(self, *, query: bool, input_kind: str) -> bool:
-        _ = query
-        return input_kind == "texts" and self.is_fitted
 
     def handle_batch_result(
         self,

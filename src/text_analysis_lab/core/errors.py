@@ -15,6 +15,10 @@ class OperatorNotFittedError(OperatorError):
     """Raised when an operator that requires fitting is used before fitting."""
 
 
+class StandaloneTranslationNotSupportedError(OperatorError):
+    """Raised when a translator has no standalone in-memory translation contract."""
+
+
 class FrozenOperatorError(OperatorError):
     """Raised when attempting to mutate a committed/frozen operator."""
 

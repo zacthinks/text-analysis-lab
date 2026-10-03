@@ -101,6 +101,17 @@ class FeatureTrimmer(BaseTranslator):
             return route == "sequential"
         return mode == "translate" and route in {"sequential", "parallel"}
 
+    def translate(self, matrix: Any) -> Any:
+        """Apply the fitted positional feature mask to an in-memory matrix."""
+        source_width = self._require_source_width()
+        shape = getattr(matrix, "shape", None)
+        if shape is None or len(shape) != 2 or int(shape[1]) != source_width:
+            raise ValueError(
+                "FeatureTrimmer.translate(...) requires the fitted source width "
+                f"{source_width}; got shape={shape!r}."
+            )
+        return slice_matrix_features(matrix, self._require_kept_indices())
+
     def output_specs(
         self,
         *,
@@ -229,28 +240,6 @@ class FeatureTrimmer(BaseTranslator):
                 }
             }
         )
-
-    def transform_external_matrix(
-        self,
-        matrix: Any,
-        *,
-        query: bool = False,
-        params: Mapping[str, Any] | None = None,
-    ) -> Any:
-        """Apply the exact frozen positional feature subset to new matrix rows."""
-        _ = query, params
-        source_width = self._require_source_width()
-        shape = getattr(matrix, "shape", None)
-        if shape is None or len(shape) != 2 or int(shape[1]) != source_width:
-            raise OperatorError(
-                "FeatureTrimmer replay requires the fitted source width "
-                f"{source_width}; got shape={shape!r}."
-            )
-        return slice_matrix_features(matrix, self._require_kept_indices())
-
-    def supports_external_transform(self, *, query: bool, input_kind: str) -> bool:
-        _ = query
-        return input_kind == "matrix" and self.is_fitted
 
     def handle_batch_result(
         self,

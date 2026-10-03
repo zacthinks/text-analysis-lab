@@ -139,7 +139,9 @@ def test_provider_does_not_mislabel_catalog_threading_failures_as_missing():
         )
 
 
-def test_provider_delegates_new_text_and_query_to_frozen_teal_geometry():
+def test_provider_delegates_new_text_and_query_to_frozen_teal_geometry(monkeypatch):
+
+    import text_analysis_lab.integrations.geco as bridge
 
     matrix = sparse.eye(3, format="csr")
     artifact = _FakeArtifact(
@@ -148,7 +150,8 @@ def test_provider_delegates_new_text_and_query_to_frozen_teal_geometry():
     project = _FakeProject([artifact])
     calls = []
 
-    def transform_texts_like(target, texts, *, query=False):
+    def replay_texts_like(project_arg, target, texts, *, query=False):
+        assert project_arg is project
         calls.append((target.artifact_id, list(texts), query))
         if query:
             return sparse.csr_matrix([[1.0, 2.0, 3.0]])
@@ -156,7 +159,7 @@ def test_provider_delegates_new_text_and_query_to_frozen_teal_geometry():
             np.arange(len(texts) * 3, dtype=float).reshape(len(texts), 3)
         )
 
-    project.transform_texts_like = transform_texts_like
+    monkeypatch.setattr(bridge, "_replay_texts_like", replay_texts_like)
     provider = TeALGeCoProvider(project)
     query = provider.transform_query(
         {"artifact_id": "art_geometry"}, "room temperature"

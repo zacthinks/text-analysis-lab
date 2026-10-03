@@ -6,9 +6,9 @@ from pathlib import Path
 import numpy as np
 from scipy import sparse
 
-from text_analysis_lab.core.transform_like import (
-    can_transform_texts_like,
-    transform_texts_like,
+from text_analysis_lab.integrations._representation_replay import (
+    _can_replay_texts_like,
+    _replay_texts_like,
 )
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.translators import (
@@ -119,9 +119,9 @@ def test_transform_texts_like_replays_frozen_count_tfidf_pipeline(
     expected = tfidf._require_transformer().transform(
         count._require_vectorizer().transform(["alpha gamma"])
     )
-    actual = transform_texts_like(project, tfidf_matrix, ["alpha gamma"], query=True)
+    actual = _replay_texts_like(project, tfidf_matrix, ["alpha gamma"], query=True)
     np.testing.assert_allclose(actual.toarray(), expected.toarray())
-    assert can_transform_texts_like(project, tfidf_matrix, query=True)
+    assert _can_replay_texts_like(project, tfidf_matrix, query=True)
 
 
 def test_column_normalization_is_not_replayable_for_single_new_text(
@@ -139,7 +139,7 @@ def test_column_normalization_is_not_replayable_for_single_new_text(
         project, "norm", ArtifactType.SPARSE_MATRIX, ["alpha", "beta"]
     )
     _record(project, "normop", count_matrix, norm_matrix, normalizer)
-    assert not can_transform_texts_like(project, norm_matrix)
+    assert not _can_replay_texts_like(project, norm_matrix)
 
 
 def test_transform_texts_like_replays_frozen_feature_trim_mask(tmp_path: Path) -> None:
@@ -160,7 +160,7 @@ def test_transform_texts_like_replays_frozen_feature_trim_mask(tmp_path: Path) -
     )
     _record(project, "trimop", count_matrix, trimmed, trim)
 
-    actual = transform_texts_like(project, trimmed, ["alpha beta gamma"], query=True)
+    actual = _replay_texts_like(project, trimmed, ["alpha beta gamma"], query=True)
     assert actual.shape == (1, 2)
     np.testing.assert_array_equal(actual.toarray(), [[1, 1]])
-    assert can_transform_texts_like(project, trimmed, query=True)
+    assert _can_replay_texts_like(project, trimmed, query=True)

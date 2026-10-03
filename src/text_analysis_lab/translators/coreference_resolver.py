@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
@@ -97,6 +97,82 @@ class CoreferenceResolver(BaseTranslator):
         self.max_tokens_in_batch = int(max_tokens_in_batch)
         self.show_progress = bool(show_progress)
 
+
+    def translate(
+        self,
+        documents: pd.DataFrame,
+        tokens: pd.DataFrame,
+        *,
+        document_keys: Sequence[str],
+    ) -> dict[str, pd.DataFrame]:
+        """Resolve coreference from ordinary document and token tables."""
+        if not isinstance(documents, pd.DataFrame) or not isinstance(tokens, pd.DataFrame):
+            raise TypeError(
+                "CoreferenceResolver.translate(...) requires pandas DataFrames "
+                "for documents and tokens."
+            )
+        doc_keys = [str(value) for value in document_keys]
+        if not doc_keys:
+            raise ValueError("document_keys must contain at least one column name.")
+        outputs = _translate_frames(
+            self,
+            documents.reset_index(drop=True),
+            tokens.reset_index(drop=True),
+            doc_keys=doc_keys,
+        )
+        return {
+            label: pd.concat(
+                [
+                    payload["keys"].reset_index(drop=True),
+                    payload["data"].reset_index(drop=True),
+                ],
+                axis=1,
+            )
+            for label, payload in outputs.items()
+        }
+
+    def translate_from_text(
+        self,
+        texts: str | Sequence[str | None] | pd.Series,
+        *,
+        spacy_model: str = "en_core_web_sm",
+        spacy_batch_size: int = 128,
+        spacy_disable: Sequence[str] = (),
+    ) -> dict[str, pd.DataFrame]:
+        """Parse ordinary text with spaCy, then resolve document coreference."""
+        from text_analysis_lab.translators.spacy_translator import SpacyTranslator
+
+        if isinstance(texts, pd.Series):
+            values = texts.fillna("").astype(str).tolist()
+        elif isinstance(texts, str):
+            values = [texts]
+        elif isinstance(texts, Sequence) and not isinstance(texts, (str, bytes)):
+            values = ["" if value is None else str(value) for value in texts]
+        else:
+            raise TypeError(
+                "CoreferenceResolver.translate_from_text(...) expects a string, "
+                "sequence of strings, or pandas Series."
+            )
+
+        parsed = SpacyTranslator(
+            model=spacy_model,
+            sentence_key=self.sentence_key,
+            token_key=self.token_key,
+            spacy_batch_size=spacy_batch_size,
+            disable=spacy_disable,
+        ).translate(values)
+        documents = pd.DataFrame(
+            {
+                "source_position": range(len(values)),
+                self.text_field: values,
+            }
+        )
+        return self.translate(
+            documents,
+            parsed[TOKENS],
+            document_keys=["source_position"],
+        )
+
     def output_specs(
         self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest
     ):
@@ -170,6 +246,7 @@ class CoreferenceResolver(BaseTranslator):
             ),
         }
 
+
     def translate_batch(self, inputs, *, mode, request):
         _ = mode, request
         if set(inputs) != {DOCUMENTS, TOKENS}:
@@ -180,163 +257,21 @@ class CoreferenceResolver(BaseTranslator):
         token_packet = inputs[TOKENS]
         documents = _frame(doc_packet.data, "documents")
         tokens = _frame(token_packet.data, "tokens")
-        doc_keys = list(doc_packet.primary_key)
+        doc_keys = [str(value) for value in doc_packet.primary_key]
         expected_token_keys = [*doc_keys, self.sentence_key, self.token_key]
         if list(token_packet.primary_key) != expected_token_keys:
             raise ArtifactError(
                 "CoreferenceResolver requires token primary keys to equal document keys + "
                 f"{self.sentence_key!r} + {self.token_key!r}; got {list(token_packet.primary_key)}."
             )
-        missing_docs = [
-            name for name in [*doc_keys, self.text_field] if name not in documents
-        ]
-        missing_tokens = [
-            name
-            for name in [
-                *expected_token_keys,
-                "text",
-                "lemma",
-                "pos",
-                "dep",
-                "head_token_id",
-                "ent_type",
-                "char_start",
-                "char_end",
-            ]
-            if name not in tokens
-        ]
-        if missing_docs or missing_tokens:
-            raise ArtifactError(
-                f"CoreferenceResolver missing document columns {missing_docs} and token columns {missing_tokens}."
+        return BatchResult(
+            outputs=_translate_frames(
+                self,
+                documents,
+                tokens,
+                doc_keys=doc_keys,
             )
-
-        resolved_device = resolve_devices(
-            self.device, strict=self.strict_device
-        ).primary
-        runtime = _make_runtime(
-            model=self.model,
-            device=resolved_device,
-            compile_model=self.compile_model,
-            show_progress=self.show_progress,
         )
-
-        token_groups = {
-            key: group.sort_values([self.sentence_key, self.token_key]).reset_index(
-                drop=True
-            )
-            for key, group in tokens.groupby(doc_keys, sort=False, dropna=False)
-        }
-        if len(doc_keys) == 1:
-            token_groups = {
-                (key if isinstance(key, tuple) else (key,)): value
-                for key, value in token_groups.items()
-            }
-
-        mention_keys: list[dict[str, Any]] = []
-        mention_data: list[dict[str, Any]] = []
-        failure_keys: list[dict[str, Any]] = []
-        failure_data: list[dict[str, Any]] = []
-
-        for _, row in documents.iterrows():
-            key_record = {name: int(row[name]) for name in doc_keys}
-            key_tuple = tuple(key_record[name] for name in doc_keys)
-            text = "" if pd.isna(row[self.text_field]) else str(row[self.text_field])
-            model_tokens: int | None = None
-            max_model_tokens: int | None = None
-            try:
-                counts, configured_limit = runtime.document_token_counts([text])
-                model_tokens = int(counts[0]) if counts else 0
-                max_model_tokens = (
-                    None if configured_limit is None else int(configured_limit)
-                )
-                if max_model_tokens is not None and model_tokens > max_model_tokens:
-                    _append_failure(
-                        failure_keys,
-                        failure_data,
-                        key_record,
-                        reason="document_too_long",
-                        detail=(
-                            f"Document has {model_tokens} model tokens; configured maximum is "
-                            f"{max_model_tokens}."
-                        ),
-                        model_tokens=model_tokens,
-                        max_model_tokens=max_model_tokens,
-                    )
-                    continue
-                batch = runtime.predict_texts(
-                    [text],
-                    max_tokens_in_batch=self.max_tokens_in_batch,
-                    release_logits=True,
-                )
-            except Exception as exc:
-                if _is_cuda_oom(exc):
-                    _clear_cuda_cache()
-                    _append_failure(
-                        failure_keys,
-                        failure_data,
-                        key_record,
-                        reason="cuda_out_of_memory",
-                        detail=f"{type(exc).__name__}: {exc}",
-                        model_tokens=model_tokens,
-                        max_model_tokens=max_model_tokens,
-                    )
-                    continue
-                raise
-            prediction = batch.documents[0]
-            if prediction.normalization_issue is not None:
-                _append_failure(
-                    failure_keys,
-                    failure_data,
-                    key_record,
-                    reason=prediction.normalization_issue.reason,
-                    detail=prediction.normalization_issue.detail,
-                    model_tokens=model_tokens,
-                    max_model_tokens=max_model_tokens,
-                )
-                continue
-            doc_tokens = token_groups.get(key_tuple)
-            for mention in prediction.mentions:
-                aligned = _align_mention(
-                    doc_tokens,
-                    start_char=int(mention.start_char),
-                    end_char=int(mention.end_char),
-                    sentence_key=self.sentence_key,
-                    token_key=self.token_key,
-                )
-                mention_keys.append(
-                    {
-                        **key_record,
-                        "cluster_id": int(mention.cluster_id),
-                        "mention_id": int(mention.mention_id),
-                    }
-                )
-                mention_data.append(
-                    {
-                        **aligned,
-                        "char_start": int(mention.start_char),
-                        "char_end": int(mention.end_char),
-                        "text": str(mention.text),
-                        "is_first_mention": bool(mention.mention_id == 0),
-                    }
-                )
-
-        outputs: dict[str, Mapping[str, Any]] = {
-            MENTIONS: {
-                "keys": pd.DataFrame.from_records(
-                    mention_keys, columns=[*doc_keys, "cluster_id", "mention_id"]
-                ),
-                "data": pd.DataFrame.from_records(
-                    mention_data, columns=list(MENTION_DATA_COLUMNS)
-                ),
-            },
-            FAILURES: {
-                "keys": pd.DataFrame.from_records(failure_keys, columns=doc_keys),
-                "data": pd.DataFrame.from_records(
-                    failure_data, columns=list(FAILURE_DATA_COLUMNS)
-                ),
-            },
-        }
-        return BatchResult(outputs=outputs)
 
     def handle_batch_result(self, result, *, batch_index, mode, request):
         _ = batch_index, mode, request
@@ -361,6 +296,174 @@ class CoreferenceResolver(BaseTranslator):
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> CoreferenceResolver:
         return cls(**cast(dict[str, Any], dict(state)))
+
+
+
+def _translate_frames(
+    translator: CoreferenceResolver,
+    documents: pd.DataFrame,
+    tokens: pd.DataFrame,
+    *,
+    doc_keys: Sequence[str],
+) -> dict[str, Mapping[str, Any]]:
+    doc_keys = [str(value) for value in doc_keys]
+    expected_token_keys = [*doc_keys, translator.sentence_key, translator.token_key]
+    missing_docs = [
+        name
+        for name in [*doc_keys, translator.text_field]
+        if name not in documents.columns
+    ]
+    missing_tokens = [
+        name
+        for name in [
+            *expected_token_keys,
+            "text",
+            "lemma",
+            "pos",
+            "dep",
+            "head_token_id",
+            "ent_type",
+            "char_start",
+            "char_end",
+        ]
+        if name not in tokens.columns
+    ]
+    if missing_docs or missing_tokens:
+        raise ArtifactError(
+            f"CoreferenceResolver missing document columns {missing_docs} "
+            f"and token columns {missing_tokens}."
+        )
+
+    resolved_device = resolve_devices(
+        translator.device, strict=translator.strict_device
+    ).primary
+    runtime = _make_runtime(
+        model=translator.model,
+        device=resolved_device,
+        compile_model=translator.compile_model,
+        show_progress=translator.show_progress,
+    )
+
+    token_groups = {
+        key: group.sort_values(
+            [translator.sentence_key, translator.token_key]
+        ).reset_index(drop=True)
+        for key, group in tokens.groupby(doc_keys, sort=False, dropna=False)
+    }
+    if len(doc_keys) == 1:
+        token_groups = {
+            (key if isinstance(key, tuple) else (key,)): value
+            for key, value in token_groups.items()
+        }
+
+    mention_keys: list[dict[str, Any]] = []
+    mention_data: list[dict[str, Any]] = []
+    failure_keys: list[dict[str, Any]] = []
+    failure_data: list[dict[str, Any]] = []
+
+    for _, row in documents.iterrows():
+        key_record = {name: int(row[name]) for name in doc_keys}
+        key_tuple = tuple(key_record[name] for name in doc_keys)
+        text = (
+            ""
+            if pd.isna(row[translator.text_field])
+            else str(row[translator.text_field])
+        )
+        model_tokens: int | None = None
+        max_model_tokens: int | None = None
+        try:
+            counts, configured_limit = runtime.document_token_counts([text])
+            model_tokens = int(counts[0]) if counts else 0
+            max_model_tokens = (
+                None if configured_limit is None else int(configured_limit)
+            )
+            if max_model_tokens is not None and model_tokens > max_model_tokens:
+                _append_failure(
+                    failure_keys,
+                    failure_data,
+                    key_record,
+                    reason="document_too_long",
+                    detail=(
+                        f"Document has {model_tokens} model tokens; configured maximum is "
+                        f"{max_model_tokens}."
+                    ),
+                    model_tokens=model_tokens,
+                    max_model_tokens=max_model_tokens,
+                )
+                continue
+            batch = runtime.predict_texts(
+                [text],
+                max_tokens_in_batch=translator.max_tokens_in_batch,
+                release_logits=True,
+            )
+        except Exception as exc:
+            if _is_cuda_oom(exc):
+                _clear_cuda_cache()
+                _append_failure(
+                    failure_keys,
+                    failure_data,
+                    key_record,
+                    reason="cuda_out_of_memory",
+                    detail=f"{type(exc).__name__}: {exc}",
+                    model_tokens=model_tokens,
+                    max_model_tokens=max_model_tokens,
+                )
+                continue
+            raise
+        prediction = batch.documents[0]
+        if prediction.normalization_issue is not None:
+            _append_failure(
+                failure_keys,
+                failure_data,
+                key_record,
+                reason=prediction.normalization_issue.reason,
+                detail=prediction.normalization_issue.detail,
+                model_tokens=model_tokens,
+                max_model_tokens=max_model_tokens,
+            )
+            continue
+        doc_tokens = token_groups.get(key_tuple)
+        for mention in prediction.mentions:
+            aligned = _align_mention(
+                doc_tokens,
+                start_char=int(mention.start_char),
+                end_char=int(mention.end_char),
+                sentence_key=translator.sentence_key,
+                token_key=translator.token_key,
+            )
+            mention_keys.append(
+                {
+                    **key_record,
+                    "cluster_id": int(mention.cluster_id),
+                    "mention_id": int(mention.mention_id),
+                }
+            )
+            mention_data.append(
+                {
+                    **aligned,
+                    "char_start": int(mention.start_char),
+                    "char_end": int(mention.end_char),
+                    "text": str(mention.text),
+                    "is_first_mention": bool(mention.mention_id == 0),
+                }
+            )
+
+    return {
+        MENTIONS: {
+            "keys": pd.DataFrame.from_records(
+                mention_keys, columns=[*doc_keys, "cluster_id", "mention_id"]
+            ),
+            "data": pd.DataFrame.from_records(
+                mention_data, columns=list(MENTION_DATA_COLUMNS)
+            ),
+        },
+        FAILURES: {
+            "keys": pd.DataFrame.from_records(failure_keys, columns=doc_keys),
+            "data": pd.DataFrame.from_records(
+                failure_data, columns=list(FAILURE_DATA_COLUMNS)
+            ),
+        },
+    }
 
 
 def _make_runtime(*, model: str, device: str, compile_model: bool, show_progress: bool):

@@ -47,6 +47,54 @@ class MatrixRowAggregator(BaseTranslator):
             raise ValueError("pooling must be 'mean' or 'sum'.")
         self.pooling = pooling
 
+    def translate(self, matrix: Any, groups: pd.DataFrame) -> dict[str, Any]:
+        """Pool ordinary matrix rows by the configured grouping columns."""
+        if not isinstance(groups, pd.DataFrame):
+            raise TypeError(
+                "MatrixRowAggregator.translate(...) requires groups as a pandas DataFrame."
+            )
+        shape = getattr(matrix, "shape", None)
+        if shape is None or len(shape) != 2:
+            raise ValueError(
+                "MatrixRowAggregator.translate(...) requires a two-dimensional matrix."
+            )
+        if int(shape[0]) != len(groups):
+            raise ValueError(
+                "MatrixRowAggregator.translate(...) requires one grouping row per "
+                f"matrix row; got {len(groups)} groups for {int(shape[0])} rows."
+            )
+        if groups.empty:
+            raise ArtifactError(
+                "MatrixRowAggregator cannot aggregate an empty matrix."
+            )
+        missing = [name for name in self.group_by if name not in groups.columns]
+        if missing:
+            raise ArtifactError(
+                f"Grouping data is missing configured column(s) {missing}."
+            )
+
+        group_frame = groups.loc[:, list(self.group_by)].reset_index(drop=True)
+        group_index = pd.MultiIndex.from_frame(group_frame)
+        codes, uniques = pd.factorize(group_index, sort=False)
+        n_groups = len(uniques)
+        counts = np.bincount(codes, minlength=n_groups).astype(np.int64)
+        pooled_rows = []
+        for group_id in range(n_groups):
+            block = matrix[codes == group_id]
+            row = block.sum(axis=0)
+            if self.pooling == "mean":
+                row = row / int(counts[group_id])
+            pooled_rows.append(row)
+        pooled = _stack_rows(pooled_rows, matrix)
+        unique_groups = group_frame.loc[
+            ~group_index.duplicated(keep="first")
+        ].reset_index(drop=True)
+        return {
+            "values": pooled,
+            "groups": unique_groups,
+            "counts": counts,
+        }
+
     def output_specs(
         self,
         *,
@@ -99,39 +147,17 @@ class MatrixRowAggregator(BaseTranslator):
         columns = native.get("columns")
         if not isinstance(info, pd.DataFrame) or matrix is None or columns is None:
             raise ArtifactError("MatrixRowAggregator received malformed matrix data.")
-        if info.empty:
-            raise ArtifactError(
-                "MatrixRowAggregator cannot aggregate an empty artifact."
-            )
         self._validate_key(packet.primary_key)
-        missing = [name for name in self.group_by if name not in info.columns]
-        if missing:
-            raise ArtifactError(
-                f"Matrix source is missing group key columns {missing}."
-            )
-
-        group_frame = info.loc[:, list(self.group_by)].reset_index(drop=True)
-        group_index = pd.MultiIndex.from_frame(group_frame)
-        codes, uniques = pd.factorize(group_index, sort=False)
-        n_groups = len(uniques)
-        pooled_rows = []
-        counts = np.bincount(codes, minlength=n_groups).astype(np.int64)
-        for group_id in range(n_groups):
-            block = matrix[codes == group_id]
-            row = block.sum(axis=0)
-            if self.pooling == "mean":
-                row = row / int(counts[group_id])
-            pooled_rows.append(row)
-        pooled = _stack_rows(pooled_rows, matrix)
-        keys = group_frame.loc[~group_index.duplicated(keep="first")].reset_index(
-            drop=True
-        )
+        aggregated = self.translate(matrix, info)
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
-                    "keys": keys,
-                    "metadata": pd.DataFrame({"n_rows": counts}),
-                    "data": {"values": pooled, "columns": list(columns)},
+                    "keys": aggregated["groups"],
+                    "metadata": pd.DataFrame({"n_rows": aggregated["counts"]}),
+                    "data": {
+                        "values": aggregated["values"],
+                        "columns": list(columns),
+                    },
                 }
             }
         )

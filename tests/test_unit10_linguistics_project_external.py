@@ -280,7 +280,6 @@ def test_unit10_translators_write_teal_native_lineage(
         wsd = project.translate(
             WordSenseDisambiguator(
                 include_multiword_candidates=False,
-                acknowledge_noncommercial_license=True,
             ),
             {"tokens": tokens},
         )

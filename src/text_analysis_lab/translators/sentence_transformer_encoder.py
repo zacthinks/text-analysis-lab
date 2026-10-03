@@ -184,6 +184,101 @@ class SentenceTransformerEncoder(BaseTranslator):
             include_position=False,
         )
 
+    def translate(
+        self,
+        texts: str | None | Sequence[str | None],
+        *,
+        task: SentenceTask | str | None = None,
+        device: str = "auto",
+        model_batch_size: int = 32,
+    ) -> np.ndarray:
+        """Encode ordinary in-memory text with the configured model recipe."""
+
+        values, _, _ = self._translate_texts(
+            texts,
+            task=task,
+            device=device,
+            model_batch_size=model_batch_size,
+        )
+        return values
+
+    def _translate_texts(
+        self,
+        texts: str | None | Sequence[str | None],
+        *,
+        task: SentenceTask | str | None,
+        device: str,
+        model_batch_size: int,
+        context_examples: Sequence[str] | None = None,
+    ) -> tuple[np.ndarray, list[int], int]:
+        if isinstance(texts, (str, type(None))):
+            values_in = [texts]
+        else:
+            values_in = list(texts)
+        values_in = ["" if value is None else str(value) for value in values_in]
+
+        effective_task = self.task if task is None else str(task).lower()
+        if effective_task not in {"document", "query", "generic"}:
+            raise ValueError("task must be 'document', 'query', or 'generic'.")
+        if int(model_batch_size) <= 0:
+            raise ValueError("model_batch_size must be a positive integer.")
+
+        resolved_device = resolve_device(str(device))
+        model = self._runtime_component(device=resolved_device)
+        tokenizer = _sentence_tokenizer(model)
+        context_limit = self._context_limit(model=model, tokenizer=tokenizer)
+        use_configured_prompt = task is None or effective_task == self.task
+        prompt_name, prompt, prompt_prefix = _resolve_prompt(
+            model,
+            task=cast(SentenceTask, effective_task),
+            prompt_name=self.prompt_name if use_configured_prompt else None,
+            prompt=self.prompt if use_configured_prompt else None,
+        )
+
+        counted_texts = [f"{prompt_prefix}{text}" for text in values_in]
+        token_counts = count_tokens(tokenizer, counted_texts)
+        too_long = [
+            index for index, count in enumerate(token_counts) if count > context_limit
+        ]
+        if too_long and self.truncation == "error":
+            suffix = ""
+            if context_examples is not None:
+                examples = [
+                    f"{context_examples[index]}: {token_counts[index]} tokens"
+                    for index in too_long[:5]
+                ]
+                if examples:
+                    suffix = f" Examples: {', '.join(examples)}."
+            raise ContextWindowExceededError(
+                "SentenceTransformerEncoder refuses silent truncation: "
+                f"{len(too_long)} of {len(values_in)} row(s) exceed the effective "
+                f"context limit of {context_limit} model tokens "
+                f"(including any model prompt and special tokens).{suffix}"
+            )
+        if too_long:
+            warnings.warn(
+                "SentenceTransformerEncoder is explicitly allowing truncation for "
+                f"{len(too_long)} of {len(values_in)} row(s) to {context_limit} model tokens.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        values = self._encode(
+            model=model,
+            texts=values_in,
+            device=resolved_device,
+            model_batch_size=int(model_batch_size),
+            prompt_name=prompt_name,
+            prompt=prompt,
+            task=cast(SentenceTask, effective_task),
+        )
+        if values.ndim != 2 or values.shape[0] != len(values_in):
+            raise TransformerResourceError(
+                "SentenceTransformerEncoder expected one 2D embedding row per input text; "
+                f"received shape {tuple(values.shape)}."
+            )
+        return values.astype(np.float32, copy=False), token_counts, context_limit
+
     def translate_batch(
         self,
         inputs: Mapping[str, InputBatch],
@@ -210,58 +305,18 @@ class SentenceTransformerEncoder(BaseTranslator):
 
         device = str(request.params.get("device", "cpu"))
         model_batch_size = int(request.params.get("model_batch_size", 32))
-        model = self._runtime_component(device=device)
-        tokenizer = _sentence_tokenizer(model)
-        context_limit = self._context_limit(model=model, tokenizer=tokenizer)
-        prompt_name, prompt, prompt_prefix = _resolve_prompt(
-            model,
-            task=self.task,
-            prompt_name=self.prompt_name,
-            prompt=self.prompt,
-        )
-
         texts = frame[self.text_field].fillna("").astype(str).tolist()
-        counted_texts = [f"{prompt_prefix}{text}" for text in texts]
-        token_counts = count_tokens(tokenizer, counted_texts)
-        too_long = [
-            index for index, count in enumerate(token_counts) if count > context_limit
+        context_examples = [
+            str({name: frame.iloc[index][name] for name in key_columns})
+            for index in range(len(frame))
         ]
-        if too_long and self.truncation == "error":
-            examples: list[str] = []
-            for index in too_long[:5]:
-                key = {name: int(frame.iloc[index][name]) for name in key_columns}
-                examples.append(f"{key}: {token_counts[index]} tokens")
-            raise ContextWindowExceededError(
-                "SentenceTransformerEncoder refuses silent truncation: "
-                f"{len(too_long)} of {len(texts)} source row(s) exceed the effective "
-                f"context limit of {context_limit} model tokens (including any model prompt "
-                f"and special tokens). Examples: {', '.join(examples)}. Decompose/chunk the "
-                "text upstream, choose a longer-context model, or explicitly set "
-                "truncation='truncate'."
-            )
-        if too_long:
-            warnings.warn(
-                "SentenceTransformerEncoder is explicitly allowing the model to truncate "
-                f"{len(too_long)} of {len(texts)} row(s) to {context_limit} model tokens. "
-                "The original and embedded token counts are recorded in output metadata.",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        values = self._encode(
-            model=model,
-            texts=texts,
+        values, token_counts, context_limit = self._translate_texts(
+            texts,
+            task=None,
             device=device,
             model_batch_size=model_batch_size,
-            prompt_name=prompt_name,
-            prompt=prompt,
+            context_examples=context_examples,
         )
-        if values.ndim != 2 or values.shape[0] != len(texts):
-            raise TransformerResourceError(
-                "SentenceTransformerEncoder expected one 2D embedding row per source text; "
-                f"received shape {tuple(values.shape)}."
-            )
-        values = values.astype(np.float32, copy=False)
         embedded_counts = [min(count, context_limit) for count in token_counts]
         metadata = pd.DataFrame(
             {
@@ -316,63 +371,6 @@ class SentenceTransformerEncoder(BaseTranslator):
         else:
             values = model.encode(list(texts), **kwargs)
         return np.asarray(values)
-
-    def transform_external_texts(
-        self,
-        texts: Sequence[str],
-        *,
-        query: bool = False,
-        params: Mapping[str, Any] | None = None,
-    ) -> np.ndarray:
-        """Encode new documents/queries with the frozen SentenceTransformer recipe."""
-        values_in = ["" if value is None else str(value) for value in texts]
-        operation_params = dict(params or {})
-        # Device choice is an execution detail, not representation semantics. Re-resolve
-        # it at replay time so a frozen GPU run remains usable on a CPU-only machine.
-        device = resolve_device("auto")
-        model_batch_size = int(operation_params.get("model_batch_size", 32))
-        model = self._runtime_component(device=device)
-        tokenizer = _sentence_tokenizer(model)
-        context_limit = self._context_limit(model=model, tokenizer=tokenizer)
-        task = cast(SentenceTask, "query" if query else self.task)
-        prompt_name, prompt, prompt_prefix = _resolve_prompt(
-            model,
-            task=task,
-            prompt_name=(None if query else self.prompt_name),
-            prompt=(None if query else self.prompt),
-        )
-        counted = [f"{prompt_prefix}{text}" for text in values_in]
-        token_counts = count_tokens(tokenizer, counted)
-        too_long = [
-            index for index, count in enumerate(token_counts) if count > context_limit
-        ]
-        if too_long and self.truncation == "error":
-            raise ContextWindowExceededError(
-                "SentenceTransformerEncoder refuses silent truncation while replaying "
-                f"new text: {len(too_long)} of {len(values_in)} row(s) exceed the "
-                f"effective context limit of {context_limit} model tokens."
-            )
-        if too_long:
-            warnings.warn(
-                "SentenceTransformerEncoder is explicitly allowing truncation while "
-                f"replaying {len(too_long)} new text row(s).",
-                UserWarning,
-                stacklevel=2,
-            )
-        result = self._encode(
-            model=model,
-            texts=values_in,
-            device=device,
-            model_batch_size=model_batch_size,
-            prompt_name=prompt_name,
-            prompt=prompt,
-            task=task,
-        )
-        return np.asarray(result, dtype=np.float32)
-
-    def supports_external_transform(self, *, query: bool, input_kind: str) -> bool:
-        _ = query
-        return input_kind == "texts"
 
     def handle_batch_result(
         self,

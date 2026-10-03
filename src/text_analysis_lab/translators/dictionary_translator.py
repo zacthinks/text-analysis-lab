@@ -102,6 +102,55 @@ class DictionaryTranslator(BaseTranslator):
             return "valence"
         return "categorical"
 
+    def translate(
+        self,
+        matrix: Any,
+        *,
+        features: Sequence[str],
+    ) -> dict[str, Any]:
+        """Translate an ordinary lexical count matrix using explicit features."""
+        self._set_source_features(features)
+        counts = _validated_count_matrix(matrix)
+        projection, matched_mask, columns = self._require_resolution()
+        if counts.shape[1] != projection.shape[0]:
+            raise ArtifactError(
+                "DictionaryTranslator feature width mismatch: "
+                f"matrix has {counts.shape[1]}, features have {projection.shape[0]}."
+            )
+
+        translated = (counts @ projection).tocsr().astype(np.int64, copy=False)
+        total = np.asarray(counts.sum(axis=1)).reshape(-1).astype(np.int64, copy=False)
+        matched = (
+            np.asarray(
+                counts @ matched_mask.astype(np.int64, copy=False).reshape(-1, 1)
+            )
+            .reshape(-1)
+            .astype(np.int64, copy=False)
+        )
+        unmatched = total - matched
+        if np.any(unmatched < 0):
+            raise ArtifactError("Dictionary matched count exceeded total source count.")
+
+        if self.dictionary_kind == "polarity":
+            pole_total = np.asarray(translated.sum(axis=1)).reshape(-1)
+            if not np.array_equal(pole_total.astype(np.int64), matched):
+                raise ArtifactError(
+                    "Polarity translation invariant failed: positive + negative + "
+                    "neutral must equal matched."
+                )
+
+        return {
+            "values": translated,
+            "columns": columns,
+            "metadata": pd.DataFrame(
+                {
+                    "matched": matched,
+                    "unmatched": unmatched,
+                    "total": total,
+                }
+            ),
+        }
+
     @property
     def supports_parallel_translate(self) -> bool:
         return True
@@ -181,32 +230,16 @@ class DictionaryTranslator(BaseTranslator):
             raise ArtifactError(
                 "DictionaryTranslator native packet is missing info rows."
             )
-        counts = _validated_count_matrix(matrix)
-        if len(info) != counts.shape[0]:
+
+        translated = self.translate(
+            matrix,
+            features=self._require_source_features(),
+        )
+        if len(info) != translated["values"].shape[0]:
             raise ArtifactError(
                 f"DictionaryTranslator key row count {len(info)} != matrix row count "
-                f"{counts.shape[0]}."
+                f"{translated['values'].shape[0]}."
             )
-
-        projection, matched_mask, columns = self._require_resolution()
-        if counts.shape[1] != projection.shape[0]:
-            raise ArtifactError(
-                "DictionaryTranslator source feature count changed during an operation: "
-                f"matrix has {counts.shape[1]}, dictionary resolution has {projection.shape[0]}."
-            )
-
-        translated = (counts @ projection).tocsr().astype(np.int64, copy=False)
-        total = np.asarray(counts.sum(axis=1)).reshape(-1).astype(np.int64, copy=False)
-        matched = (
-            np.asarray(
-                counts @ matched_mask.astype(np.int64, copy=False).reshape(-1, 1)
-            )
-            .reshape(-1)
-            .astype(np.int64, copy=False)
-        )
-        unmatched = total - matched
-        if np.any(unmatched < 0):  # pragma: no cover - defensive invariant
-            raise ArtifactError("Dictionary matched count exceeded total source count.")
 
         key_columns = [str(name) for name in packet.primary_key]
         missing_keys = [name for name in key_columns if name not in info.columns]
@@ -215,28 +248,15 @@ class DictionaryTranslator(BaseTranslator):
                 f"DictionaryTranslator source batch is missing key columns {missing_keys}."
             )
         keys = info.loc[:, key_columns].reset_index(drop=True)
-        metadata = pd.DataFrame(
-            {
-                "matched": matched,
-                "unmatched": unmatched,
-                "total": total,
-            }
-        )
-
-        if self.dictionary_kind == "polarity":
-            pole_total = np.asarray(translated.sum(axis=1)).reshape(-1)
-            if not np.array_equal(pole_total.astype(np.int64), matched):
-                raise ArtifactError(
-                    "Polarity translation invariant failed: positive + negative + "
-                    "neutral must equal matched."
-                )
-
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
                     "keys": keys,
-                    "metadata": metadata,
-                    "data": {"values": translated, "columns": columns},
+                    "metadata": translated["metadata"],
+                    "data": {
+                        "values": translated["values"],
+                        "columns": translated["columns"],
+                    },
                 }
             }
         )

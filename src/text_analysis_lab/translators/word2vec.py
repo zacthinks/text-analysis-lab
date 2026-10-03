@@ -135,6 +135,37 @@ class Word2Vec(BaseTranslator):
         self.training_loss_: tuple[float, ...] = ()
         self.gensim_version_: str | None = None
 
+    def translate(
+        self,
+        sequences: Sequence[Sequence[str]],
+    ) -> dict[str, Any]:
+        """Train embeddings from ordinary token sequences."""
+        if isinstance(sequences, (str, bytes)) or not isinstance(sequences, Sequence):
+            raise TypeError(
+                "Word2Vec.translate(...) expects a sequence of token sequences."
+            )
+        normalized: list[list[str]] = []
+        for sequence in sequences:
+            if isinstance(sequence, (str, bytes)) or not isinstance(sequence, Sequence):
+                raise TypeError(
+                    "Word2Vec.translate(...) expects each sequence to be a sequence of token strings."
+                )
+            normalized.append([str(value) for value in sequence])
+        if not normalized:
+            raise ArtifactError("Word2Vec cannot train on an empty sequence collection.")
+
+        words, counts, vectors, losses, gensim_version = self._train(normalized)
+        self.training_loss_ = losses
+        self.gensim_version_ = gensim_version
+        return {
+            "words": words,
+            "counts": counts,
+            "values": vectors,
+            "columns": _dimension_columns(self.vector_size),
+            "training_loss": losses,
+            "gensim_version": gensim_version,
+        }
+
     def output_specs(
         self,
         *,
@@ -214,9 +245,9 @@ class Word2Vec(BaseTranslator):
             sequence_by=self._resolve_sequence_by(source_key),
             drop_empty=self.drop_empty,
         )
-        words, counts, vectors, losses, gensim_version = self._train(sequences)
-        self.training_loss_ = losses
-        self.gensim_version_ = gensim_version
+        trained = self.translate(sequences)
+        words = trained["words"]
+        counts = trained["counts"]
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
@@ -227,8 +258,8 @@ class Word2Vec(BaseTranslator):
                         {"count": counts.astype(np.int64, copy=False)}
                     ),
                     "data": {
-                        "values": vectors,
-                        "columns": _dimension_columns(self.vector_size),
+                        "values": trained["values"],
+                        "columns": trained["columns"],
                         "row_names": words,
                         "row_name": self.row_name,
                     },
