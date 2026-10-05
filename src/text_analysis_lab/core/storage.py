@@ -223,8 +223,17 @@ class ArtifactStorage:
         return self.data_dir / "values"
 
     @property
-    def data_columns_path(self) -> Path:
+    def feature_metadata_path(self) -> Path:
+        """Canonical Feature Metadata path for matrix artifacts.
+
+        The on-disk filename remains columns.parquet for storage compatibility.
+        """
         return self.data_dir / "columns.parquet"
+
+    @property
+    def data_columns_path(self) -> Path:
+        """Backward-compatible alias for feature_metadata_path."""
+        return self.feature_metadata_path
 
     @property
     def data_row_names_dir(self) -> Path:

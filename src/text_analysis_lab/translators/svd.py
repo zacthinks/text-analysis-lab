@@ -115,6 +115,7 @@ class SVD(BaseTranslator):
                 artifact_type="dense_matrix",
                 lineage_mode="new_key",
                 basis_labels=DEFAULT_SOURCE_LABEL,
+                feature_metadata_mode="inherit",
             )
         return specs
 

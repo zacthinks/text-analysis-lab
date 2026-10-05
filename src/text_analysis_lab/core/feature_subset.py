@@ -75,6 +75,7 @@ class FeatureSubsetOperator(BaseOperator):
             artifact_type=source.artifact_type,
             lineage_mode="preserved_key",
             basis_labels=DEFAULT_SOURCE_LABEL,
+            feature_metadata_mode="inherit",
         )
 
     def to_json_state(self) -> dict[str, Any]:
@@ -128,7 +129,7 @@ def feature_subset(
 ) -> BaseArtifact:
     """Create a lazy positional feature view of a matrix artifact.
 
-    ``function`` receives the source ``feature_frame`` in source-column order and
+    ``function`` receives the source ``feature_metadata`` in source-column order and
     must return exactly one boolean value per feature. The selected source
     positions are frozen into the derived artifact. No feature-name matching is
     performed during creation or replay.
@@ -142,22 +143,22 @@ def feature_subset(
         raise ArtifactError(
             "feature_subset requires a sparse_matrix or dense_matrix source."
         )
-    getter = getattr(artifact, "get_feature_frame", None)
+    getter = getattr(artifact, "get_feature_metadata", None)
     if not callable(getter):
         raise ArtifactError(
-            f"Matrix artifact {artifact.artifact_id} does not expose a feature frame."
+            f"Matrix artifact {artifact.artifact_id} does not expose a Feature Metadata."
         )
     if not callable(function):
         raise TypeError("feature_subset function must be callable.")
 
-    feature_frame = getter()
-    if not isinstance(feature_frame, pd.DataFrame):
-        raise ArtifactError("get_feature_frame() must return a pandas DataFrame.")
-    source_width = len(feature_frame)
+    feature_metadata = getter()
+    if not isinstance(feature_metadata, pd.DataFrame):
+        raise ArtifactError("get_feature_metadata() must return a pandas DataFrame.")
+    source_width = len(feature_metadata)
     if source_width <= 0:
         raise ArtifactError("feature_subset cannot operate on an empty feature axis.")
 
-    raw_mask = function(feature_frame.copy())
+    raw_mask = function(feature_metadata.copy())
     indices = _indices_from_mask(raw_mask, expected_len=source_width)
     label = validate_output_label(output_label)
     if isinstance(batch_size, bool) or int(batch_size) <= 0:
@@ -246,6 +247,7 @@ def _create_feature_view(
         lineage={"feature_indices": list(normalized)},
         lineage_mode="preserved_key",
         basis_artifact_ids=(source.artifact_id,),
+        feature_metadata_mode="inherit",
     )
 
     spec = operator.output_specs(

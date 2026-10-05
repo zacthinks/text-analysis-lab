@@ -1163,6 +1163,7 @@ def _prepare_runtime(
                 operation_id=operation_id,
                 lineage_mode=spec.lineage_mode,
                 basis_artifact_ids=basis_ids,
+                feature_metadata_mode=spec.feature_metadata_mode,
                 data_serializer=getattr(spec, "data_serializer", None),
                 data_serializer_ref=getattr(spec, "data_serializer_ref", None),
             )
@@ -2160,6 +2161,7 @@ def _output_specs_from_dict(data: Mapping[str, Any]) -> dict[str, OutputSpec]:
             artifact_type=ArtifactType(raw["artifact_type"]),
             lineage_mode=validate_lineage_mode(raw.get("lineage_mode", "new_key")),
             basis_labels=tuple(raw.get("basis_labels", ())),
+            feature_metadata_mode=raw.get("feature_metadata_mode"),
             data_serializer=(
                 None
                 if serializer_ref is None

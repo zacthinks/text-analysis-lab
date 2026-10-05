@@ -12,7 +12,9 @@ import text_analysis_lab as teal
 from text_analysis_lab.translators import (
     CountVectorizer,
     FeatureTrimmer,
+    MatrixNormalizer,
     MatrixTranspose,
+    TfidfTransformer,
 )
 
 
@@ -58,7 +60,7 @@ def test_feature_subset_is_lazy_positional_view_and_chains(tmp_path: Path) -> No
         assert selected.components.get("data") is None
         assert selected.descriptor["lineage"]["feature_indices"] == [0, 3]
         assert selected.get_data_columns() == ["alpha", "gamma"]
-        assert selected.get_feature_frame()["column_index"].tolist() == [0, 1]
+        assert selected.get_feature_metadata()["column_index"].tolist() == [0, 1]
         np.testing.assert_array_equal(
             selected.get_matrix().toarray(),
             source[:, [0, 3]],
@@ -118,21 +120,24 @@ def test_feature_trimmer_outputs_lazy_feature_view_and_replays_by_width(
         reopened.close()
 
 
-def test_transpose_promotes_projected_feature_frame_to_metadata(tmp_path: Path) -> None:
+def test_transpose_promotes_projected_feature_metadata_to_metadata(tmp_path: Path) -> None:
     project, counts = _build_count_matrix(tmp_path)
     try:
-        feature_frame = counts.get_feature_frame()
-        feature_frame["ngram_n"] = [1, 1, 2, 2]
-        feature_frame["group"] = ["left", "left", "right", "right"]
-        feature_frame.to_parquet(counts.storage.data_columns_path, index=False)
+        feature_metadata = counts.get_feature_metadata()
+        feature_metadata["ngram_n"] = [1, 1, 2, 2]
+        feature_metadata["group"] = ["left", "left", "right", "right"]
+        feature_metadata.to_parquet(
+            counts.storage.feature_metadata_path,
+            index=False,
+        )
 
         selected = project.feature_subset(
             counts,
             lambda features: features["column"].isin(["alpha", "gamma"]),
             output_label="alpha_gamma_for_transpose",
         )
-        assert selected.get_feature_frame()["column"].tolist() == ["alpha", "gamma"]
-        assert selected.get_feature_frame()["ngram_n"].tolist() == [1, 2]
+        assert selected.get_feature_metadata()["column"].tolist() == ["alpha", "gamma"]
+        assert selected.get_feature_metadata()["ngram_n"].tolist() == [1, 2]
 
         transposed = project.translate(MatrixTranspose(), selected)["output"]
         assert transposed.primary_key == ["feature_id"]
@@ -148,5 +153,46 @@ def test_transpose_promotes_projected_feature_frame_to_metadata(tmp_path: Path) 
         assert metadata["ngram_n"].tolist() == [1, 2]
         assert metadata["group"].tolist() == ["left", "right"]
         assert "column_index" not in metadata.columns
+    finally:
+        project.close()
+
+
+def test_feature_frame_remains_alias_for_feature_metadata(tmp_path: Path) -> None:
+    project, counts = _build_count_matrix(tmp_path)
+    try:
+        pd.testing.assert_frame_equal(
+            counts.get_feature_frame(),
+            counts.get_feature_metadata(),
+        )
+    finally:
+        project.close()
+
+
+def test_value_transforms_inherit_rich_feature_metadata_without_copying(
+    tmp_path: Path,
+) -> None:
+    project, counts = _build_count_matrix(tmp_path)
+    try:
+        metadata = counts.get_feature_metadata()
+        metadata["ngram_n"] = [1, 1, 2, 2]
+        metadata["family"] = ["lexical", "lexical", "phrase", "phrase"]
+        metadata.to_parquet(counts.storage.feature_metadata_path, index=False)
+
+        trimmed = project.translate(FeatureTrimmer(min_df=2), counts)["output"]
+        expected = metadata.iloc[[0, 1, 3]].reset_index(drop=True).copy()
+        expected["column_index"] = np.arange(len(expected), dtype="int64")
+        pd.testing.assert_frame_equal(trimmed.get_feature_metadata(), expected)
+
+        weighted = project.translate(TfidfTransformer(norm=None), trimmed)["output"]
+        assert weighted.has_own_data()
+        assert weighted.descriptor["lineage"]["feature_metadata_mode"] == "inherit"
+        assert not weighted.storage.feature_metadata_path.exists()
+        pd.testing.assert_frame_equal(weighted.get_feature_metadata(), expected)
+
+        normalized = project.translate(MatrixNormalizer(norm="l2"), weighted)["output"]
+        assert normalized.has_own_data()
+        assert normalized.descriptor["lineage"]["feature_metadata_mode"] == "inherit"
+        assert not normalized.storage.feature_metadata_path.exists()
+        pd.testing.assert_frame_equal(normalized.get_feature_metadata(), expected)
     finally:
         project.close()

@@ -28,6 +28,7 @@ from text_analysis_lab.core.types import (
     DEFAULT_OUTPUT_LABEL,
     ArtifactType,
     ColumnSelect,
+    FeatureMetadataMode,
     LineageMode,
     MetadataMode,
     OperationType,
@@ -131,6 +132,7 @@ class OutputSpec:
     artifact_type: ArtifactType | str = ArtifactType.TABLE
     lineage_mode: LineageMode = "new_key"
     basis_labels: str | Sequence[str] | None = None
+    feature_metadata_mode: FeatureMetadataMode | None = None
     data_serializer: OtherDataSerializer | None = None
     data_serializer_ref: Mapping[str, str] | None = field(init=False, default=None)
 
@@ -160,6 +162,28 @@ class OutputSpec:
                 f"Unsupported output artifact_type={self.artifact_type!r}. "
                 f"Supported: {supported}."
             ) from exc
+
+        feature_metadata_mode = self.feature_metadata_mode
+        is_matrix = artifact_type in {
+            ArtifactType.SPARSE_MATRIX,
+            ArtifactType.DENSE_MATRIX,
+        }
+        if is_matrix:
+            if feature_metadata_mode is None:
+                feature_metadata_mode = "own"
+            elif feature_metadata_mode not in {"own", "inherit"}:
+                raise OutputSpecError(
+                    "Matrix OutputSpec.feature_metadata_mode must be 'own' or 'inherit'."
+                )
+            if feature_metadata_mode == "inherit" and len(basis_labels) != 1:
+                raise OutputSpecError(
+                    "Inherited Feature Metadata requires exactly one basis_label."
+                )
+        elif feature_metadata_mode is not None:
+            raise OutputSpecError(
+                "feature_metadata_mode is valid only for matrix outputs."
+            )
+        object.__setattr__(self, "feature_metadata_mode", feature_metadata_mode)
 
         if artifact_type == ArtifactType.OTHER:
             if self.data_serializer is None:
@@ -196,6 +220,7 @@ class OutputSpec:
             "artifact_type": artifact_type.value,
             "lineage_mode": lineage_mode,
             "basis_labels": self.basis_labels,
+            "feature_metadata_mode": self.feature_metadata_mode,
             "data_serializer": self.data_serializer_ref,
         }
 

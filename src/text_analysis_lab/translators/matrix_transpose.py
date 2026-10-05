@@ -45,7 +45,7 @@ class MatrixTranspose(BaseTranslator):
 
     Output columns identify source rows. If the source already has unique named
     rows, those names are reused. Otherwise TeAL derives deterministic labels
-    from the source primary-key values. The source feature frame is promoted to
+    from the source primary-key values. The source Feature Metadata is promoted to
     local row metadata, excluding only ``column_index`` because the output's fresh
     primary key now carries positional row identity.
     """
@@ -181,26 +181,26 @@ class MatrixTranspose(BaseTranslator):
                 "MatrixTranspose requires a sparse_matrix or dense_matrix source."
             )
         self._source_type = source.artifact_type.value
-        feature_getter = getattr(source, "get_feature_frame", None)
+        feature_getter = getattr(source, "get_feature_metadata", None)
         if callable(feature_getter):
-            feature_frame = feature_getter()
-            if not isinstance(feature_frame, pd.DataFrame):
+            feature_metadata = feature_getter()
+            if not isinstance(feature_metadata, pd.DataFrame):
                 raise OperatorError(
-                    "MatrixTranspose source get_feature_frame() must return a pandas DataFrame."
+                    "MatrixTranspose source get_feature_metadata() must return a pandas DataFrame."
                 )
-            feature_frame = feature_frame.reset_index(drop=True).copy()
+            feature_metadata = feature_metadata.reset_index(drop=True).copy()
         else:
-            feature_frame = pd.DataFrame(
+            feature_metadata = pd.DataFrame(
                 {"column": [str(value) for value in source.get_data_columns()]}
             )
 
         self._source_features = tuple(str(value) for value in source.get_data_columns())
-        if len(feature_frame) != len(self._source_features):
+        if len(feature_metadata) != len(self._source_features):
             raise OperatorError(
-                "MatrixTranspose source feature frame length does not match source "
-                f"feature width: {len(feature_frame)} != {len(self._source_features)}."
+                "MatrixTranspose source Feature Metadata length does not match source "
+                f"feature width: {len(feature_metadata)} != {len(self._source_features)}."
             )
-        self._source_feature_metadata = _transpose_feature_metadata(feature_frame)
+        self._source_feature_metadata = _transpose_feature_metadata(feature_metadata)
         self._source_has_row_names = bool(getattr(source, "has_row_names", False))
         return SourceRequest(
             artifact_type=("sparse_matrix", "dense_matrix"),
@@ -333,14 +333,14 @@ class MatrixTranspose(BaseTranslator):
         return labels
 
 
-def _transpose_feature_metadata(feature_frame: pd.DataFrame) -> pd.DataFrame:
+def _transpose_feature_metadata(feature_metadata: pd.DataFrame) -> pd.DataFrame:
     """Promote feature-axis annotations to row metadata after transpose.
 
     ``column_index`` is local positional structure rather than feature metadata,
     so the new artifact's fresh integer primary key replaces it. All other
-    feature-frame columns are preserved verbatim and in feature-axis order.
+    Feature Metadata columns are preserved verbatim and in feature-axis order.
     """
-    metadata = feature_frame.reset_index(drop=True).copy()
+    metadata = feature_metadata.reset_index(drop=True).copy()
     if "column_index" in metadata.columns:
         metadata = metadata.drop(columns=["column_index"])
     return metadata

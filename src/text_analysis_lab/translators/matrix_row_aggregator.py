@@ -108,6 +108,7 @@ class MatrixRowAggregator(BaseTranslator):
             artifact_type=source.artifact_type,
             lineage_mode="reduced_key",
             basis_labels=DEFAULT_SOURCE_LABEL,
+            feature_metadata_mode="inherit",
         )
 
     def input_request(

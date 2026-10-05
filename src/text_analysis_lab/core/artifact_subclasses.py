@@ -325,17 +325,18 @@ class JsonlArtifact(BaseArtifact):
 class _MatrixArtifact(BaseArtifact):
     """Shared matrix representation helpers.
 
-    Matrix feature axes are positional. ``get_feature_frame()`` annotates those
+    Matrix feature axes are positional. get_feature_metadata() annotates those
     positions, while lazy feature views store only source-relative integer
-    indices in their preserved-key lineage. Feature labels are therefore
-    descriptive fields, not cross-artifact identifiers.
+    indices in their lineage. Matrix-value ownership and Feature Metadata
+    ownership are independent: a transform may own new values while inheriting
+    the exact feature axis from a basis matrix.
     """
 
     value_suffix: ClassVar[str]
 
-    def _own_feature_frame(self) -> pd.DataFrame:
-        """Return the physical feature frame for a matrix that owns its data."""
-        path = self.storage.data_columns_path
+    def _own_feature_metadata(self) -> pd.DataFrame:
+        """Return Feature Metadata physically owned by this matrix artifact."""
+        path = self.storage.feature_metadata_path
         if path.exists():
             frame = pd.read_parquet(path).reset_index(drop=True)
             if "column_index" not in frame.columns:
@@ -349,37 +350,48 @@ class _MatrixArtifact(BaseArtifact):
             }
         )
 
-    def get_feature_frame(self) -> pd.DataFrame:
-        """Return feature-axis annotations in this artifact's local column order.
+    def _feature_metadata_basis(self) -> _MatrixArtifact:
+        """Return the single matrix basis for inherited Feature Metadata."""
+        basis_ids = basis_artifact_ids(self)
+        if len(basis_ids) != 1:
+            raise ArtifactError(
+                f"Matrix artifact {self.artifact_id} requires exactly one basis "
+                "artifact for inherited Feature Metadata."
+            )
+        basis = self.project.get_artifact(basis_ids[0])
+        if not isinstance(basis, _MatrixArtifact):
+            raise ArtifactError(
+                f"Matrix artifact {self.artifact_id} cannot inherit Feature Metadata "
+                f"from non-matrix artifact {basis.artifact_id}."
+            )
+        return basis
 
-        The row position of this frame is the feature position. For lazy feature
-        views, the basis feature frame is projected by the stored integer indices
-        and re-indexed locally. No feature-label matching is performed.
+    def get_feature_metadata(self) -> pd.DataFrame:
+        """Return Feature Metadata in this artifact's local feature order.
+
+        New artifacts record whether they own or inherit Feature Metadata.
+        Older artifacts remain readable: value-owning matrices are treated as
+        metadata owners, while keys-only/lazy matrix views inherit from their
+        single basis artifact. Positional feature projections are applied by
+        index, never by matching feature labels.
         """
-        if self.has_own_data():
-            frame = self._own_feature_frame()
+        lineage = artifact_lineage(self)
+        mode = lineage.get("feature_metadata_mode")
+        if mode is None:
+            inherit = not self.has_own_data()
+        elif mode == "own":
+            inherit = False
+        elif mode == "inherit":
+            inherit = True
         else:
-            lineage = artifact_lineage(self)
-            if str(lineage.get("lineage_mode")) not in {"preserved_key", "rekeyed_key"}:
-                raise ArtifactError(
-                    f"Matrix artifact {self.artifact_id} has no owned data and cannot "
-                    "inherit a feature frame through this lineage mode."
-                )
-            basis_ids = basis_artifact_ids(self)
-            if len(basis_ids) != 1:
-                raise ArtifactError(
-                    f"Matrix artifact {self.artifact_id} requires exactly one basis "
-                    "artifact for inherited feature access."
-                )
-            basis = self.project.get_artifact(basis_ids[0])
-            if basis.artifact_type != self.artifact_type or not isinstance(
-                basis, _MatrixArtifact
-            ):
-                raise ArtifactError(
-                    f"Matrix artifact {self.artifact_id} cannot inherit a feature frame "
-                    f"from {basis.artifact_id}."
-                )
-            frame = basis.get_feature_frame()
+            raise ArtifactError(
+                f"Matrix artifact {self.artifact_id} records invalid "
+                f"feature_metadata_mode={mode!r}."
+            )
+
+        if inherit:
+            basis = self._feature_metadata_basis()
+            frame = basis.get_feature_metadata()
             raw_indices = lineage.get("feature_indices")
             if raw_indices is not None:
                 indices = _validated_feature_indices(
@@ -390,16 +402,35 @@ class _MatrixArtifact(BaseArtifact):
                 frame = frame.iloc[indices].reset_index(drop=True)
             else:
                 frame = frame.reset_index(drop=True)
+        else:
+            if not self.has_own_data():
+                raise ArtifactError(
+                    f"Matrix artifact {self.artifact_id} declares owned Feature "
+                    "Metadata but has no owned matrix data."
+                )
+            frame = self._own_feature_metadata()
 
         frame = frame.copy()
         if "column_index" in frame.columns:
             frame["column_index"] = np.arange(len(frame), dtype="int64")
         else:
             frame.insert(0, "column_index", np.arange(len(frame), dtype="int64"))
+
+        if self.has_own_data():
+            width = self._infer_n_columns()
+            if len(frame) != width:
+                raise ArtifactError(
+                    f"Matrix artifact {self.artifact_id} Feature Metadata width "
+                    f"{len(frame)} does not match matrix width {width}."
+                )
         return frame
 
+    def get_feature_frame(self) -> pd.DataFrame:
+        """Backward-compatible alias for get_feature_metadata()."""
+        return self.get_feature_metadata()
+
     def get_data_columns(self) -> list[str]:
-        frame = self.get_feature_frame()
+        frame = self.get_feature_metadata()
         if frame.empty:
             return []
         if "column" in frame.columns:
@@ -424,12 +455,10 @@ class _MatrixArtifact(BaseArtifact):
                 "for inherited matrix data."
             )
         basis = self.project.get_artifact(basis_ids[0])
-        if basis.artifact_type != self.artifact_type or not isinstance(
-            basis, _MatrixArtifact
-        ):
+        if not isinstance(basis, _MatrixArtifact):
             raise ArtifactError(
                 f"Matrix artifact {self.artifact_id} cannot inherit matrix features "
-                f"from {basis.artifact_id}."
+                f"from non-matrix artifact {basis.artifact_id}."
             )
         basis_indices = basis._feature_indices_to_data_artifact()
         raw_indices = lineage.get("feature_indices")
