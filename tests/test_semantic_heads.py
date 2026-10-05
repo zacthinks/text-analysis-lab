@@ -306,23 +306,25 @@ def test_parent_and_within_moves_are_supported() -> None:
         "description": "",
         "rules": [
             {
-                "id": "to_parent",
-                "when": {"lemma": ["apple"]},
-                "move": [{"parent": {"lemma": ["of"]}}],
+                "id": "child_parent_within",
+                "when": {"lemma": ["a"]},
+                "move": [
+                    {"child": {"lemma": ["b"]}},
+                    {"parent": {"lemma": ["a"]}},
+                    {"within": {"lemma": ["c"]}},
+                ],
             }
         ],
     }
     assert _resolve(
-        text=["of", "apples"],
-        lemmas=["of", "apple"],
-        pos=["ADP", "NOUN"],
-        dep=["ROOT", "pobj"],
-        heads=[0, 0],
-        start=1,
-        end=2,
+        text=["a", "b", "c"],
+        lemmas=["a", "b", "c"],
+        pos=["NOUN", "NOUN", "NOUN"],
+        dep=["ROOT", "dobj", "appos"],
+        heads=[0, 0, 0],
         role="ARG1",
         rules=parent_rules,
-    ) == (1,)
+    ) == (2,)
 
     within_rules = {
         "schema_version": 1,
