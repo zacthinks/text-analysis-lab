@@ -12,6 +12,7 @@ duckdb = pytest.importorskip("duckdb")
 import text_analysis_lab as teal
 from text_analysis_lab.translators import (
     CoreferenceResolver,
+    SemanticRoleHeadResolver,
     SemanticRoleLabeler,
     WordSenseDisambiguator,
 )
@@ -271,11 +272,20 @@ def test_unit10_translators_write_teal_native_lineage(
         assert srl["predicates"].descriptor["lineage"]["basis_artifact_ids"] == [
             sentences.artifact_id
         ]
-        assert srl["roles"].descriptor["lineage"]["basis_artifact_ids"] == [
+        assert srl["role_spans"].descriptor["lineage"]["basis_artifact_ids"] == [
             srl["predicates"].artifact_id
         ]
-        assert set(_frame(srl["roles"])["role"]) >= {"ARG0", "V"}
+        assert set(_frame(srl["role_spans"])["role"]) >= {"ARG0", "V"}
         assert _frame(srl["failures"]).empty
+
+        role_heads = project.translate(
+            SemanticRoleHeadResolver(),
+            {"role_spans": srl["role_spans"], "tokens": tokens},
+        )
+        assert role_heads["role_heads"].descriptor["lineage"]["basis_artifact_ids"] == [
+            srl["role_spans"].artifact_id
+        ]
+        assert set(_frame(role_heads["role_heads"])["role"]) >= {"ARG0", "V"}
 
         wsd = project.translate(
             WordSenseDisambiguator(
