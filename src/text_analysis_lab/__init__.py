@@ -26,10 +26,17 @@ from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
     ColumnRequest,
+    ExecutionCapabilities,
     InputBatch,
     OutputSpec,
     SourceRequest,
     TranslationRequest,
+)
+from text_analysis_lab.core.pipeline import (
+    Pipeline,
+    PipelineCapabilities,
+    PipelineCapabilityIssue,
+    PipelinePort,
 )
 from text_analysis_lab.core.project import Project
 
@@ -44,11 +51,16 @@ __all__ = [
     "ColumnRequest",
     "ConcatReducer",
     "DenseMatrixArtifact",
+    "ExecutionCapabilities",
     "InputBatch",
     "JsonlArtifact",
     "LiteralValue",
     "OtherArtifact",
     "OutputSpec",
+    "Pipeline",
+    "PipelineCapabilities",
+    "PipelineCapabilityIssue",
+    "PipelinePort",
     "Project",
     "SourceRequest",
     "SparseMatrixArtifact",

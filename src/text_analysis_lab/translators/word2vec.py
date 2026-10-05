@@ -14,6 +14,7 @@ from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
+    ExecutionCapabilities,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -135,6 +136,25 @@ class Word2Vec(BaseTranslator):
         # in the output artifact and are never persisted as operator assets.
         self.training_loss_: tuple[float, ...] = ()
         self.gensim_version_: str | None = None
+
+    def execution_capabilities(
+        self,
+        *,
+        project: Any | None = None,
+    ) -> ExecutionCapabilities:
+        """Word2Vec is a training procedure, not a reusable transform."""
+        _ = project
+        reason = (
+            "Word2Vec trains new embeddings during execution and cannot be used "
+            "inside a transform-only Pipeline."
+        )
+        return ExecutionCapabilities(
+            reusable=False,
+            artifact=False,
+            native=False,
+            portable=False,
+            reasons=(reason,),
+        )
 
     def translate(
         self,

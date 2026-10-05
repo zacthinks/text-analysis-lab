@@ -133,7 +133,10 @@ class EmbeddingLookup(BaseTranslator):
         valid = raw_words.notna()
         if self.drop_empty:
             valid &= words.str.len().fillna(0).gt(0)
-        positions = words.map(position_by_name).fillna(-1).to_numpy(dtype=np.int64)
+        positions = words.map(position_by_name).fillna(-1).to_numpy(
+            dtype=np.int64,
+            copy=True,
+        )
         positions[~valid.to_numpy(dtype=bool)] = -1
         in_vocabulary = positions >= 0
         if self.oov_policy == "error" and not bool(np.all(in_vocabulary)):

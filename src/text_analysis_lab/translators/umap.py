@@ -14,6 +14,7 @@ from text_analysis_lab.core.errors import OperatorError, OperatorNotFittedError
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
+    ExecutionCapabilities,
     ColumnRequest,
     InputBatch,
     OutputMap,
@@ -160,6 +161,97 @@ class UMAP(BaseTranslator):
     @property
     def supports_fit_translate(self) -> bool:
         return not self._fit_completed
+
+    def execution_capabilities(
+        self,
+        *,
+        project: Project | None = None,
+    ) -> ExecutionCapabilities:
+        """Report whether this fitted/reconstructable UMAP can be reused."""
+        if not self._fit_completed:
+            return ExecutionCapabilities(
+                reusable=False,
+                artifact=False,
+                native=False,
+                portable=False,
+                reasons=("UMAP must be fitted before it can be used in a pipeline.",),
+            )
+        if self.is_fitted:
+            return ExecutionCapabilities(
+                reusable=True,
+                artifact=True,
+                native=True,
+                portable=self.reuse == "stored",
+                reasons=()
+                if self.reuse == "stored"
+                else ("UMAP reuse depends on project-local reconstruction state.",),
+            )
+        if self.reuse == "none":
+            reason = (
+                "UMAP reuse='none' intentionally discards transform-capable fitted state."
+            )
+            return ExecutionCapabilities(
+                reusable=False,
+                artifact=False,
+                native=False,
+                portable=False,
+                reasons=(reason,),
+            )
+        if self.reuse == "recompute":
+            requirement = (
+                ()
+                if self.fit_source_artifact_id_ is None
+                else (f"artifact:{self.fit_source_artifact_id_}",)
+            )
+            if project is None:
+                return ExecutionCapabilities(
+                    reusable=True,
+                    artifact=False,
+                    native=False,
+                    portable=False,
+                    requirements=requirement,
+                    reasons=("UMAP reuse='recompute' requires a Project context.",),
+                )
+            if self.fit_source_artifact_id_ is None:
+                reason = "UMAP reuse='recompute' is missing its fitting source artifact id."
+                return ExecutionCapabilities(
+                    reusable=False,
+                    artifact=False,
+                    native=False,
+                    portable=False,
+                    reasons=(reason,),
+                )
+            try:
+                project.get_artifact(self.fit_source_artifact_id_)
+            except Exception:
+                reason = (
+                    "UMAP reuse='recompute' cannot resolve fitting source "
+                    f"{self.fit_source_artifact_id_!r} in this Project."
+                )
+                return ExecutionCapabilities(
+                    reusable=False,
+                    artifact=False,
+                    native=False,
+                    portable=False,
+                    requirements=requirement,
+                    reasons=(reason,),
+                )
+            return ExecutionCapabilities(
+                reusable=True,
+                artifact=True,
+                native=True,
+                portable=False,
+                requirements=requirement,
+                reasons=("UMAP reuse='recompute' requires project-local reconstruction.",),
+            )
+        reason = "Stored UMAP is missing its fitted estimator state."
+        return ExecutionCapabilities(
+            reusable=False,
+            artifact=False,
+            native=False,
+            portable=False,
+            reasons=(reason,),
+        )
 
     @property
     def supports_parallel_translate(self) -> bool:
