@@ -352,7 +352,7 @@ def test_standalone_matrix_chain_preserves_and_projects_feature_metadata() -> No
 
     dictionary = dictionaries.Dictionary(
         {"alpha_code": ["alpha"], "gamma_code": ["gamma"]},
-        valuetype="exact",
+        valuetype="fixed",
         case_sensitive=True,
     )
     translated = DictionaryTranslator(dictionary).translate(trimmed)
@@ -1108,7 +1108,7 @@ def test_word2vec_standalone_matches_teal_batch(monkeypatch) -> None:
     assert direct["row_names"] == ["alpha", "beta", "gamma"]
     assert direct["counts"].tolist() == [3, 2, 1]
     np.testing.assert_array_equal(direct["values"], vectors)
-    assert direct["feature_metadata"]["column"].tolist() == ["dim_0", "dim_1", "dim_2"]
+    assert direct["feature_metadata"]["column"].tolist() == ["dimension_0", "dimension_1", "dimension_2"]
     assert direct["training_loss"] == (4.0, 2.0)
 
     frame = pd.DataFrame(
