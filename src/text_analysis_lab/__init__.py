@@ -39,6 +39,12 @@ from text_analysis_lab.core.pipeline import (
     PipelinePort,
 )
 from text_analysis_lab.core.project import Project
+from text_analysis_lab.linguistics import (
+    SemanticHeadRules,
+    export_default_semantic_head_rules,
+    get_default_semantic_head_rules,
+    load_semantic_head_rules,
+)
 
 from . import analysis, dictionaries, translators, visualization
 
@@ -62,6 +68,7 @@ __all__ = [
     "PipelineCapabilityIssue",
     "PipelinePort",
     "Project",
+    "SemanticHeadRules",
     "SourceRequest",
     "SparseMatrixArtifact",
     "TableArtifact",
@@ -70,7 +77,10 @@ __all__ = [
     "analysis",
     "concat",
     "dictionaries",
+    "export_default_semantic_head_rules",
+    "get_default_semantic_head_rules",
     "literal",
+    "load_semantic_head_rules",
     "load_artifact",
     "translators",
     "visualization",
