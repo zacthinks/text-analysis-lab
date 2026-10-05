@@ -45,6 +45,7 @@ from text_analysis_lab.translators import (
     RegexCleaner,
     RegexReplaceRule,
     SVD,
+    SemanticRoleHeadResolver,
     SemanticRoleLabeler,
     SentenceTransformerEncoder,
     SpacyTranslator,
@@ -1494,7 +1495,8 @@ def test_semantic_role_labeler_standalone_matches_teal_batch(monkeypatch) -> Non
         sentence_keys=["row_id", "sentence_id"],
     )
     assert direct["predicates"]["text"].tolist() == ["runs"]
-    assert direct["roles"]["role"].tolist() == ["ARG0", "V", "ARGM-MNR"]
+    assert direct["role_spans"]["role"].tolist() == ["ARG0", "V", "ARGM-MNR"]
+    assert "head_token_id" not in direct["role_spans"].columns
 
     batch = translator.translate_batch(
         {
@@ -1522,7 +1524,7 @@ def test_semantic_role_labeler_standalone_matches_teal_batch(monkeypatch) -> Non
         mode="translate",
         request=TranslationRequest(),
     ).outputs
-    for label in ("predicates", "roles", "failures"):
+    for label in ("predicates", "role_spans", "failures"):
         combined = pd.concat(
             [batch[label]["keys"], batch[label]["data"]],
             axis=1,
