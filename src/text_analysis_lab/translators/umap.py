@@ -192,6 +192,7 @@ class UMAP(BaseTranslator):
 
     def translate(self, matrix: Any) -> Any:
         """Apply fitted UMAP state with standalone matrix schema parity."""
+        source_payload = matrix if isinstance(matrix, Mapping) else None
         matrix, feature_metadata, structured = unpack_standalone_matrix(
             matrix,
             name="UMAP.translate(...)",
@@ -214,7 +215,8 @@ class UMAP(BaseTranslator):
                 values,
                 feature_metadata_from_columns(
                     [f"umap_{i}" for i in range(self.n_components)]
-                ),
+                    source=source_payload,
+            ),
                 name="UMAP",
             )
         return values

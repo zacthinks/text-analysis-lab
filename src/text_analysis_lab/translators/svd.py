@@ -170,6 +170,7 @@ class SVD(BaseTranslator):
         """Project rows through the fitted decomposition with matrix metadata parity."""
 
         estimator = self._require_estimator()
+        source_payload = matrix if isinstance(matrix, Mapping) else None
         matrix, feature_metadata, structured = unpack_standalone_matrix(
             matrix,
             name="SVD.translate(...)",
@@ -195,6 +196,7 @@ class SVD(BaseTranslator):
                 values,
                 feature_metadata_from_columns(_component_columns(self.n_components)),
                 name="SVD",
+                source=source_payload,
             )
         return values
 

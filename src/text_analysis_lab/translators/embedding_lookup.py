@@ -101,13 +101,23 @@ class EmbeddingLookup(BaseTranslator):
                 )
             feature_metadata = embedded_metadata
         if row_names is None and payload is not None:
-            raw_names = payload.get("row_names", payload.get("words"))
-            if raw_names is not None:
-                row_names = raw_names
+            row_metadata = payload.get("metadata")
+            row_name_column = payload.get("row_name_column")
+            if (
+                isinstance(row_metadata, pd.DataFrame)
+                and isinstance(row_name_column, str)
+                and row_name_column in row_metadata.columns
+            ):
+                row_names = row_metadata[row_name_column].tolist()
+            else:
+                # Backward compatibility for older standalone matrix payloads.
+                raw_names = payload.get("row_names", payload.get("words"))
+                if raw_names is not None:
+                    row_names = raw_names
         if row_names is None:
             raise ValueError(
                 "EmbeddingLookup.translate(...) requires row_names for raw matrices "
-                "or row_names in the standalone matrix mapping."
+                "or a row_name_column in standalone matrix metadata."
             )
         shape = embeddings.shape
         names = [str(value) for value in row_names]

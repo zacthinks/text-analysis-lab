@@ -184,6 +184,7 @@ class LDA(BaseTranslator):
         """Infer topic mixtures while preserving standalone matrix schema semantics."""
 
         estimator = self._require_estimator()
+        source_payload = matrix if isinstance(matrix, Mapping) else None
         matrix, feature_metadata, structured = unpack_standalone_matrix(
             matrix,
             name="LDA.translate(...)",
@@ -210,7 +211,8 @@ class LDA(BaseTranslator):
                 values,
                 feature_metadata_from_columns(
                     [f"topic_{i}" for i in range(self.n_components)]
-                ),
+                    source=source_payload,
+            ),
                 name="LDA",
             )
         return values

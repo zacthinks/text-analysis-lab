@@ -478,21 +478,21 @@ class _MatrixArtifact(BaseArtifact):
 
     @property
     def has_row_names(self) -> bool:
-        """Whether this matrix defines a unique human-readable row axis."""
-        data = self.components.get("data", {})
-        return isinstance(data, dict) and isinstance(data.get("row_names"), dict)
+        """Whether this matrix designates one ordinary metadata column as row names."""
+        value = self.descriptor.get("row_name_column")
+        return isinstance(value, str) and bool(value)
 
     @property
     def row_name(self) -> str | None:
-        """Return the semantic row-axis name, such as ``"word"``."""
+        """Return the privileged row-name metadata column, such as ``"word"``."""
         if not self.has_row_names:
             return None
-        value = self.components["data"]["row_names"].get("name")
-        return str(value) if value is not None else None
+        return str(self.descriptor["row_name_column"])
 
     def get_row_names(self, *, positions: Sequence[int] | None = None) -> list[str]:
-        """Return row names in requested artifact-position order."""
-        if not self.has_row_names:
+        """Return values from the privileged row-name metadata column."""
+        row_name_column = self.row_name
+        if row_name_column is None:
             raise UnsupportedArtifactOperationError(
                 f"Matrix artifact {self.artifact_id} does not define row names."
             )
@@ -502,17 +502,23 @@ class _MatrixArtifact(BaseArtifact):
         if not resolved:
             return []
 
-        locations = _locations_for_positions(self, resolved)
-        wanted_by_batch = _group_offsets_by_batch(locations)
-        names_by_position: dict[int, str] = {}
-        for batch, offset_to_position in wanted_by_batch.items():
-            path = self.storage.data_row_names_part_path(batch)
-            if not path.exists():
-                raise ArtifactError(f"Missing matrix row_names part: {path}")
-            frame = pd.read_parquet(path, columns=["row_name"])
-            for offset, position in offset_to_position.items():
-                names_by_position[position] = str(frame.iloc[int(offset)]["row_name"])
-        return [names_by_position[position] for position in resolved]
+        query_info = self.query_columns(metadata_mode="full")
+        mapping = dict(query_info.get("mapping", {}))
+        output_name = mapping.get(f"metadata.{row_name_column}", row_name_column)
+        frame = self.query(
+            key_columns=False,
+            data_columns=False,
+            metadata_columns=[row_name_column],
+            metadata_mode="full",
+            positions=resolved,
+            form="table",
+            include_position=False,
+        )
+        if output_name not in frame.columns:
+            raise ArtifactError(
+                f"Matrix row-name metadata column {row_name_column!r} could not be resolved."
+            )
+        return [str(value) for value in frame[output_name].tolist()]
 
     def positions_by_row_names(self, row_names: Sequence[str]) -> list[int]:
         """Resolve unique row names to artifact-local integer positions."""

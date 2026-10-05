@@ -35,11 +35,11 @@ def _register(project, artifact_id, *, batches, artifact_type="dense_matrix"):
                 "keys": pd.DataFrame(
                     {"row_id": np.arange(next_id, next_id + len(names), dtype=np.int64)}
                 ),
+                "metadata": pd.DataFrame({"term": names}),
+                "row_name_column": "term",
                 "data": {
                     "values": matrix,
                     "columns": ["x", "y"],
-                    "row_names": names,
-                    "row_name": "term",
                 },
             }
         )
@@ -70,6 +70,8 @@ def test_named_matrix_rows_round_trip_and_analytics(
         )
         assert matrix.has_row_names
         assert matrix.row_name == "term"
+        assert matrix.descriptor["row_name_column"] == "term"
+        assert not (matrix.storage.data_dir / "row_names").exists()
         assert matrix.get_row_names() == ["alpha", "beta", "gamma"]
         assert matrix.get_row_names(positions=[2, 0]) == ["gamma", "alpha"]
         assert matrix.position_by_row_name("beta") == 1
@@ -101,26 +103,26 @@ def test_named_rows_must_be_consistent_and_globally_unique(tmp_path: Path) -> No
     writer.write(
         {
             "keys": pd.DataFrame({"row_id": [0]}),
+            "metadata": pd.DataFrame({"term": ["same"]}),
+            "row_name_column": "term",
             "data": {
                 "values": np.asarray([[1, 0]]),
                 "columns": ["x", "y"],
-                "row_names": ["same"],
-                "row_name": "term",
             },
         }
     )
     writer.write(
         {
             "keys": pd.DataFrame({"row_id": [1]}),
+            "metadata": pd.DataFrame({"term": ["same"]}),
+            "row_name_column": "term",
             "data": {
                 "values": np.asarray([[0, 1]]),
                 "columns": ["x", "y"],
-                "row_names": ["same"],
-                "row_name": "term",
             },
         }
     )
-    with pytest.raises(ArtifactError, match="Duplicate matrix row_names"):
+    with pytest.raises(ArtifactError, match="Duplicate matrix row names"):
         writer.finalize()
     descriptor = json.loads((artifact_dir / "artifact.json").read_text())
     assert descriptor["status"] == "failed"

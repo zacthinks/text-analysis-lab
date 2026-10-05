@@ -69,6 +69,7 @@ class MatrixNormalizer(BaseTranslator):
 
     def translate(self, matrix: Any) -> Any:
         """Normalize matrix values while preserving standalone Feature Metadata."""
+        source_payload = matrix if isinstance(matrix, Mapping) else None
         matrix, feature_metadata, structured = unpack_standalone_matrix(
             matrix,
             name="MatrixNormalizer.translate(...)",
@@ -91,6 +92,7 @@ class MatrixNormalizer(BaseTranslator):
                 normalized,
                 feature_metadata,
                 name="MatrixNormalizer",
+                source=source_payload,
             )
         return normalized
 

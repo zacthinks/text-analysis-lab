@@ -94,12 +94,17 @@ def standalone_matrix_payload(
     feature_metadata: pd.DataFrame,
     *,
     name: str,
+    source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return the canonical standalone matrix representation."""
+    """Return the canonical standalone matrix representation.
+
+    Row-preserving transforms carry ordinary row metadata and its optional
+    privileged row-name designation forward unchanged.
+    """
     shape = getattr(values, "shape", None)
     if shape is None or len(shape) != 2:
         raise ValueError(f"{name} requires a two-dimensional matrix.")
-    return {
+    payload: dict[str, Any] = {
         "values": values,
         "feature_metadata": normalize_feature_metadata(
             feature_metadata,
@@ -107,6 +112,27 @@ def standalone_matrix_payload(
             name=name,
         ),
     }
+    if source is not None:
+        metadata = source.get("metadata")
+        if metadata is not None:
+            if not isinstance(metadata, pd.DataFrame):
+                raise TypeError(f"{name} standalone metadata must be a pandas DataFrame.")
+            if len(metadata) != int(shape[0]):
+                raise ValueError(
+                    f"{name} row metadata count {len(metadata)} does not match "
+                    f"matrix row count {int(shape[0])}."
+                )
+            payload["metadata"] = metadata.reset_index(drop=True).copy()
+        row_name_column = source.get("row_name_column")
+        if row_name_column is not None:
+            if not isinstance(row_name_column, str) or not row_name_column:
+                raise ValueError(f"{name} row_name_column must be a non-empty string.")
+            if "metadata" not in payload or row_name_column not in payload["metadata"].columns:
+                raise ValueError(
+                    f"{name} row_name_column {row_name_column!r} is not present in metadata."
+                )
+            payload["row_name_column"] = row_name_column
+    return payload
 
 
 def feature_labels(feature_metadata: pd.DataFrame, *, name: str) -> list[str]:

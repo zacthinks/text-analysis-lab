@@ -105,6 +105,7 @@ class FeatureTrimmer(BaseTranslator):
 
     def translate(self, matrix: Any) -> Any:
         """Apply the fitted positional feature mask and project Feature Metadata."""
+        source_payload = matrix if isinstance(matrix, Mapping) else None
         matrix, feature_metadata, structured = unpack_standalone_matrix(
             matrix,
             name="FeatureTrimmer.translate(...)",
@@ -124,6 +125,7 @@ class FeatureTrimmer(BaseTranslator):
                 values,
                 projected,
                 name="FeatureTrimmer",
+                source=source_payload,
             )
         return values
 

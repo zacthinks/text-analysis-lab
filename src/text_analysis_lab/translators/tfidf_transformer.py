@@ -95,6 +95,7 @@ class TfidfTransformer(BaseTranslator):
 
     def translate(self, matrix: Any):
         """Apply fitted TF-IDF weights while preserving standalone Feature Metadata."""
+        source_payload = matrix if isinstance(matrix, Mapping) else None
         matrix, feature_metadata, structured = unpack_standalone_matrix(
             matrix,
             name="TfidfTransformer.translate(...)",
@@ -125,6 +126,7 @@ class TfidfTransformer(BaseTranslator):
                 values,
                 feature_metadata,
                 name="TfidfTransformer",
+                source=source_payload,
             )
         return values
 

@@ -235,10 +235,6 @@ class ArtifactStorage:
         """Backward-compatible alias for feature_metadata_path."""
         return self.feature_metadata_path
 
-    @property
-    def data_row_names_dir(self) -> Path:
-        return self.data_dir / "row_names"
-
     @staticmethod
     def part_name(index: int, suffix: str) -> str:
         return f"part-{int(index):06d}.{suffix}"
@@ -257,9 +253,6 @@ class ArtifactStorage:
 
     def data_value_part_path(self, index: int, suffix: str) -> Path:
         return self.data_values_dir / self.part_name(index, suffix)
-
-    def data_row_names_part_path(self, index: int, suffix: str = "parquet") -> Path:
-        return self.data_row_names_dir / self.part_name(index, suffix)
 
     def ensure_artifact_dir(self) -> Path:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)

@@ -161,11 +161,17 @@ class Word2Vec(BaseTranslator):
         columns = _dimension_columns(self.vector_size)
         return {
             "words": words,
-            "row_names": words,
             "counts": counts,
             "values": vectors,
             "columns": columns,
             "feature_metadata": feature_metadata_from_columns(columns),
+            "metadata": pd.DataFrame(
+                {
+                    self.row_name: words,
+                    "count": counts.astype(np.int64, copy=False),
+                }
+            ),
+            "row_name_column": self.row_name,
             "training_loss": losses,
             "gensim_version": gensim_version,
         }
@@ -259,14 +265,11 @@ class Word2Vec(BaseTranslator):
                     "keys": pd.DataFrame(
                         {self.word_key: np.arange(len(words), dtype=np.int64)}
                     ),
-                    "metadata": pd.DataFrame(
-                        {"count": counts.astype(np.int64, copy=False)}
-                    ),
+                    "metadata": trained["metadata"],
+                    "row_name_column": self.row_name,
                     "data": {
                         "values": trained["values"],
                         "columns": trained["columns"],
-                        "row_names": words,
-                        "row_name": self.row_name,
                     },
                 }
             }

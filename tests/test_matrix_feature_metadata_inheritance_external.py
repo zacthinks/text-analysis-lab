@@ -222,11 +222,11 @@ def test_embedding_lookup_inherits_feature_metadata_from_embedding_source(
         embedding_writer.write(
             {
                 "keys": pd.DataFrame({"word_id": [0, 1]}),
+                "metadata": pd.DataFrame({"word": ["a", "b"]}),
+                "row_name_column": "word",
                 "data": {
                     "values": np.asarray([[1.0, 2.0], [3.0, 4.0]]),
                     "columns": ["d0", "d1"],
-                    "row_names": ["a", "b"],
-                    "row_name": "word",
                 },
             }
         )

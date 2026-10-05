@@ -691,7 +691,8 @@ def test_embedding_lookup_standalone_matches_teal_batch(
         {
             "values": embeddings,
             "columns": ["d0", "d1"],
-            "row_names": row_names,
+            "metadata": pd.DataFrame({"word": row_names}),
+            "row_name_column": "word",
         },
     )
     direct_values = (
@@ -803,15 +804,16 @@ def test_matrix_transpose_standalone_matches_teal_batch() -> None:
         matrix.toarray().T,
     )
     assert direct["columns"] == row_labels
-    assert direct["row_names"] == features
-    assert direct["metadata"].columns.tolist() == ["column", "family"]
+    assert direct["row_name_column"] == "feature"
+    assert direct["metadata"].columns.tolist() == ["feature", "family"]
+    assert direct["metadata"]["feature"].tolist() == features
 
     source = SimpleNamespace(
         artifact_type=ArtifactType.SPARSE_MATRIX,
         primary_key=["doc_id"],
         get_data_columns=lambda: list(features),
         get_feature_frame=lambda: feature_metadata.copy(),
-        has_row_names=False,
+        row_name=None,
     )
     translator.input_request(
         sources={"source": source},
@@ -841,7 +843,7 @@ def test_matrix_transpose_standalone_matches_teal_batch() -> None:
         direct["values"].toarray(),
     )
     assert batch["data"]["columns"] == direct["columns"]
-    assert batch["data"]["row_names"] == direct["row_names"]
+    assert batch["row_name_column"] == direct["row_name_column"]
     pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
 
 
@@ -1105,7 +1107,8 @@ def test_word2vec_standalone_matches_teal_batch(monkeypatch) -> None:
 
     direct = translator.translate(sequences)
     assert direct["words"] == ["alpha", "beta", "gamma"]
-    assert direct["row_names"] == ["alpha", "beta", "gamma"]
+    assert direct["metadata"]["word"].tolist() == ["alpha", "beta", "gamma"]
+    assert direct["row_name_column"] == "word"
     assert direct["counts"].tolist() == [3, 2, 1]
     np.testing.assert_array_equal(direct["values"], vectors)
     assert direct["feature_metadata"]["column"].tolist() == ["dimension_0", "dimension_1", "dimension_2"]
@@ -1135,7 +1138,8 @@ def test_word2vec_standalone_matches_teal_batch(monkeypatch) -> None:
         request=TranslationRequest(),
     ).outputs["output"]
     np.testing.assert_array_equal(batch["data"]["values"], direct["values"])
-    assert batch["data"]["row_names"] == direct["words"]
+    assert batch["row_name_column"] == direct["row_name_column"]
+    assert batch["metadata"]["word"].tolist() == direct["words"]
     assert batch["metadata"]["count"].tolist() == direct["counts"].tolist()
 
 
