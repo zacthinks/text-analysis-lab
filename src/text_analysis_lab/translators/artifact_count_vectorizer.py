@@ -288,7 +288,9 @@ class ArtifactCountVectorizer(BaseTranslator):
                     "keys": translated["groups"],
                     "data": {
                         "values": translated["values"],
-                        "columns": translated["columns"],
+                        "columns": translated["feature_metadata"]["column"]
+                        .astype(str)
+                        .tolist(),
                     },
                 }
             }
@@ -427,7 +429,6 @@ class ArtifactCountVectorizer(BaseTranslator):
                 vocabulary=vocabulary,
                 binary=self.binary,
             ),
-            "columns": columns,
             "feature_metadata": feature_metadata_from_columns(columns),
         }
 

@@ -282,9 +282,11 @@ class DictionaryTranslator(BaseTranslator):
                     "metadata": translated["metadata"],
                     "data": {
                         "values": translated["values"],
-                        "columns": translated["feature_metadata"]["column"]
-                        .astype(str)
-                        .tolist(),
+                        "columns": tuple(
+                            translated["feature_metadata"]["column"]
+                            .astype(str)
+                            .tolist()
+                        ),
                     },
                 }
             }

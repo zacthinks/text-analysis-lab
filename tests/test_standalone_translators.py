@@ -927,7 +927,8 @@ def test_artifact_count_vectorizer_standalone_matches_teal_batch() -> None:
 
     direct = translator.translate(frame, source_key=source_key)
     assert direct["groups"].to_dict("list") == {"doc_id": [1, 2]}
-    assert direct["columns"] == ["alpha", "beta"]
+    assert direct["feature_metadata"]["column"].tolist() == ["alpha", "beta"]
+    assert "columns" not in direct
     assert direct["values"].toarray().tolist() == [[2, 1], [0, 2]]
 
     packet = InputBatch(
@@ -950,7 +951,7 @@ def test_artifact_count_vectorizer_standalone_matches_teal_batch() -> None:
         batch["data"]["values"].toarray(),
         direct["values"].toarray(),
     )
-    assert batch["data"]["columns"] == direct["columns"]
+    assert batch["data"]["columns"] == direct["feature_metadata"]["column"].tolist()
 
 
 def test_dictionary_translator_standalone_matches_teal_batch() -> None:
@@ -999,7 +1000,9 @@ def test_dictionary_translator_standalone_matches_teal_batch() -> None:
         batch["data"]["values"].toarray(),
         direct["values"].toarray(),
     )
-    assert batch["data"]["columns"] == direct["feature_metadata"]["column"].tolist()
+    assert batch["data"]["columns"] == tuple(
+        direct["feature_metadata"]["column"].tolist()
+    )
     pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
 
 
