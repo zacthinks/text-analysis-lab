@@ -33,6 +33,7 @@ from text_analysis_lab.core.errors import (
     ArtifactRestoreBlockedError,
     OperatorError,
     OperatorNotFoundError,
+    PipelineError,
 )
 from text_analysis_lab.core.feature_subset import (
     FeatureSubsetFunction,
@@ -109,6 +110,7 @@ from text_analysis_lab.core.types import (
 )
 
 if TYPE_CHECKING:
+    from text_analysis_lab.core.pipeline import Pipeline
     from text_analysis_lab.gui import ProjectCenterServer
 
 
@@ -972,6 +974,24 @@ class Project:
             overwrite=overwrite,
             **params,
         )
+
+    def run_pipeline(
+        self,
+        pipeline: Pipeline,
+        sources: BaseArtifact
+        | str
+        | Mapping[str, BaseArtifact | str],
+        *,
+        outputs: Sequence[str] | None = None,
+    ) -> Mapping[str, BaseArtifact]:
+        """Run a transform-only Pipeline through ordinary TeAL translations."""
+        from text_analysis_lab.core.pipeline import Pipeline
+
+        if not isinstance(pipeline, Pipeline):
+            raise PipelineError(
+                f"run_pipeline(...) requires a Pipeline; got {type(pipeline).__name__}."
+            )
+        return pipeline.run_artifacts(self, sources, outputs=outputs)
 
     def resume_operation(
         self,
