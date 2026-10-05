@@ -19,7 +19,11 @@ from text_analysis_lab.core.operator import (
 from text_analysis_lab.linguistics.cache import user_cache_paths
 from text_analysis_lab.linguistics.coreference.runtime import FastCorefRuntime
 from text_analysis_lab.linguistics.device import resolve_devices
-from text_analysis_lab.linguistics.heads import SemanticHeadRules, resolve_semantic_head_indices
+from text_analysis_lab.linguistics.heads import (
+    SemanticHeadRules,
+    load_semantic_head_rules,
+    resolve_semantic_head_indices,
+)
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -69,7 +73,7 @@ class CoreferenceResolver(BaseTranslator):
         compile_model: bool = False,
         max_tokens_in_batch: int = 2_000,
         show_progress: bool = False,
-        head_rules: SemanticHeadRules | None = None,
+        head_rules: SemanticHeadRules | Mapping[str, Any] | str | None = None,
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
@@ -97,9 +101,7 @@ class CoreferenceResolver(BaseTranslator):
         self.compile_model = bool(compile_model)
         self.max_tokens_in_batch = int(max_tokens_in_batch)
         self.show_progress = bool(show_progress)
-        if head_rules is not None and not isinstance(head_rules, SemanticHeadRules):
-            raise TypeError("head_rules must be a SemanticHeadRules instance or None.")
-        self.head_rules = SemanticHeadRules() if head_rules is None else head_rules
+        self.head_rules = load_semantic_head_rules(head_rules)
 
 
     def translate(
@@ -582,7 +584,12 @@ def _align_mention(
             dependencies=[None if pd.isna(v) else str(v) for v in sentence["dep"]],
             pos=[None if pd.isna(v) else str(v) for v in sentence["pos"]],
             text=[str(v) for v in sentence["text"]],
-            role="COREF",
+            lemmas=[None if pd.isna(v) else str(v) for v in sentence["lemma"]],
+            ent_types=[
+                None if pd.isna(v) else str(v) for v in sentence["ent_type"]
+            ],
+            source="coreference",
+            role=None,
             rules=head_rules,
         )
         head_index = heads[0] if heads else None
