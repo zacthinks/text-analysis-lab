@@ -23,6 +23,7 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
 from text_analysis_lab.translators._matrix_transform_utils import (
+    feature_metadata_from_columns,
     feature_labels,
     unpack_standalone_matrix,
     native_matrix_packet,
@@ -138,6 +139,7 @@ class MatrixTranspose(BaseTranslator):
         result: dict[str, Any] = {
             "values": values,
             "columns": columns,
+            "feature_metadata": feature_metadata_from_columns(columns),
             "row_names": feature_names,
             "row_name": self.row_name,
         }

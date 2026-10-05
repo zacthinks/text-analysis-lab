@@ -26,6 +26,7 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.core.types import DEFAULT_SOURCE_LABEL
+from text_analysis_lab.translators._matrix_transform_utils import feature_metadata_from_columns
 from text_analysis_lab.translators._hf_utils import (
     ContextWindowExceededError,
     TransformerResourceError,
@@ -247,11 +248,13 @@ class ContextualTransformer(BaseTranslator):
                 "ContextualTransformer internal alignment failure: token rows and contextual "
                 f"embedding rows differ ({len(token_frame)} vs {len(embeddings)})."
             )
+        columns = [f"dim_{index}" for index in range(embeddings.shape[1])]
         return {
             "tokens": token_frame,
             "metadata": metadata,
             "values": embeddings,
-            "columns": [f"dim_{index}" for index in range(embeddings.shape[1])],
+            "columns": columns,
+            "feature_metadata": feature_metadata_from_columns(columns),
         }
 
     @property

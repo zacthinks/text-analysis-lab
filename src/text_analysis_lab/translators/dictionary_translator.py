@@ -176,8 +176,7 @@ class DictionaryTranslator(BaseTranslator):
                 }
             ),
         }
-        if structured:
-            result["feature_metadata"] = feature_metadata_from_columns(columns)
+        result["feature_metadata"] = feature_metadata_from_columns(columns)
         return result
 
     @property

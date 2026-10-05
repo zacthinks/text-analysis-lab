@@ -23,6 +23,7 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.translators._matrix_transform_utils import feature_metadata_from_columns
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -157,11 +158,13 @@ class Word2Vec(BaseTranslator):
         words, counts, vectors, losses, gensim_version = self._train(normalized)
         self.training_loss_ = losses
         self.gensim_version_ = gensim_version
+        columns = _dimension_columns(self.vector_size)
         return {
             "words": words,
             "counts": counts,
             "values": vectors,
-            "columns": _dimension_columns(self.vector_size),
+            "columns": columns,
+            "feature_metadata": feature_metadata_from_columns(columns),
             "training_loss": losses,
             "gensim_version": gensim_version,
         }
