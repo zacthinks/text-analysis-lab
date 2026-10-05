@@ -62,6 +62,11 @@ class RestrictOperator(BaseOperator):
             artifact_type=source.artifact_type,
             lineage_mode="preserved_key",
             basis_labels="source",
+            feature_metadata_mode=(
+                "inherit"
+                if source.artifact_type.value in {"sparse_matrix", "dense_matrix"}
+                else None
+            ),
         )
 
     def to_json_state(self) -> dict[str, Any]:
@@ -171,6 +176,11 @@ def restrict(
         lineage_mode="preserved_key",
         status="incomplete",
         basis_artifact_ids=(source_artifact.artifact_id,),
+        feature_metadata_mode=(
+            "inherit"
+            if source_artifact.artifact_type.value in {"sparse_matrix", "dense_matrix"}
+            else None
+        ),
     )
     project.catalog.add_operation_output(operation_id, label, artifact_id, ordinal=0)
     writer = create_artifact_writer(

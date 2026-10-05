@@ -170,8 +170,11 @@ class OutputSpec:
         }
         if is_matrix:
             if feature_metadata_mode is None:
-                feature_metadata_mode = "own"
-            elif feature_metadata_mode not in {"own", "inherit"}:
+                raise OutputSpecError(
+                    "Matrix OutputSpec.feature_metadata_mode must be explicitly set "
+                    "to 'own' or 'inherit'."
+                )
+            if feature_metadata_mode not in {"own", "inherit"}:
                 raise OutputSpecError(
                     "Matrix OutputSpec.feature_metadata_mode must be 'own' or 'inherit'."
                 )

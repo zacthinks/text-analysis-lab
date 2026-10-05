@@ -284,6 +284,7 @@ class ContextualTransformer(BaseTranslator):
                 artifact_type="dense_matrix",
                 lineage_mode="preserved_key",
                 basis_labels=TOKENS_LABEL,
+                feature_metadata_mode="own",
             ),
         }
 

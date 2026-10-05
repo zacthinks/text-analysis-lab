@@ -9,8 +9,8 @@ import pytest
 from scipy import sparse
 from sklearn.feature_extraction.text import TfidfTransformer as SklearnTfidf
 
-from text_analysis_lab.core.errors import ArtifactError, OperatorError
-from text_analysis_lab.core.operator import InputBatch, TranslationRequest
+from text_analysis_lab.core.errors import ArtifactError, OperatorError, OutputSpecError
+from text_analysis_lab.core.operator import InputBatch, OutputSpec, TranslationRequest
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.translators import (
     LDA,
@@ -36,6 +36,25 @@ COUNTS = sparse.csr_matrix(
     )
 )
 FEATURES = ["alpha", "beta", "gamma", "delta", "epsilon"]
+
+
+def test_matrix_output_spec_requires_explicit_feature_metadata_mode() -> None:
+    with pytest.raises(OutputSpecError, match="explicitly set"):
+        OutputSpec(
+            artifact_type="dense_matrix",
+            lineage_mode="new_key",
+            basis_labels=(),
+        )
+
+    assert (
+        OutputSpec(
+            artifact_type="dense_matrix",
+            lineage_mode="new_key",
+            basis_labels=(),
+            feature_metadata_mode="own",
+        ).feature_metadata_mode
+        == "own"
+    )
 
 
 def _source(kind: str = "sparse_matrix"):

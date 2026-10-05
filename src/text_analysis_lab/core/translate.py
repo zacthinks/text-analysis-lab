@@ -2157,11 +2157,21 @@ def _output_specs_from_dict(data: Mapping[str, Any]) -> dict[str, OutputSpec]:
             raise OperatorError(
                 f"Stored output spec {label!r} has an invalid data serializer reference."
             )
+        artifact_type = ArtifactType(raw["artifact_type"])
+        feature_metadata_mode = raw.get("feature_metadata_mode")
+        if (
+            "feature_metadata_mode" not in raw
+            and artifact_type
+            in {ArtifactType.SPARSE_MATRIX, ArtifactType.DENSE_MATRIX}
+        ):
+            # Backward compatibility for snapshots written before matrix Feature
+            # Metadata ownership became an explicit OutputSpec contract.
+            feature_metadata_mode = "own"
         specs[str(label)] = OutputSpec(
-            artifact_type=ArtifactType(raw["artifact_type"]),
+            artifact_type=artifact_type,
             lineage_mode=validate_lineage_mode(raw.get("lineage_mode", "new_key")),
             basis_labels=tuple(raw.get("basis_labels", ())),
-            feature_metadata_mode=raw.get("feature_metadata_mode"),
+            feature_metadata_mode=feature_metadata_mode,
             data_serializer=(
                 None
                 if serializer_ref is None
