@@ -261,3 +261,58 @@ def test_embedding_lookup_inherits_feature_metadata_from_embedding_source(
         assert looked_up.get_matrix().shape == (3, 2)
     finally:
         project.close()
+
+
+
+@pytest.mark.parametrize("artifact_type", ["dense_matrix", "sparse_matrix"])
+def test_owned_feature_metadata_must_match_across_matrix_batches(
+    tmp_path: Path,
+    artifact_type: str,
+) -> None:
+    artifact_dir = tmp_path / f"feature_metadata_{artifact_type}"
+    writer = create_artifact_writer(
+        artifact_type=artifact_type,
+        artifact_dir=artifact_dir,
+        artifact_id="art_feature_metadata",
+        label="feature_metadata",
+        feature_metadata_mode="own",
+    )
+    first_values = np.asarray([[1.0, 2.0]])
+    second_values = np.asarray([[3.0, 4.0]])
+    if artifact_type == "sparse_matrix":
+        first_values = sparse.csr_matrix(first_values)
+        second_values = sparse.csr_matrix(second_values)
+
+    writer.write(
+        {
+            "keys": pd.DataFrame({"row_id": [0]}),
+            "data": {
+                "values": first_values,
+                "columns": ["a", "b"],
+                "feature_metadata": pd.DataFrame(
+                    {
+                        "column_index": [0, 1],
+                        "column": ["a", "b"],
+                        "family": ["left", "right"],
+                    }
+                ),
+            },
+        }
+    )
+    with pytest.raises(ArtifactError, match="Feature Metadata changed"):
+        writer.write(
+            {
+                "keys": pd.DataFrame({"row_id": [1]}),
+                "data": {
+                    "values": second_values,
+                    "columns": ["a", "b"],
+                    "feature_metadata": pd.DataFrame(
+                        {
+                            "column_index": [0, 1],
+                            "column": ["a", "b"],
+                            "family": ["changed", "right"],
+                        }
+                    ),
+                },
+            }
+        )

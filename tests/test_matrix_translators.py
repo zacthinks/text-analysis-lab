@@ -133,6 +133,19 @@ def test_matrix_transpose_promotes_feature_metadata_to_row_metadata() -> None:
     ]
 
 
+
+
+def test_matrix_transpose_raw_matrix_swaps_feature_names_to_row_names() -> None:
+    translated = MatrixTranspose().translate(
+        np.asarray([[1.0, 2.0], [3.0, 4.0]]),
+        features=["alpha", "beta"],
+    )
+    assert translated["row_name_column"] == "feature"
+    assert translated["metadata"].to_dict("list") == {
+        "feature": ["alpha", "beta"]
+    }
+    assert translated["feature_metadata"]["column"].tolist() == ["0", "1"]
+
 def test_matrix_transpose_eagerly_promotes_selected_row_fields() -> None:
     feature_metadata = pd.DataFrame(
         {
