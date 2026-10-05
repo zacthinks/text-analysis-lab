@@ -1,0 +1,155 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy import sparse
+
+import text_analysis_lab as teal
+from text_analysis_lab.core.translate import _output_specs_from_dict
+from text_analysis_lab.core.writer import create_artifact_writer
+
+
+def _matrix_source(project: teal.Project):
+    artifact_id = "art_matrix_source"
+    writer = create_artifact_writer(
+        artifact_type="sparse_matrix",
+        artifact_dir=project.storage.artifact_dir(artifact_id),
+        artifact_id=artifact_id,
+        label="matrix_source",
+        lineage_mode="new_key",
+        feature_metadata_mode="own",
+    )
+    writer.write(
+        {
+            "keys": pd.DataFrame({"row_id": list(range(6))}),
+            "metadata": pd.DataFrame(
+                {"group": ["a", "a", "b", "b", "c", "c"]}
+            ),
+            "data": {
+                "values": sparse.csr_matrix(
+                    np.asarray(
+                        [
+                            [1, 0, 2],
+                            [0, 3, 0],
+                            [4, 0, 5],
+                            [0, 1, 1],
+                            [2, 2, 0],
+                            [0, 0, 6],
+                        ],
+                        dtype=float,
+                    )
+                ),
+                "columns": ["alpha", "beta", "gamma"],
+            },
+        }
+    )
+    writer.finalize()
+    project.catalog.register_artifact(
+        artifact_id=artifact_id,
+        artifact_type="sparse_matrix",
+        label="matrix_source",
+        lineage_mode="new_key",
+        status="complete",
+        basis_artifact_ids=(),
+    )
+    source = project.get_artifact(artifact_id)
+    feature_metadata = pd.DataFrame(
+        {
+            "column_index": np.arange(3, dtype=np.int64),
+            "column": ["alpha", "beta", "gamma"],
+            "family": ["lexical", "lexical", "phrase"],
+            "weight": [1.0, 2.0, 3.0],
+        }
+    )
+    feature_metadata.to_parquet(source.storage.feature_metadata_path, index=False)
+    return source, feature_metadata
+
+
+def _assert_inherits_feature_metadata(artifact, expected: pd.DataFrame) -> None:
+    assert artifact.descriptor["lineage"]["feature_metadata_mode"] == "inherit"
+    assert not artifact.storage.feature_metadata_path.exists()
+    pd.testing.assert_frame_equal(artifact.get_feature_metadata(), expected)
+    assert artifact.get_matrix().shape[1] == len(expected)
+
+
+def test_legacy_stored_matrix_output_spec_defaults_to_owned_metadata() -> None:
+    specs = _output_specs_from_dict(
+        {
+            "output": {
+                "artifact_type": "dense_matrix",
+                "lineage_mode": "new_key",
+                "basis_labels": [],
+            }
+        }
+    )
+    assert specs["output"].feature_metadata_mode == "own"
+
+
+def test_row_preserving_matrix_operations_inherit_rich_feature_metadata(
+    tmp_path: Path,
+) -> None:
+    project = teal.Project.create(tmp_path / "project", name="feature_metadata_rows")
+    try:
+        source, expected = _matrix_source(project)
+
+        sampled = project.sample(
+            source,
+            n=3,
+            random_state=7,
+            output_label="sampled",
+        )
+        selected = project.select_keys(
+            source,
+            [0, 2, 4],
+            output_label="selected",
+        )
+        restricted = project.restrict(
+            source,
+            to=selected,
+            output_label="restricted",
+        )
+        subset = project.subset(
+            source,
+            lambda frame: frame["row_id"].astype(int) % 2 == 0,
+            key_columns=True,
+            data_columns=False,
+            metadata_columns=False,
+            output_label="subset",
+        )["subset"]
+        split = project.split(
+            source,
+            labels=("left", "right"),
+            proportions=(0.5, 0.5),
+            random_state=11,
+        )
+        probability = project.probability_split(
+            source,
+            n=2,
+            remainder_label="train",
+            sample_label="audit",
+            random_state=13,
+        )
+        rekeyed = project.set_primary_keys(
+            source,
+            levels={"group": "group_id"},
+            leaf_key="item_id",
+            output_label="rekeyed",
+        )
+
+        children = [
+            sampled,
+            selected,
+            restricted,
+            subset,
+            split["left"],
+            split["right"],
+            probability["train"],
+            probability["audit"],
+            rekeyed,
+        ]
+        for child in children:
+            _assert_inherits_feature_metadata(child, expected)
+    finally:
+        project.close()

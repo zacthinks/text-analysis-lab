@@ -111,6 +111,11 @@ class RegisteredExternalOperator(BaseOperator):
                 artifact_type=self.artifact_type,
                 lineage_mode=self.lineage_mode,
                 basis_labels=self.basis_labels,
+                feature_metadata_mode=(
+                    "own"
+                    if self.artifact_type.value in {"sparse_matrix", "dense_matrix"}
+                    else None
+                ),
             )
         }
 
@@ -269,6 +274,11 @@ def register_external(
         operation_id=operation_id,
         lineage_mode=mode,
         basis_artifact_ids=basis_ids,
+        feature_metadata_mode=(
+            "own"
+            if resolved_type.value in {"sparse_matrix", "dense_matrix"}
+            else None
+        ),
     )
 
     descriptor: dict[str, Any] = {

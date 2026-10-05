@@ -6,6 +6,8 @@ from typing import Final, Literal
 
 MetadataMode = Literal["none", "local", "full"]
 
+FeatureMetadataMode = Literal["own", "inherit"]
+
 LineageMode = Literal[
     "preserved_key",
     "extended_key",

@@ -170,6 +170,7 @@ class DictionaryTranslator(BaseTranslator):
             artifact_type="sparse_matrix",
             lineage_mode="preserved_key",
             basis_labels=DEFAULT_SOURCE_LABEL,
+            feature_metadata_mode="own",
         )
 
     def validate_operation_params(

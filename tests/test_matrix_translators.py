@@ -9,8 +9,8 @@ import pytest
 from scipy import sparse
 from sklearn.feature_extraction.text import TfidfTransformer as SklearnTfidf
 
-from text_analysis_lab.core.errors import ArtifactError, OperatorError
-from text_analysis_lab.core.operator import InputBatch, TranslationRequest
+from text_analysis_lab.core.errors import ArtifactError, OperatorError, OutputSpecError
+from text_analysis_lab.core.operator import InputBatch, OutputSpec, TranslationRequest
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.translators import (
     LDA,
@@ -38,6 +38,25 @@ COUNTS = sparse.csr_matrix(
 FEATURES = ["alpha", "beta", "gamma", "delta", "epsilon"]
 
 
+def test_matrix_output_spec_requires_explicit_feature_metadata_mode() -> None:
+    with pytest.raises(OutputSpecError, match="explicitly set"):
+        OutputSpec(
+            artifact_type="dense_matrix",
+            lineage_mode="new_key",
+            basis_labels=(),
+        )
+
+    assert (
+        OutputSpec(
+            artifact_type="dense_matrix",
+            lineage_mode="new_key",
+            basis_labels=(),
+            feature_metadata_mode="own",
+        ).feature_metadata_mode
+        == "own"
+    )
+
+
 def _source(kind: str = "sparse_matrix"):
     return SimpleNamespace(
         artifact_id="art_counts",
@@ -63,8 +82,8 @@ def _packet(matrix=COUNTS) -> InputBatch:
     )
 
 
-def test_matrix_transpose_promotes_feature_frame_to_row_metadata() -> None:
-    feature_frame = pd.DataFrame(
+def test_matrix_transpose_promotes_feature_metadata_to_row_metadata() -> None:
+    feature_metadata = pd.DataFrame(
         {
             "column_index": np.arange(len(FEATURES), dtype=np.int64),
             "column": FEATURES,
@@ -76,7 +95,7 @@ def test_matrix_transpose_promotes_feature_frame_to_row_metadata() -> None:
         artifact_type=ArtifactType.SPARSE_MATRIX,
         primary_key=["doc_id"],
         get_data_columns=lambda: list(FEATURES),
-        get_feature_frame=lambda: feature_frame.copy(),
+        get_feature_metadata=lambda: feature_metadata.copy(),
         has_row_names=False,
     )
     translator = MatrixTranspose()
@@ -239,6 +258,8 @@ def test_svd_emits_document_coordinates_and_component_loadings_and_lsa_is_alias(
         sources={"source": _source()}, request=TranslationRequest()
     )
     assert set(specs) == {"output", "components"}
+    assert specs["output"].feature_metadata_mode == "own"
+    assert specs["components"].feature_metadata_mode == "inherit"
     result = translator.translate_batch(
         {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
     )
@@ -267,6 +288,11 @@ def test_lda_emits_document_topic_distribution_and_topic_term_weights() -> None:
         mode="fit_translate",
         request=TranslationRequest(),
     )
+    specs = translator.output_specs(
+        sources={"source": _source()}, request=TranslationRequest()
+    )
+    assert specs["output"].feature_metadata_mode == "own"
+    assert specs["topics"].feature_metadata_mode == "inherit"
     result = translator.translate_batch(
         {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
     )
@@ -613,3 +639,18 @@ def test_estimator_assets_stream_to_and_from_disk_without_full_bytes_buffer(
     monkeypatch.setattr(utils.cloudpickle, "loads", fail_loads)
     restored = utils.load_estimator(path)
     assert np.array_equal(restored["weights"], estimator["weights"])
+
+
+def test_matrix_row_aggregator_declares_feature_metadata_inheritance() -> None:
+    from text_analysis_lab.translators import MatrixRowAggregator
+
+    source = SimpleNamespace(
+        artifact_type=ArtifactType.SPARSE_MATRIX,
+        primary_key=["doc_id", "sentence_id"],
+    )
+    translator = MatrixRowAggregator(group_by="doc_id")
+    spec = translator.output_specs(
+        sources={"source": source},
+        request=TranslationRequest(),
+    )
+    assert spec.feature_metadata_mode == "inherit"

@@ -133,11 +133,21 @@ class ProbabilitySplitTranslator(BaseTranslator):
                 artifact_type=source.artifact_type,
                 lineage_mode="preserved_key",
                 basis_labels=_DOCUMENTS,
+                feature_metadata_mode=(
+                    "inherit"
+                    if source.artifact_type.value in {"sparse_matrix", "dense_matrix"}
+                    else None
+                ),
             ),
             self.sample_label: OutputSpec(
                 artifact_type=source.artifact_type,
                 lineage_mode="preserved_key",
                 basis_labels=_DOCUMENTS,
+                feature_metadata_mode=(
+                    "inherit"
+                    if source.artifact_type.value in {"sparse_matrix", "dense_matrix"}
+                    else None
+                ),
             ),
             _PI_LABEL: OutputSpec(
                 artifact_type="table",

@@ -226,6 +226,12 @@ class AggregateOperator(BaseOperator):
             artifact_type=artifact_type,
             lineage_mode="reduced_key",
             basis_labels="source",
+            feature_metadata_mode=(
+                "inherit"
+                if source.artifact_type
+                in {ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX}
+                else None
+            ),
         )
 
     def to_json_state(self) -> dict[str, Any]:
@@ -1258,6 +1264,12 @@ def _start_operation(
         operation_id=operation_id,
         lineage_mode="reduced_key",
         basis_artifact_ids=(artifact.artifact_id,),
+        feature_metadata_mode=(
+            "inherit"
+            if ArtifactType(output_artifact_type)
+            in {ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX}
+            else None
+        ),
     )
 
     descriptor = {

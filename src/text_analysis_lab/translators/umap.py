@@ -209,6 +209,7 @@ class UMAP(BaseTranslator):
             artifact_type="dense_matrix",
             lineage_mode="preserved_key",
             basis_labels=DEFAULT_SOURCE_LABEL,
+            feature_metadata_mode="own",
         )
 
     def validate_operation_params(

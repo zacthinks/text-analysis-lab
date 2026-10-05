@@ -137,6 +137,11 @@ class FunctionSubsetTranslator(BaseTranslator):
                 artifact_type=source.artifact_type,
                 lineage_mode="preserved_key",
                 basis_labels=DEFAULT_SOURCE_LABEL,
+                feature_metadata_mode=(
+                    "inherit"
+                    if source.artifact_type.value in {"sparse_matrix", "dense_matrix"}
+                    else None
+                ),
             )
         }
 

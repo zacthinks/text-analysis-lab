@@ -96,6 +96,7 @@ class MatrixNormalizer(BaseTranslator):
             artifact_type=source.artifact_type.value,
             lineage_mode="preserved_key",
             basis_labels=DEFAULT_SOURCE_LABEL,
+            feature_metadata_mode="inherit",
         )
 
     def validate_operation_params(

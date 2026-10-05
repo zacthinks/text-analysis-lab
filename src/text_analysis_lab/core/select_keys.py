@@ -42,6 +42,11 @@ class SelectKeysOperator(BaseOperator):
             artifact_type=source.artifact_type,
             lineage_mode="preserved_key",
             basis_labels=DEFAULT_SOURCE_LABEL,
+            feature_metadata_mode=(
+                "inherit"
+                if source.artifact_type.value in {"sparse_matrix", "dense_matrix"}
+                else None
+            ),
         )
 
     def to_json_state(self) -> dict[str, Any]:
@@ -125,6 +130,11 @@ def select_keys(
         operation_id=operation_id,
         lineage_mode="preserved_key",
         basis_artifact_ids=(artifact.artifact_id,),
+        feature_metadata_mode=(
+            "inherit"
+            if artifact.artifact_type.value in {"sparse_matrix", "dense_matrix"}
+            else None
+        ),
     )
     descriptor = {
         "schema_version": 1,

@@ -37,6 +37,7 @@ from text_analysis_lab.core.storage import ArtifactStorage
 from text_analysis_lab.core.types import (
     ArtifactStatus,
     ArtifactType,
+    FeatureMetadataMode,
     LineageMode,
     StructuralColumn,
 )
@@ -97,6 +98,24 @@ def _optional_tuple(value: Any) -> tuple[str, ...] | None:
     if value is None:
         return None
     return tuple(str(item) for item in value)
+
+
+def _normalize_feature_metadata_mode(
+    value: Any,
+    *,
+    artifact_type: ArtifactType,
+) -> FeatureMetadataMode | None:
+    if value is None:
+        return None
+    if artifact_type not in {ArtifactType.SPARSE_MATRIX, ArtifactType.DENSE_MATRIX}:
+        raise ArtifactError(
+            "Feature Metadata ownership is defined only for matrix artifacts."
+        )
+    if value not in {"own", "inherit"}:
+        raise ArtifactError(
+            "feature_metadata_mode must be 'own', 'inherit', or None."
+        )
+    return cast(FeatureMetadataMode, value)
 
 
 def _coerce_integer_key_column(series: pd.Series, col: str) -> pd.Series:
@@ -280,6 +299,7 @@ class ArtifactWriter:
         label: str,
         lineage: Mapping[str, Any] | None = None,
         operation_id: str | None = None,
+        feature_metadata_mode: FeatureMetadataMode | None = None,
         data_serializer: OtherDataSerializer | None = None,
         data_serializer_ref: CallableRef | None = None,
     ) -> None:
@@ -290,6 +310,23 @@ class ArtifactWriter:
         if not self.label:
             raise ArtifactError("Artifact label must be a non-empty string.")
         self.lineage = dict(lineage or {})
+        lineage_feature_metadata_mode = self.lineage.get("feature_metadata_mode")
+        if (
+            feature_metadata_mode is not None
+            and lineage_feature_metadata_mode is not None
+            and feature_metadata_mode != lineage_feature_metadata_mode
+        ):
+            raise ArtifactError(
+                "feature_metadata_mode conflicts with the artifact lineage descriptor."
+            )
+        self.feature_metadata_mode = _normalize_feature_metadata_mode(
+            feature_metadata_mode
+            if feature_metadata_mode is not None
+            else lineage_feature_metadata_mode,
+            artifact_type=self.artifact_type,
+        )
+        if self.feature_metadata_mode is not None:
+            self.lineage["feature_metadata_mode"] = self.feature_metadata_mode
         self.operation_id = None if operation_id is None else str(operation_id)
 
         if self.artifact_type == ArtifactType.OTHER:
@@ -404,6 +441,7 @@ class ArtifactWriter:
             "label": self.label,
             "lineage": dict(self.lineage),
             "operation_id": self.operation_id,
+            "feature_metadata_mode": self.feature_metadata_mode,
             "data_serializer_ref": self.data_serializer_ref,
             "status": self._status,
             "closed": self._closed,
@@ -467,6 +505,15 @@ class ArtifactWriter:
         if not writer.label:
             raise ArtifactError("Artifact label must be a non-empty string.")
         writer.lineage = dict(state.get("lineage") or {})
+        writer.feature_metadata_mode = _normalize_feature_metadata_mode(
+            state.get(
+                "feature_metadata_mode",
+                writer.lineage.get("feature_metadata_mode"),
+            ),
+            artifact_type=writer.artifact_type,
+        )
+        if writer.feature_metadata_mode is not None:
+            writer.lineage["feature_metadata_mode"] = writer.feature_metadata_mode
         raw_operation_id = state.get("operation_id")
         writer.operation_id = (
             None if raw_operation_id is None else str(raw_operation_id)
@@ -1007,7 +1054,11 @@ class ArtifactWriter:
             self.data_dir,
             values_dir,
             *((self.storage.data_row_names_dir,) if row_names is not None else ()),
-            on_init=lambda: self._write_matrix_columns(labels),
+            on_init=(
+                None
+                if self.feature_metadata_mode == "inherit"
+                else lambda: self._write_feature_metadata(labels)
+            ),
         )
         if row_names is not None:
             self._write_matrix_row_names(
@@ -1052,7 +1103,11 @@ class ArtifactWriter:
             self.data_dir,
             values_dir,
             *((self.storage.data_row_names_dir,) if row_names is not None else ()),
-            on_init=lambda: self._write_matrix_columns(labels),
+            on_init=(
+                None
+                if self.feature_metadata_mode == "inherit"
+                else lambda: self._write_feature_metadata(labels)
+            ),
         )
         if row_names is not None:
             self._write_matrix_row_names(
@@ -1131,15 +1186,16 @@ class ArtifactWriter:
             raise ArtifactError("Matrix columns changed after they were established.")
         return labels
 
-    def _write_matrix_columns(self, labels: tuple[str, ...]) -> None:
-        columns_path = self.storage.data_columns_path
+    def _write_feature_metadata(self, labels: tuple[str, ...]) -> None:
+        """Persist locally owned Feature Metadata for a matrix axis."""
+        path = self.storage.feature_metadata_path
         frame = pd.DataFrame(
             {
                 "column_index": np.arange(len(labels), dtype="int64"),
                 "column": list(labels),
             }
         )
-        frame.to_parquet(columns_path, index=False)
+        frame.to_parquet(path, index=False)
 
     def _validate_matrix_row_names(
         self, matrix_payload: Mapping[str, Any], *, n_rows: int
@@ -1182,8 +1238,19 @@ class ArtifactWriter:
             "format": format,
             "path": "data/",
             "values": {"format": values_format, "path": "data/values/"},
-            "columns": {"format": "parquet", "path": "data/columns.parquet"},
         }
+        if self.feature_metadata_mode == "inherit":
+            descriptor["feature_metadata"] = {"mode": "inherit"}
+        else:
+            descriptor["feature_metadata"] = {
+                "mode": "own",
+                "format": "parquet",
+                "path": "data/columns.parquet",
+            }
+            descriptor["columns"] = {
+                "format": "parquet",
+                "path": "data/columns.parquet",
+            }
         if self._matrix_has_row_names:
             descriptor["row_names"] = {
                 "format": "parquet_dataset",
@@ -1250,6 +1317,7 @@ def create_artifact_writer(
     operation_id: str | None = None,
     lineage_mode: LineageMode | None = None,
     basis_artifact_ids: Sequence[str] | None = None,
+    feature_metadata_mode: FeatureMetadataMode | None = None,
     data_serializer: OtherDataSerializer | None = None,
     data_serializer_ref: CallableRef | None = None,
 ) -> ArtifactWriter:
@@ -1272,6 +1340,9 @@ def create_artifact_writer(
             [str(artifact_id) for artifact_id in basis_artifact_ids],
         )
 
+    if feature_metadata_mode is not None:
+        resolved_lineage.setdefault("feature_metadata_mode", feature_metadata_mode)
+
     return ArtifactWriter(
         artifact_dir=artifact_dir,
         artifact_id=artifact_id,
@@ -1279,6 +1350,7 @@ def create_artifact_writer(
         label=label,
         lineage=resolved_lineage,
         operation_id=operation_id,
+        feature_metadata_mode=feature_metadata_mode,
         data_serializer=(data_serializer if kind == ArtifactType.OTHER else None),
         data_serializer_ref=(
             data_serializer_ref if kind == ArtifactType.OTHER else None
