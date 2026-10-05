@@ -263,11 +263,6 @@ def register_external(
         lineage_mode=mode,
         status="incomplete",
         basis_artifact_ids=basis_ids,
-        feature_metadata_mode=(
-            "own"
-            if resolved_type.value in {"sparse_matrix", "dense_matrix"}
-            else None
-        ),
     )
     project.catalog.add_operation_output(operation_id, label, artifact_id, ordinal=0)
 
@@ -279,6 +274,11 @@ def register_external(
         operation_id=operation_id,
         lineage_mode=mode,
         basis_artifact_ids=basis_ids,
+        feature_metadata_mode=(
+            "own"
+            if resolved_type.value in {"sparse_matrix", "dense_matrix"}
+            else None
+        ),
     )
 
     descriptor: dict[str, Any] = {

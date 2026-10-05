@@ -159,11 +159,6 @@ def sample(
         lineage_mode="preserved_key",
         status="incomplete",
         basis_artifact_ids=(artifact.artifact_id,),
-        feature_metadata_mode=(
-            "inherit"
-            if artifact.artifact_type.value in {"sparse_matrix", "dense_matrix"}
-            else None
-        ),
     )
     project.catalog.add_operation_output(
         operation_id,
@@ -180,6 +175,11 @@ def sample(
         operation_id=operation_id,
         lineage_mode="preserved_key",
         basis_artifact_ids=(artifact.artifact_id,),
+        feature_metadata_mode=(
+            "inherit"
+            if artifact.artifact_type.value in {"sparse_matrix", "dense_matrix"}
+            else None
+        ),
     )
 
     descriptor = {

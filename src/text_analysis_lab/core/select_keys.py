@@ -120,11 +120,6 @@ def select_keys(
         lineage_mode="preserved_key",
         status="incomplete",
         basis_artifact_ids=(artifact.artifact_id,),
-        feature_metadata_mode=(
-            "inherit"
-            if artifact.artifact_type.value in {"sparse_matrix", "dense_matrix"}
-            else None
-        ),
     )
     project.catalog.add_operation_output(operation_id, label, artifact_id, ordinal=0)
     writer = create_artifact_writer(
@@ -135,6 +130,11 @@ def select_keys(
         operation_id=operation_id,
         lineage_mode="preserved_key",
         basis_artifact_ids=(artifact.artifact_id,),
+        feature_metadata_mode=(
+            "inherit"
+            if artifact.artifact_type.value in {"sparse_matrix", "dense_matrix"}
+            else None
+        ),
     )
     descriptor = {
         "schema_version": 1,
