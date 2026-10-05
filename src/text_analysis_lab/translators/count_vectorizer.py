@@ -28,6 +28,10 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.translators._matrix_transform_utils import (
+    feature_metadata_from_columns,
+    standalone_matrix_payload,
+)
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -186,7 +190,12 @@ class CountVectorizer(BaseTranslator):
         else:
             raw_values = list(texts)
         values = ["" if pd.isna(value) else str(value) for value in raw_values]
-        return self._require_vectorizer().transform(values).tocsr()
+        matrix = self._require_vectorizer().transform(values).tocsr()
+        return standalone_matrix_payload(
+            matrix,
+            feature_metadata_from_columns(self._feature_names()),
+            name="CountVectorizer",
+        )
 
     def translate_batch(
         self,
@@ -221,7 +230,7 @@ class CountVectorizer(BaseTranslator):
             matrix = self._vectorizer.fit_transform(texts)
             self.vocabulary_ = _normalize_vocabulary(self._vectorizer.vocabulary_)
         elif mode == "translate":
-            matrix = self.translate(texts)
+            matrix = self.translate(texts)["values"]
         else:  # pragma: no cover - runner validates mode
             raise OperatorError(f"Unsupported CountVectorizer mode {mode!r}.")
 
