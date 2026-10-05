@@ -34,6 +34,33 @@ def _source(project: teal.Project, tmp_path: Path):
 
 
 
+
+
+class _KeywordOnlyTranslator(teal.BaseTranslator):
+    def translate(self, *, source):
+        return pd.Series(source).str.upper()
+
+    def output_specs(self, *, sources, request):
+        _ = sources, request
+        raise NotImplementedError
+
+    def input_request(self, *, sources, mode, request):
+        _ = sources, mode, request
+        raise NotImplementedError
+
+    def translate_batch(self, inputs, *, mode, request):
+        _ = inputs, mode, request
+        raise NotImplementedError
+
+    def handle_batch_result(self, result, *, batch_index, mode, request):
+        _ = result, batch_index, mode, request
+        raise NotImplementedError
+
+    def finalize_translation(self, *, mode, request):
+        _ = mode, request
+        raise NotImplementedError
+
+
 class _StandaloneMultiOutput(teal.BaseTranslator):
     def translate(self, values):
         values = pd.Series(values)
@@ -70,6 +97,48 @@ class _StandaloneMultiOutput(teal.BaseTranslator):
     def finalize_translation(self, *, mode, request):
         _ = mode, request
         raise NotImplementedError
+
+
+
+
+def test_pipeline_native_single_source_uses_matching_keyword_only_parameter() -> None:
+    pipeline = teal.Pipeline()
+    stage = pipeline.add(
+        "upper",
+        _KeywordOnlyTranslator(),
+        source=pipeline.input,
+    )
+    pipeline.output("output", stage["output"])
+
+    result = pipeline.translate(pd.Series(["alpha", "beta"]))
+
+    assert result["output"].tolist() == ["ALPHA", "BETA"]
+
+
+def test_pipeline_rejects_ports_from_different_pipeline_instances() -> None:
+    pipeline_a = teal.Pipeline()
+    pipeline_b = teal.Pipeline()
+
+    with pytest.raises(PipelineError, match="different Pipeline"):
+        pipeline_b.add(
+            "clean",
+            RegexCleaner(),
+            source=pipeline_a.input,
+        )
+
+    stage_a = pipeline_a.add(
+        "shared_name",
+        RegexCleaner(),
+        source=pipeline_a.input,
+    )
+    pipeline_b.add(
+        "shared_name",
+        RegexCleaner(),
+        source=pipeline_b.input,
+    )
+
+    with pytest.raises(PipelineError, match="different Pipeline"):
+        pipeline_b.output("wrong", stage_a["output"])
 
 
 def test_pipeline_native_multi_input_preserves_structured_default_output() -> None:
