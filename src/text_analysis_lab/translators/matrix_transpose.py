@@ -23,6 +23,8 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
 from text_analysis_lab.translators._matrix_transform_utils import (
+    feature_labels,
+    unpack_standalone_matrix,
     native_matrix_packet,
     single_input,
     single_source,
@@ -71,15 +73,37 @@ class MatrixTranspose(BaseTranslator):
         self,
         matrix: Any,
         *,
-        features: Sequence[str],
+        features: Sequence[str] | None = None,
         row_labels: Sequence[str] | None = None,
         feature_metadata: pd.DataFrame | None = None,
     ) -> dict[str, Any]:
-        """Transpose an ordinary matrix while carrying explicit axis labels."""
-        shape = getattr(matrix, "shape", None)
-        if shape is None or len(shape) != 2:
+        """Transpose a matrix while carrying explicit or embedded axis metadata."""
+        matrix, embedded_metadata, _ = unpack_standalone_matrix(
+            matrix,
+            name="MatrixTranspose.translate(...)",
+        )
+        shape = matrix.shape
+        if embedded_metadata is not None:
+            if feature_metadata is not None and not feature_metadata.reset_index(drop=True).equals(
+                embedded_metadata.reset_index(drop=True)
+            ):
+                raise ValueError(
+                    "MatrixTranspose received conflicting feature_metadata values."
+                )
+            feature_metadata = embedded_metadata
+            embedded_features = feature_labels(
+                embedded_metadata,
+                name="MatrixTranspose",
+            )
+            if features is not None and tuple(str(v) for v in features) != tuple(embedded_features):
+                raise ValueError(
+                    "MatrixTranspose received conflicting features and Feature Metadata."
+                )
+            features = embedded_features
+        if features is None:
             raise ValueError(
-                "MatrixTranspose.translate(...) requires a two-dimensional matrix."
+                "MatrixTranspose.translate(...) requires features for raw matrices "
+                "or feature_metadata in a standalone matrix mapping."
             )
         feature_names = [str(value) for value in features]
         if len(feature_names) != int(shape[1]):

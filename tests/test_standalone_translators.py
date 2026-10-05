@@ -304,7 +304,8 @@ def test_count_vectorizer_standalone_matches_teal_batch() -> None:
     texts = ["alpha beta alpha", None, "beta"]
 
     direct = translator.translate(texts)
-    assert sparse.isspmatrix_csr(direct)
+    assert sparse.isspmatrix_csr(direct["values"])
+    assert direct["feature_metadata"]["column"].tolist() == ["alpha", "beta"]
 
     frame = pd.DataFrame({"doc_id": [0, 1, 2], "text": texts})
     packet = InputBatch(
@@ -322,10 +323,68 @@ def test_count_vectorizer_standalone_matches_teal_batch() -> None:
         mode="translate",
         request=TranslationRequest(),
     ).outputs["output"]["data"]["values"]
-    np.testing.assert_array_equal(batch.toarray(), direct.toarray())
+    np.testing.assert_array_equal(batch.toarray(), direct["values"].toarray())
 
     with pytest.raises(OperatorNotFittedError, match="fitted vocabulary"):
         CountVectorizer().translate(["alpha"])
+
+
+def test_standalone_matrix_chain_preserves_and_projects_feature_metadata() -> None:
+    count = CountVectorizer(
+        vocabulary={"alpha": 0, "beta": 1, "gamma": 2}
+    )
+    counts = count.translate(
+        ["alpha beta gamma", "alpha alpha gamma", "beta gamma"]
+    )
+    counts["feature_metadata"]["family"] = ["left", "middle", "right"]
+    counts["feature_metadata"]["custom"] = [10, 20, 30]
+
+    trimmer = FeatureTrimmer()
+    trimmer.source_width_ = 3
+    trimmer.kept_indices_ = (0, 2)
+    trimmed = trimmer.translate(counts)
+    assert trimmed["feature_metadata"].to_dict("list") == {
+        "column_index": [0, 1],
+        "column": ["alpha", "gamma"],
+        "family": ["left", "right"],
+        "custom": [10, 30],
+    }
+
+    dictionary = dictionaries.Dictionary(
+        {"alpha_code": ["alpha"], "gamma_code": ["gamma"]},
+        valuetype="exact",
+        case_sensitive=True,
+    )
+    translated = DictionaryTranslator(dictionary).translate(trimmed)
+    assert translated["feature_metadata"]["column"].tolist() == [
+        "alpha_code",
+        "gamma_code",
+    ]
+
+    tfidf = TfidfTransformer(norm=None)
+    tfidf.source_features_ = ("alpha", "gamma")
+    tfidf._transformer = tfidf._make_transformer().fit(trimmed["values"])
+    weighted = tfidf.translate(trimmed)
+    pd.testing.assert_frame_equal(
+        weighted["feature_metadata"],
+        trimmed["feature_metadata"],
+    )
+
+    normalized = MatrixNormalizer(norm="l2").translate(weighted)
+    pd.testing.assert_frame_equal(
+        normalized["feature_metadata"],
+        trimmed["feature_metadata"],
+    )
+
+    svd = SVD(n_components=1, random_state=0)
+    svd.source_features_ = ("alpha", "gamma")
+    svd._estimator = svd._make_estimator().fit(normalized["values"])
+    reduced = svd.translate(normalized)
+    assert reduced["values"].shape == (3, 1)
+    assert reduced["feature_metadata"].to_dict("list") == {
+        "column_index": [0],
+        "column": ["component_0"],
+    }
 
 
 def test_svd_standalone_matches_teal_batch_and_validates_width() -> None:

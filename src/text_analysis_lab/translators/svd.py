@@ -25,6 +25,10 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
 from text_analysis_lab.translators._matrix_transform_utils import (
+    feature_labels,
+    feature_metadata_from_columns,
+    standalone_matrix_payload,
+    unpack_standalone_matrix,
     clone_estimator,
     dump_estimator,
     establish_or_validate_features,
@@ -162,15 +166,15 @@ class SVD(BaseTranslator):
             include_position=False,
         )
 
-    def translate(self, matrix: Any) -> np.ndarray:
-        """Project ordinary matrix rows through the fitted decomposition."""
+    def translate(self, matrix: Any) -> Any:
+        """Project rows through the fitted decomposition with matrix metadata parity."""
 
         estimator = self._require_estimator()
-        shape = getattr(matrix, "shape", None)
-        if shape is None or len(shape) != 2:
-            raise ValueError(
-                f"SVD standalone translation requires a two-dimensional matrix; got shape={shape!r}."
-            )
+        matrix, feature_metadata, structured = unpack_standalone_matrix(
+            matrix,
+            name="SVD.translate(...)",
+        )
+        shape = matrix.shape
         expected_width = (
             len(self.source_features_)
             if self.source_features_ is not None
@@ -181,7 +185,18 @@ class SVD(BaseTranslator):
                 "SVD standalone translation requires the fitted feature width "
                 f"{int(expected_width)}; got shape={shape!r}."
             )
-        return np.asarray(estimator.transform(matrix))
+        if feature_metadata is not None and self.source_features_ is not None:
+            observed = tuple(feature_labels(feature_metadata, name="SVD"))
+            if observed != tuple(self.source_features_):
+                raise ValueError("SVD.translate(...) requires the fitted ordered feature schema.")
+        values = np.asarray(estimator.transform(matrix))
+        if structured:
+            return standalone_matrix_payload(
+                values,
+                feature_metadata_from_columns(_component_columns(self.n_components)),
+                name="SVD",
+            )
+        return values
 
     def translate_batch(
         self,

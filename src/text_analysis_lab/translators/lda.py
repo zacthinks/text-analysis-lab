@@ -25,6 +25,10 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
 from text_analysis_lab.translators._matrix_transform_utils import (
+    feature_labels,
+    feature_metadata_from_columns,
+    standalone_matrix_payload,
+    unpack_standalone_matrix,
     clone_estimator,
     dump_estimator,
     establish_or_validate_features,
@@ -176,15 +180,15 @@ class LDA(BaseTranslator):
             include_position=False,
         )
 
-    def translate(self, matrix: Any) -> np.ndarray:
-        """Infer topic mixtures for ordinary rows using the fitted model."""
+    def translate(self, matrix: Any) -> Any:
+        """Infer topic mixtures while preserving standalone matrix schema semantics."""
 
         estimator = self._require_estimator()
-        shape = getattr(matrix, "shape", None)
-        if shape is None or len(shape) != 2:
-            raise ValueError(
-                f"LDA standalone translation requires a two-dimensional matrix; got shape={shape!r}."
-            )
+        matrix, feature_metadata, structured = unpack_standalone_matrix(
+            matrix,
+            name="LDA.translate(...)",
+        )
+        shape = matrix.shape
         expected_width = (
             len(self.source_features_)
             if self.source_features_ is not None
@@ -195,8 +199,21 @@ class LDA(BaseTranslator):
                 "LDA standalone translation requires the fitted feature width "
                 f"{int(expected_width)}; got shape={shape!r}."
             )
+        if feature_metadata is not None and self.source_features_ is not None:
+            observed = tuple(feature_labels(feature_metadata, name="LDA"))
+            if observed != tuple(self.source_features_):
+                raise ValueError("LDA.translate(...) requires the fitted ordered feature schema.")
         require_nonnegative(matrix, name="LDA", integer=True)
-        return np.asarray(estimator.transform(matrix), dtype=float)
+        values = np.asarray(estimator.transform(matrix), dtype=float)
+        if structured:
+            return standalone_matrix_payload(
+                values,
+                feature_metadata_from_columns(
+                    [f"topic_{i}" for i in range(self.n_components)]
+                ),
+                name="LDA",
+            )
+        return values
 
     def translate_batch(
         self,
