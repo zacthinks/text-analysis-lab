@@ -1,100 +1,263 @@
-"""Configurable semantic-head resolution over dependency-aligned token spans."""
+"""JSON-driven semantic-head resolution over dependency-aligned token spans."""
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
-_DEFAULT_FUNCTION_POS = ("ADP", "SCONJ", "CCONJ", "DET", "PART")
-_DEFAULT_QUANTIFIERS = (
-    "all",
-    "some",
-    "more",
-    "lot",
-    "lots",
-    "enough",
-    "none",
-    "any",
-    "most",
-    "less",
-    "much",
+DEFAULT_SEMANTIC_HEAD_RULES = {
+    "schema_version": 1,
+    "name": "bagofideas-default-semantic-head-rules",
+    "description": (
+        "Ordered semantic-head movement rules. The initial selection is always "
+        "the syntactic head. Rule order is priority. Fields within a condition "
+        "are AND; values within an array are OR. A rule moves only when its "
+        "entire dependency path exists."
+    ),
+    "rules": [
+        {
+            "id": "causal_thanks_to",
+            "when": {"role": ["ARGM-CAU"], "lemma": ["thank", "thanks"]},
+            "move": [
+                {"within": {"lemma": ["to"]}},
+                {"child": {"dep": ["pobj", "obj", "obl"]}},
+            ],
+        },
+        {
+            "id": "causal_owing_to",
+            "when": {"role": ["ARGM-CAU"], "lemma": ["owe", "owing"]},
+            "move": [
+                {"within": {"lemma": ["to"]}},
+                {"child": {"dep": ["pobj", "obj", "obl"]}},
+            ],
+        },
+        {
+            "id": "causal_due_to",
+            "when": {"role": ["ARGM-CAU"], "lemma": ["due"]},
+            "move": [
+                {"within": {"lemma": ["to"]}},
+                {"child": {"dep": ["pobj", "obj", "obl"]}},
+            ],
+        },
+        {
+            "id": "causal_because_of",
+            "when": {"role": ["ARGM-CAU"], "lemma": ["because"]},
+            "move": [
+                {"within": {"lemma": ["of"]}},
+                {"child": {"dep": ["pobj", "obj", "obl"]}},
+            ],
+        },
+        {
+            "id": "causal_result_of",
+            "when": {
+                "role": ["ARGM-CAU"],
+                "lemma": ["result", "consequence"],
+            },
+            "move": [
+                {"within": {"lemma": ["of"]}},
+                {"child": {"dep": ["pobj", "obj", "obl"]}},
+            ],
+        },
+        {
+            "id": "manner_by_means_of",
+            "when": {"role": ["ARGM-MNR"], "lemma": ["mean", "means"]},
+            "move": [
+                {"within": {"lemma": ["of"]}},
+                {"child": {"dep": ["pobj", "obj", "obl"]}},
+            ],
+        },
+        {
+            "id": "quantifier_of_object",
+            "when": {
+                "lemma": [
+                    "all",
+                    "some",
+                    "more",
+                    "lot",
+                    "lots",
+                    "enough",
+                    "none",
+                    "any",
+                    "most",
+                    "less",
+                    "much",
+                ]
+            },
+            "move": [
+                {"child": {"lemma": ["of"]}},
+                {"child": {"dep": ["pobj", "obj", "obl"]}},
+            ],
+        },
+        {
+            "id": "collection_quantifier_of_object",
+            "when": {
+                "lemma": [
+                    "pair",
+                    "couple",
+                    "trio",
+                    "group",
+                    "bunch",
+                    "set",
+                    "collection",
+                    "series",
+                    "handful",
+                    "number",
+                ]
+            },
+            "move": [
+                {"child": {"lemma": ["of"]}},
+                {"child": {"dep": ["pobj", "obj", "obl"]}},
+            ],
+        },
+        {
+            "id": "preposition_object",
+            "when": {"pos": ["ADP", "SCONJ"]},
+            "move": [{"child": {"dep": ["pobj"]}}],
+        },
+    ],
+}
+
+_CONDITION_FIELDS = frozenset(
+    {"source", "role", "text", "lemma", "pos", "dep", "ent_type"}
 )
+_MOVE_KINDS = frozenset({"child", "parent", "within"})
+
+
+def get_default_semantic_head_rules() -> dict[str, Any]:
+    """Return an editable copy of the built-in Bag of Ideas rule document."""
+
+    return copy.deepcopy(DEFAULT_SEMANTIC_HEAD_RULES)
+
+
+def export_default_semantic_head_rules(
+    path: str | Path,
+    *,
+    overwrite: bool = False,
+) -> Path:
+    """Export the built-in rule library as ordinary JSON."""
+
+    output = Path(path)
+    if output.exists() and not overwrite:
+        raise FileExistsError(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(get_default_semantic_head_rules(), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return output
 
 
 @dataclass(frozen=True, slots=True)
 class SemanticHeadRules:
-    """Serializable policy controlling cheap semantic-head selection.
+    """Validated, serializable Bag of Ideas semantic-head rule library."""
 
-    Defaults reproduce the pre-policy content_head_indices behavior: move off common
-    function POS tags, rewrite quantifier-plus-of constructions to their content
-    object, and retain coordinated heads except for predicate roles.
-    """
-
-    function_pos: tuple[str, ...] = _DEFAULT_FUNCTION_POS
-    move_off_function_pos: bool = True
-    quantifiers: tuple[str, ...] = _DEFAULT_QUANTIFIERS
-    quantifier_links: tuple[str, ...] = ("of",)
-    rewrite_quantifier_links: bool = True
-    preserve_coordination: bool = True
-    coordination_excluded_roles: tuple[str, ...] = ("V",)
+    schema_version: int = 1
+    name: str = "bagofideas-default-semantic-head-rules"
+    description: str = DEFAULT_SEMANTIC_HEAD_RULES["description"]
+    rules: tuple[Mapping[str, Any], ...] = field(
+        default_factory=lambda: tuple(
+            copy.deepcopy(DEFAULT_SEMANTIC_HEAD_RULES["rules"])
+        )
+    )
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "function_pos",
-            tuple(dict.fromkeys(str(value).upper() for value in self.function_pos)),
-        )
-        object.__setattr__(
-            self,
-            "quantifiers",
-            tuple(dict.fromkeys(str(value).casefold() for value in self.quantifiers)),
-        )
-        object.__setattr__(
-            self,
-            "quantifier_links",
-            tuple(
-                dict.fromkeys(str(value).casefold() for value in self.quantifier_links)
-            ),
-        )
-        object.__setattr__(
-            self,
-            "coordination_excluded_roles",
-            tuple(
-                dict.fromkeys(
-                    str(value).upper() for value in self.coordination_excluded_roles
-                )
-            ),
-        )
+        if self.schema_version != 1:
+            raise ValueError(
+                "Semantic-head rule schema_version must currently equal 1."
+            )
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("Semantic-head rule name must be a non-empty string.")
+        if not isinstance(self.description, str):
+            raise TypeError("Semantic-head rule description must be a string.")
+
+        normalized: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for index, raw_rule in enumerate(self.rules):
+            rule = _validate_rule(raw_rule, index=index)
+            rule_id = rule["id"]
+            if rule_id in seen_ids:
+                raise ValueError(f"Duplicate semantic-head rule id {rule_id!r}.")
+            seen_ids.add(rule_id)
+            normalized.append(rule)
+        object.__setattr__(self, "rules", tuple(normalized))
+
+    @property
+    def fingerprint(self) -> str:
+        """Stable SHA-256 fingerprint of the complete JSON rule document."""
+
+        payload = json.dumps(
+            self.to_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
 
     def to_dict(self) -> dict[str, Any]:
-        """Return stable JSON-safe state."""
+        """Return the original BoI JSON-compatible rule document shape."""
 
         return {
-            "function_pos": list(self.function_pos),
-            "move_off_function_pos": self.move_off_function_pos,
-            "quantifiers": list(self.quantifiers),
-            "quantifier_links": list(self.quantifier_links),
-            "rewrite_quantifier_links": self.rewrite_quantifier_links,
-            "preserve_coordination": self.preserve_coordination,
-            "coordination_excluded_roles": list(self.coordination_excluded_roles),
+            "schema_version": self.schema_version,
+            "name": self.name,
+            "description": self.description,
+            "rules": copy.deepcopy(list(self.rules)),
         }
 
     @classmethod
     def from_dict(cls, state: Mapping[str, Any]) -> "SemanticHeadRules":
-        """Restore a policy from to_dict state."""
+        """Restore a validated rule library from the BoI JSON document shape."""
 
+        if not isinstance(state, Mapping):
+            raise TypeError("Semantic-head rules must be a mapping.")
+        allowed = {"schema_version", "name", "description", "rules"}
+        unknown = set(state) - allowed
+        if unknown:
+            raise ValueError(
+                f"Unknown semantic-head rule document fields: {sorted(unknown)}."
+            )
         values = dict(state)
-        for name in (
-            "function_pos",
-            "quantifiers",
-            "quantifier_links",
-            "coordination_excluded_roles",
-        ):
-            if name in values:
-                values[name] = tuple(values[name])
+        if "rules" in values:
+            raw_rules = values["rules"]
+            if not isinstance(raw_rules, Sequence) or isinstance(
+                raw_rules, (str, bytes)
+            ):
+                raise TypeError("Semantic-head rules must be a JSON array.")
+            values["rules"] = tuple(raw_rules)
         return cls(**values)
+
+    @classmethod
+    def from_json_file(cls, path: str | Path) -> "SemanticHeadRules":
+        """Load an editable BoI semantic-head rule JSON file."""
+
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(value, Mapping):
+            raise ValueError("Semantic-head rule JSON must contain an object.")
+        return cls.from_dict(value)
+
+
+def load_semantic_head_rules(
+    value: SemanticHeadRules | Mapping[str, Any] | str | Path | None = None,
+) -> SemanticHeadRules:
+    """Normalize the same rule inputs accepted by the original BoI package."""
+
+    if value is None:
+        return SemanticHeadRules.from_dict(get_default_semantic_head_rules())
+    if isinstance(value, SemanticHeadRules):
+        return value
+    if isinstance(value, Mapping):
+        return SemanticHeadRules.from_dict(value)
+    if isinstance(value, (str, Path)):
+        return SemanticHeadRules.from_json_file(value)
+    raise TypeError(
+        "Semantic-head rules must be SemanticHeadRules, a mapping, a JSON path, "
+        "or None."
+    )
 
 
 def resolve_semantic_head_indices(
@@ -106,21 +269,37 @@ def resolve_semantic_head_indices(
     dependencies: Sequence[str | None],
     pos: Sequence[str | None],
     text: Sequence[str],
-    role: str,
-    rules: SemanticHeadRules | None = None,
+    role: str | None,
+    lemmas: Sequence[str | None] | None = None,
+    ent_types: Sequence[str | None] | None = None,
+    source: str | None = None,
+    rules: SemanticHeadRules | Mapping[str, Any] | str | Path | None = None,
 ) -> tuple[int, ...]:
-    """Return sentence-relative semantic-head indices for one token span."""
+    """Return sentence-relative semantic-head indices for one token span.
 
-    policy = SemanticHeadRules() if rules is None else rules
-    if not isinstance(policy, SemanticHeadRules):
-        raise TypeError("rules must be a SemanticHeadRules instance or None.")
+    This implements the original Bag of Ideas rule semantics: start at the
+    syntactic head, evaluate ordered rules, require a complete move path, and
+    restart from rule 1 after each successful move. Coordination expansion is
+    engine behavior rather than user rule syntax.
+    """
 
+    policy = load_semantic_head_rules(rules)
     n_tokens = len(token_ids)
+    lemma_values = (
+        [str(value) for value in text]
+        if lemmas is None
+        else list(lemmas)
+    )
+    ent_values = (
+        [None] * n_tokens if ent_types is None else list(ent_types)
+    )
     fields = {
         "head_token_ids": head_token_ids,
         "dependencies": dependencies,
         "pos": pos,
         "text": text,
+        "lemmas": lemma_values,
+        "ent_types": ent_values,
     }
     bad_lengths = {
         name: len(values)
@@ -135,20 +314,11 @@ def resolve_semantic_head_indices(
     if start < 0 or end > n_tokens or start >= end:
         raise ValueError(f"Invalid token span [{start}, {end}) for {n_tokens} tokens")
 
-    global_to_local = {int(token_id): index for index, token_id in enumerate(token_ids)}
+    global_to_local = {
+        int(token_id): index for index, token_id in enumerate(token_ids)
+    }
     span_indices = tuple(range(start, end))
     span_set = set(span_indices)
-
-    roots = [
-        index
-        for index in span_indices
-        if head_token_ids[index] is None
-        or global_to_local.get(int(head_token_ids[index]), -1) not in span_set
-        or global_to_local.get(int(head_token_ids[index]), -1) == index
-    ]
-    non_punct_roots = [index for index in roots if dependencies[index] != "punct"]
-    root = (non_punct_roots or roots or [start])[0]
-
     children: dict[int, list[int]] = {index: [] for index in span_indices}
     for child in span_indices:
         head = head_token_ids[child]
@@ -158,61 +328,245 @@ def resolve_semantic_head_indices(
         if parent in span_set and parent != child:
             children[parent].append(child)
 
-    function_pos = set(policy.function_pos)
+    roots = [
+        index
+        for index in span_indices
+        if head_token_ids[index] is None
+        or global_to_local.get(int(head_token_ids[index]), -1) not in span_set
+        or global_to_local.get(int(head_token_ids[index]), -1) == index
+    ]
+    non_punct_roots = [
+        index for index in roots if _fold(dependencies[index]) != "punct"
+    ]
+    syntactic_root = (non_punct_roots or roots or [start])[0]
 
-    def nearest_content_descendant(index: int) -> int:
-        queue = list(children.get(index, ()))
-        visited: set[int] = set()
-        while queue:
-            candidate = queue.pop(0)
-            if candidate in visited:
-                continue
-            visited.add(candidate)
-            candidate_pos = None if pos[candidate] is None else str(pos[candidate]).upper()
-            if dependencies[candidate] != "punct" and candidate_pos not in function_pos:
-                return candidate
-            queue.extend(children.get(candidate, ()))
-        return index
+    context = {
+        "source": source,
+        "role": role,
+    }
 
-    root_pos = None if pos[root] is None else str(pos[root]).upper()
-    if policy.move_off_function_pos and root_pos in function_pos:
-        root = nearest_content_descendant(root)
+    def attributes(index: int) -> dict[str, str | None]:
+        return {
+            "source": source,
+            "role": role,
+            "text": str(text[index]),
+            "lemma": None
+            if lemma_values[index] is None
+            else str(lemma_values[index]),
+            "pos": None if pos[index] is None else str(pos[index]),
+            "dep": None
+            if dependencies[index] is None
+            else str(dependencies[index]),
+            "ent_type": None
+            if ent_values[index] is None
+            else str(ent_values[index]),
+        }
 
-    if (
-        policy.rewrite_quantifier_links
-        and str(text[root]).casefold() in set(policy.quantifiers)
-    ):
-        link_words = set(policy.quantifier_links)
-        link_children = [
-            child
-            for child in children.get(root, ())
-            if str(text[child]).casefold() in link_words
-        ]
-        if link_children:
-            replacement = nearest_content_descendant(link_children[0])
-            replacement_pos = (
-                None if pos[replacement] is None else str(pos[replacement]).upper()
-            )
-            if replacement != link_children[0] or replacement_pos not in function_pos:
-                root = replacement
+    def matches(index: int, condition: Mapping[str, Any]) -> bool:
+        return _matches_condition(
+            condition,
+            values={**context, **attributes(index)},
+        )
 
-    heads = [root]
-    excluded_roles = set(policy.coordination_excluded_roles)
-    if policy.preserve_coordination and str(role).upper() not in excluded_roles:
-        changed = True
-        while changed:
-            changed = False
-            for index in span_indices:
-                if index in heads or dependencies[index] != "conj":
+    def follow_step(
+        current: int,
+        step: Mapping[str, Any],
+    ) -> int | None:
+        kind, selector = next(iter(step.items()))
+        if kind == "child":
+            for candidate in children.get(current, ()):
+                if matches(candidate, selector):
+                    return candidate
+            return None
+        if kind == "parent":
+            head = head_token_ids[current]
+            if head is None:
+                return None
+            candidate = global_to_local.get(int(head))
+            if candidate not in span_set or candidate == current:
+                return None
+            return candidate if matches(candidate, selector) else None
+        if kind == "within":
+            for candidate in span_indices:
+                if candidate != current and matches(candidate, selector):
+                    return candidate
+            return None
+        raise AssertionError(f"Unexpected semantic-head move kind {kind!r}.")
+
+    def apply_rules(initial: int) -> int:
+        current = initial
+        visited = {current}
+        while True:
+            moved = False
+            for rule in policy.rules:
+                if not matches(current, rule["when"]):
                     continue
-                parent_global = head_token_ids[index]
-                parent = (
-                    None
-                    if parent_global is None
-                    else global_to_local.get(int(parent_global))
-                )
-                if parent in heads:
-                    heads.append(index)
-                    changed = True
+                candidate = current
+                complete = True
+                for step in rule["move"]:
+                    next_candidate = follow_step(candidate, step)
+                    if next_candidate is None:
+                        complete = False
+                        break
+                    candidate = next_candidate
+                if not complete or candidate == current:
+                    continue
+                if candidate in visited:
+                    raise ValueError(
+                        "Semantic-head rules produced a movement cycle at "
+                        f"rule {rule['id']!r}."
+                    )
+                current = candidate
+                visited.add(current)
+                moved = True
+                break
+            if not moved:
+                return current
 
-    return tuple(dict.fromkeys(heads))
+    primary = apply_rules(syntactic_root)
+
+    # The original BoI resolver expands coordination in the engine rather than
+    # requiring users to write coordination rules. Each conjunct is then sent
+    # through the rule engine independently.
+    seeds = [primary]
+    changed = True
+    while changed:
+        changed = False
+        for candidate in span_indices:
+            if candidate in seeds or _fold(dependencies[candidate]) != "conj":
+                continue
+            head = head_token_ids[candidate]
+            parent = None if head is None else global_to_local.get(int(head))
+            if parent in seeds:
+                seeds.append(candidate)
+                changed = True
+
+    return tuple(dict.fromkeys(apply_rules(seed) for seed in seeds))
+
+
+def _validate_rule(raw_rule: Mapping[str, Any], *, index: int) -> dict[str, Any]:
+    if not isinstance(raw_rule, Mapping):
+        raise TypeError(f"Semantic-head rule {index} must be a mapping.")
+    unknown = set(raw_rule) - {"id", "when", "move"}
+    if unknown:
+        raise ValueError(
+            f"Semantic-head rule {index} has unknown fields {sorted(unknown)}."
+        )
+    rule_id = raw_rule.get("id")
+    if not isinstance(rule_id, str) or not rule_id:
+        raise ValueError(f"Semantic-head rule {index} requires a non-empty id.")
+    when = raw_rule.get("when", {})
+    if not isinstance(when, Mapping):
+        raise TypeError(f"Semantic-head rule {rule_id!r} when must be an object.")
+    normalized_when = _validate_condition(when, where=f"rule {rule_id!r} when")
+
+    move = raw_rule.get("move")
+    if not isinstance(move, Sequence) or isinstance(move, (str, bytes)) or not move:
+        raise ValueError(
+            f"Semantic-head rule {rule_id!r} move must be a non-empty array."
+        )
+    normalized_move: list[dict[str, Any]] = []
+    for step_index, raw_step in enumerate(move):
+        if not isinstance(raw_step, Mapping) or len(raw_step) != 1:
+            raise ValueError(
+                f"Semantic-head rule {rule_id!r} move step {step_index} must "
+                "contain exactly one of child, parent, or within."
+            )
+        kind, selector = next(iter(raw_step.items()))
+        if kind not in _MOVE_KINDS:
+            raise ValueError(
+                f"Semantic-head rule {rule_id!r} uses unsupported move {kind!r}."
+            )
+        if not isinstance(selector, Mapping):
+            raise TypeError(
+                f"Semantic-head rule {rule_id!r} move selector must be an object."
+            )
+        normalized_move.append(
+            {
+                str(kind): _validate_condition(
+                    selector,
+                    where=f"rule {rule_id!r} move step {step_index}",
+                    allow_context=False,
+                )
+            }
+        )
+    return {"id": rule_id, "when": normalized_when, "move": normalized_move}
+
+
+def _validate_condition(
+    condition: Mapping[str, Any],
+    *,
+    where: str,
+    allow_context: bool = True,
+) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    allowed_fields = _CONDITION_FIELDS if allow_context else (
+        _CONDITION_FIELDS - {"source", "role"}
+    )
+    for raw_key, raw_value in condition.items():
+        key = str(raw_key)
+        if key in {"any", "not"}:
+            if key == "any":
+                if (
+                    not isinstance(raw_value, Sequence)
+                    or isinstance(raw_value, (str, bytes))
+                    or not raw_value
+                ):
+                    raise ValueError(f"{where} any must be a non-empty array.")
+                normalized[key] = [
+                    _validate_condition(
+                        value,
+                        where=f"{where} any",
+                        allow_context=allow_context,
+                    )
+                    for value in raw_value
+                    if isinstance(value, Mapping)
+                ]
+                if len(normalized[key]) != len(raw_value):
+                    raise TypeError(f"{where} any entries must be objects.")
+            else:
+                if not isinstance(raw_value, Mapping):
+                    raise TypeError(f"{where} not must be an object.")
+                normalized[key] = _validate_condition(
+                    raw_value,
+                    where=f"{where} not",
+                    allow_context=allow_context,
+                )
+            continue
+        if key not in allowed_fields:
+            raise ValueError(f"{where} uses unsupported condition field {key!r}.")
+        values = (
+            list(raw_value)
+            if isinstance(raw_value, Sequence)
+            and not isinstance(raw_value, (str, bytes))
+            else [raw_value]
+        )
+        if not values:
+            raise ValueError(f"{where} field {key!r} cannot have an empty array.")
+        normalized[key] = [None if value is None else str(value) for value in values]
+    return normalized
+
+
+def _matches_condition(
+    condition: Mapping[str, Any],
+    *,
+    values: Mapping[str, str | None],
+) -> bool:
+    for key, expected in condition.items():
+        if key == "any":
+            if not any(_matches_condition(item, values=values) for item in expected):
+                return False
+            continue
+        if key == "not":
+            if _matches_condition(expected, values=values):
+                return False
+            continue
+        actual = values.get(key)
+        folded_actual = _fold(actual)
+        if folded_actual not in {_fold(value) for value in expected}:
+            return False
+    return True
+
+
+def _fold(value: Any) -> str | None:
+    return None if value is None else str(value).casefold()
