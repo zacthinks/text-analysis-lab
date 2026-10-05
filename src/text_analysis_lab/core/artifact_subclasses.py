@@ -476,11 +476,25 @@ class _MatrixArtifact(BaseArtifact):
         )
         return [basis_indices[index] for index in local]
 
-    def _row_name_column(self) -> str | None:
-        """Resolve the privileged row-name metadata field through row lineage."""
+    def _local_legacy_row_name_component(self) -> Mapping[str, Any] | None:
+        """Return the pre-row_name_column named-row descriptor, if present."""
+        data = self.components.get("data", {})
+        if not isinstance(data, Mapping):
+            return None
+        component = data.get("row_names")
+        return component if isinstance(component, Mapping) else None
+
+    def _row_name_source(self) -> tuple["_MatrixArtifact", str, bool] | None:
+        """Resolve the artifact and storage scheme that own named-row semantics."""
         value = self.descriptor.get("row_name_column")
         if isinstance(value, str) and value:
-            return value
+            return self, value, False
+
+        legacy = self._local_legacy_row_name_component()
+        if legacy is not None:
+            name = legacy.get("name")
+            if isinstance(name, str) and name:
+                return self, name, True
 
         lineage = artifact_lineage(self)
         if str(lineage.get("lineage_mode")) not in {"preserved_key", "rekeyed_key"}:
@@ -491,22 +505,50 @@ class _MatrixArtifact(BaseArtifact):
         basis = self.project.get_artifact(basis_ids[0])
         if not isinstance(basis, _MatrixArtifact):
             return None
-        return basis._row_name_column()
+        return basis._row_name_source()
+
+    def _row_name_column(self) -> str | None:
+        """Resolve the privileged row-name field through row lineage."""
+        source = self._row_name_source()
+        return None if source is None else source[1]
 
     @property
     def has_row_names(self) -> bool:
-        """Whether this matrix designates one ordinary metadata column as row names."""
-        return self._row_name_column() is not None
+        """Whether this matrix defines a unique human-readable row axis."""
+        return self._row_name_source() is not None
 
     @property
     def row_name(self) -> str | None:
-        """Return the privileged row-name metadata column, such as ``"word"``."""
+        """Return the privileged row-name field, such as ``"word"``."""
         return self._row_name_column()
 
+    def _legacy_row_names_for_positions(
+        self, positions: Sequence[int]
+    ) -> list[str]:
+        """Read named rows from the legacy data/row_names parquet dataset."""
+        legacy = self._local_legacy_row_name_component()
+        if legacy is None:
+            raise ArtifactError(
+                f"Matrix artifact {self.artifact_id} has no legacy row-name component."
+            )
+        raw_path = legacy.get("path", "data/row_names/")
+        legacy_dir = self.storage.artifact_dir / str(raw_path)
+        locations = _locations_for_positions(self, positions)
+        wanted_by_batch = _group_offsets_by_batch(locations)
+        names_by_position: dict[int, str] = {}
+        for batch, offset_to_position in wanted_by_batch.items():
+            path = legacy_dir / self.storage.part_name(batch, "parquet")
+            if not path.exists():
+                raise ArtifactError(f"Missing legacy matrix row_names part: {path}")
+            frame = pd.read_parquet(path, columns=["row_name"])
+            for offset, position in offset_to_position.items():
+                names_by_position[position] = str(frame.iloc[int(offset)]["row_name"])
+        return [names_by_position[int(position)] for position in positions]
+
     def get_row_names(self, *, positions: Sequence[int] | None = None) -> list[str]:
-        """Return values from the privileged row-name metadata column."""
-        row_name_column = self.row_name
-        if row_name_column is None:
+        """Return privileged row names, including legacy named-row artifacts."""
+        source = self._row_name_source()
+        if source is None:
             raise UnsupportedArtifactOperationError(
                 f"Matrix artifact {self.artifact_id} does not define row names."
             )
@@ -516,19 +558,42 @@ class _MatrixArtifact(BaseArtifact):
         if not resolved:
             return []
 
+        source_artifact, row_name_column, legacy = source
+        if legacy:
+            source_positions = (
+                resolved
+                if source_artifact is self
+                else self.project.query.map_descendant_positions_to_ancestor_positions(
+                    self,
+                    source_artifact,
+                    resolved,
+                )
+            )
+            return source_artifact._legacy_row_names_for_positions(source_positions)
+
         query_info = self.query_columns(metadata_mode="full")
-        mapping = dict(query_info.get("mapping", {}))
-        output_name = mapping.get(f"metadata.{row_name_column}", row_name_column)
+        matches = [
+            column
+            for column in query_info.get("columns", ())
+            if str(column.get("namespace")) == "metadata"
+            and str(column.get("base_name")) == row_name_column
+        ]
+        if len(matches) != 1:
+            raise ArtifactError(
+                f"Matrix row-name metadata column {row_name_column!r} does not "
+                f"resolve uniquely for artifact {self.artifact_id}."
+            )
+        output_name = str(matches[0]["output_name"])
         frame = self.query(
             key_columns=False,
             data_columns=False,
-            metadata_columns=[row_name_column],
+            metadata_columns=[output_name],
             metadata_mode="full",
             positions=resolved,
             form="table",
             include_position=False,
         )
-        if output_name not in frame.columns:
+        if not isinstance(frame, pd.DataFrame) or output_name not in frame.columns:
             raise ArtifactError(
                 f"Matrix row-name metadata column {row_name_column!r} could not be resolved."
             )

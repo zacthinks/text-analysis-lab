@@ -1062,14 +1062,11 @@ class ArtifactWriter:
             ),
             self.data_dir,
             values_dir,
-            on_init=(
-                None
-                if self.feature_metadata_mode == "inherit"
-                else lambda: self._write_feature_metadata(
-                    labels, matrix_payload.get("feature_metadata")
-                )
-            ),
         )
+        if self.feature_metadata_mode != "inherit":
+            self._write_or_validate_feature_metadata(
+                labels, matrix_payload.get("feature_metadata")
+            )
         sparse.save_npz(self.storage.data_value_part_path(part_index, "npz"), values)
 
     def _write_dense_matrix_data(
@@ -1106,14 +1103,11 @@ class ArtifactWriter:
             ),
             self.data_dir,
             values_dir,
-            on_init=(
-                None
-                if self.feature_metadata_mode == "inherit"
-                else lambda: self._write_feature_metadata(
-                    labels, matrix_payload.get("feature_metadata")
-                )
-            ),
         )
+        if self.feature_metadata_mode != "inherit":
+            self._write_or_validate_feature_metadata(
+                labels, matrix_payload.get("feature_metadata")
+            )
         np.save(self.storage.data_value_part_path(part_index, "npy"), values)
 
     def _write_other_data(self, data: Any, *, part_index: int) -> None:
@@ -1187,44 +1181,79 @@ class ArtifactWriter:
             raise ArtifactError("Matrix columns changed after they were established.")
         return labels
 
-    def _write_feature_metadata(
+    def _normalized_feature_metadata_frame(
         self,
         labels: tuple[str, ...],
         feature_metadata: Any = None,
-    ) -> None:
-        """Persist locally owned Feature Metadata for a matrix axis."""
-        path = self.storage.feature_metadata_path
+    ) -> pd.DataFrame:
+        """Normalize one batch's owned Feature Metadata for artifact-wide checks."""
         if feature_metadata is None:
-            frame = pd.DataFrame(
+            return pd.DataFrame(
                 {
                     "column_index": np.arange(len(labels), dtype="int64"),
                     "column": list(labels),
                 }
             )
-        else:
-            frame = _require_dataframe(
-                feature_metadata,
-                n_rows=len(labels),
-                channel="feature_metadata",
-            )
-            frame.columns = [str(col) for col in frame.columns]
-            if "column" in frame.columns:
-                observed = tuple(str(value) for value in frame["column"].tolist())
-                if observed != labels:
-                    raise ArtifactError(
-                        "Feature Metadata 'column' values must match matrix columns."
-                    )
-            else:
-                frame.insert(0, "column", list(labels))
-            if "column_index" in frame.columns:
-                frame["column_index"] = np.arange(len(labels), dtype="int64")
-            else:
-                frame.insert(
-                    0,
-                    "column_index",
-                    np.arange(len(labels), dtype="int64"),
+
+        frame = _require_dataframe(
+            feature_metadata,
+            n_rows=len(labels),
+            channel="feature_metadata",
+        )
+        frame.columns = [str(col) for col in frame.columns]
+        if "column" in frame.columns:
+            observed = tuple(str(value) for value in frame["column"].tolist())
+            if observed != labels:
+                raise ArtifactError(
+                    "Feature Metadata 'column' values must match matrix columns."
                 )
-        frame.to_parquet(path, index=False)
+        else:
+            frame.insert(0, "column", list(labels))
+        if "column_index" in frame.columns:
+            frame["column_index"] = np.arange(len(labels), dtype="int64")
+        else:
+            frame.insert(
+                0,
+                "column_index",
+                np.arange(len(labels), dtype="int64"),
+            )
+        return frame.reset_index(drop=True)
+
+    def _write_or_validate_feature_metadata(
+        self,
+        labels: tuple[str, ...],
+        feature_metadata: Any = None,
+    ) -> None:
+        """Write Feature Metadata once and require exact semantic parity thereafter."""
+        path = self.storage.feature_metadata_path
+        frame = self._normalized_feature_metadata_frame(labels, feature_metadata)
+        if not path.exists():
+            frame.to_parquet(path, index=False)
+            return
+
+        existing = pd.read_parquet(path).reset_index(drop=True)
+        try:
+            pd.testing.assert_frame_equal(
+                existing,
+                frame,
+                check_dtype=False,
+                check_like=False,
+            )
+        except AssertionError as exc:
+            raise ArtifactError(
+                "Owned Feature Metadata changed after it was established by the "
+                "first matrix batch."
+            ) from exc
+
+    def _write_feature_metadata(
+        self,
+        labels: tuple[str, ...],
+        feature_metadata: Any = None,
+    ) -> None:
+        """Backward-compatible helper for writing owned Feature Metadata."""
+        self._normalized_feature_metadata_frame(
+            labels, feature_metadata
+        ).to_parquet(self.storage.feature_metadata_path, index=False)
 
     def _validate_row_name_declaration(
         self, payload: Mapping[str, Any], *, n_rows: int

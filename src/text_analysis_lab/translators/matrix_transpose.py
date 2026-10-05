@@ -220,22 +220,22 @@ class MatrixTranspose(BaseTranslator):
             "columns": columns,
             "feature_metadata": promoted,
         }
-        if feature_metadata is not None:
-            if not isinstance(feature_metadata, pd.DataFrame):
-                raise TypeError(
-                    "MatrixTranspose feature_metadata must be a pandas DataFrame."
-                )
-            if len(feature_metadata) != len(feature_names):
-                raise ValueError(
-                    "MatrixTranspose feature_metadata rows must match the feature "
-                    f"width: {len(feature_metadata)} != {len(feature_names)}."
-                )
-            metadata = _transpose_feature_metadata(
-                feature_metadata,
-                row_name=self.row_name,
+        if feature_metadata is None:
+            feature_metadata = feature_metadata_from_columns(feature_names)
+        elif not isinstance(feature_metadata, pd.DataFrame):
+            raise TypeError(
+                "MatrixTranspose feature_metadata must be a pandas DataFrame."
             )
-            result["metadata"] = metadata
-            result["row_name_column"] = self.row_name
+        if len(feature_metadata) != len(feature_names):
+            raise ValueError(
+                "MatrixTranspose feature_metadata rows must match the feature "
+                f"width: {len(feature_metadata)} != {len(feature_names)}."
+            )
+        result["metadata"] = _transpose_feature_metadata(
+            feature_metadata,
+            row_name=self.row_name,
+        )
+        result["row_name_column"] = self.row_name
         return result
 
     def output_specs(
