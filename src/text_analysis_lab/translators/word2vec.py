@@ -23,6 +23,7 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.translators._matrix_transform_utils import feature_metadata_from_columns
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -157,11 +158,19 @@ class Word2Vec(BaseTranslator):
         words, counts, vectors, losses, gensim_version = self._train(normalized)
         self.training_loss_ = losses
         self.gensim_version_ = gensim_version
+        columns = _dimension_columns(self.vector_size)
         return {
             "words": words,
             "counts": counts,
             "values": vectors,
-            "columns": _dimension_columns(self.vector_size),
+            "feature_metadata": feature_metadata_from_columns(columns),
+            "metadata": pd.DataFrame(
+                {
+                    self.row_name: words,
+                    "count": counts.astype(np.int64, copy=False),
+                }
+            ),
+            "row_name_column": self.row_name,
             "training_loss": losses,
             "gensim_version": gensim_version,
         }
@@ -255,14 +264,13 @@ class Word2Vec(BaseTranslator):
                     "keys": pd.DataFrame(
                         {self.word_key: np.arange(len(words), dtype=np.int64)}
                     ),
-                    "metadata": pd.DataFrame(
-                        {"count": counts.astype(np.int64, copy=False)}
-                    ),
+                    "metadata": trained["metadata"],
+                    "row_name_column": self.row_name,
                     "data": {
                         "values": trained["values"],
-                        "columns": trained["columns"],
-                        "row_names": words,
-                        "row_name": self.row_name,
+                        "columns": trained["feature_metadata"]["column"]
+                        .astype(str)
+                        .tolist(),
                     },
                 }
             }

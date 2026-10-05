@@ -23,9 +23,12 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
 from text_analysis_lab.translators._matrix_transform_utils import (
+    feature_labels,
+    feature_metadata_from_columns,
     native_matrix_packet,
     single_input,
     single_source,
+    unpack_standalone_matrix,
 )
 
 if TYPE_CHECKING:
@@ -33,21 +36,19 @@ if TYPE_CHECKING:
 
 
 _RESERVED_KEY_NAMES = frozenset({"_position", "_batch", "_row_offset"})
+_RESERVED_FEATURE_METADATA_NAMES = frozenset({"column_index", "column"})
 
 
 class MatrixTranspose(BaseTranslator):
-    """Transpose a dense or sparse matrix and reindex features as rows.
+    """Transpose a matrix and eagerly swap the semantic roles of its axes.
 
-    The source matrix's feature/column labels become unique human-readable row
-    names on the output. The output receives a fresh integer primary key
-    (``feature_id`` by default), because transposition changes the observation
-    universe rather than preserving source row identity.
+    Source feature labels become the output's privileged row-name metadata.
+    Source row names become output feature labels when available; otherwise
+    deterministic labels are derived from the source primary key.
 
-    Output columns identify source rows. If the source already has unique named
-    rows, those names are reused. Otherwise TeAL derives deterministic labels
-    from the source primary-key values. The source Feature Metadata is promoted to
-    local row metadata, excluding only ``column_index`` because the output's fresh
-    primary key now carries positional row identity.
+    Additional source key/metadata columns may be promoted eagerly into the
+    output Feature Metadata with the feature_metadata_columns operation
+    parameter. Cross-axis lazy inheritance is intentionally not implemented.
     """
 
     operation_type = "translate"
@@ -65,21 +66,88 @@ class MatrixTranspose(BaseTranslator):
         self._source_type: str | None = None
         self._source_features: tuple[str, ...] | None = None
         self._source_feature_metadata: pd.DataFrame | None = None
-        self._source_has_row_names: bool = False
+        self._promoted_feature_columns: tuple[str, ...] = ()
 
     def translate(
         self,
         matrix: Any,
         *,
-        features: Sequence[str],
+        features: Sequence[str] | None = None,
         row_labels: Sequence[str] | None = None,
         feature_metadata: pd.DataFrame | None = None,
+        row_metadata: pd.DataFrame | None = None,
+        row_name_column: str | None = None,
+        feature_metadata_columns: Sequence[str] | None = None,
     ) -> dict[str, Any]:
-        """Transpose an ordinary matrix while carrying explicit axis labels."""
-        shape = getattr(matrix, "shape", None)
-        if shape is None or len(shape) != 2:
+        """Transpose a matrix with an eager, explicit axis-metadata swap."""
+        payload = matrix if isinstance(matrix, Mapping) else None
+        matrix, embedded_feature_metadata, _ = unpack_standalone_matrix(
+            matrix,
+            name="MatrixTranspose.translate(...)",
+        )
+        shape = matrix.shape
+
+        if embedded_feature_metadata is not None:
+            if (
+                feature_metadata is not None
+                and not feature_metadata.reset_index(drop=True).equals(
+                    embedded_feature_metadata.reset_index(drop=True)
+                )
+            ):
+                raise ValueError(
+                    "MatrixTranspose received conflicting feature_metadata values."
+                )
+            feature_metadata = embedded_feature_metadata
+            embedded_features = feature_labels(
+                embedded_feature_metadata,
+                name="MatrixTranspose",
+            )
+            if (
+                features is not None
+                and tuple(str(value) for value in features)
+                != tuple(embedded_features)
+            ):
+                raise ValueError(
+                    "MatrixTranspose received conflicting features and Feature Metadata."
+                )
+            features = embedded_features
+
+        if payload is not None:
+            embedded_row_metadata = payload.get("metadata")
+            if embedded_row_metadata is not None:
+                if not isinstance(embedded_row_metadata, pd.DataFrame):
+                    raise TypeError(
+                        "MatrixTranspose standalone metadata must be a pandas DataFrame."
+                    )
+                if (
+                    row_metadata is not None
+                    and not row_metadata.reset_index(drop=True).equals(
+                        embedded_row_metadata.reset_index(drop=True)
+                    )
+                ):
+                    raise ValueError(
+                        "MatrixTranspose received conflicting row metadata values."
+                    )
+                row_metadata = embedded_row_metadata
+            embedded_row_name = payload.get("row_name_column")
+            if embedded_row_name is not None:
+                if not isinstance(embedded_row_name, str) or not embedded_row_name:
+                    raise ValueError(
+                        "MatrixTranspose row_name_column must be a non-empty string."
+                    )
+                if (
+                    row_name_column is not None
+                    and row_name_column != embedded_row_name
+                ):
+                    raise ValueError(
+                        "MatrixTranspose received conflicting row_name_column values."
+                    )
+                row_name_column = embedded_row_name
+
+        if features is None:
             raise ValueError(
-                "MatrixTranspose.translate(...) requires a two-dimensional matrix."
+                "MatrixTranspose.translate(...) requires features for raw matrices "
+                "or feature_metadata in a standalone matrix mapping."
             )
         feature_names = [str(value) for value in features]
         if len(feature_names) != int(shape[1]):
@@ -87,6 +155,13 @@ class MatrixTranspose(BaseTranslator):
                 "MatrixTranspose features must match the matrix feature width: "
                 f"{len(feature_names)} != {int(shape[1])}."
             )
+
+        if row_labels is None and row_name_column is not None:
+            if row_metadata is None or row_name_column not in row_metadata.columns:
+                raise ValueError(
+                    "MatrixTranspose row_name_column must identify a column in row_metadata."
+                )
+            row_labels = row_metadata[row_name_column].tolist()
 
         if row_labels is None:
             columns = [str(index) for index in range(int(shape[0]))]
@@ -104,32 +179,61 @@ class MatrixTranspose(BaseTranslator):
 
         try:
             from scipy import sparse
-        except ImportError:  # pragma: no cover - scipy is a package dependency
+        except ImportError:  # pragma: no cover
             sparse = None
         if sparse is not None and sparse.issparse(matrix):
             values = matrix.transpose().tocsr()
         else:
             values = np.asarray(matrix).T.copy()
 
+        promoted = feature_metadata_from_columns(columns)
+        requested_promotions = tuple(
+            str(value) for value in (feature_metadata_columns or ())
+        )
+        if requested_promotions:
+            if row_metadata is None:
+                raise ValueError(
+                    "MatrixTranspose feature_metadata_columns requires row_metadata."
+                )
+            row_metadata = row_metadata.reset_index(drop=True)
+            if len(row_metadata) != int(shape[0]):
+                raise ValueError(
+                    "MatrixTranspose row_metadata rows must match the matrix row count."
+                )
+            for column in requested_promotions:
+                if column == row_name_column:
+                    continue
+                if column in _RESERVED_FEATURE_METADATA_NAMES:
+                    raise ValueError(
+                        f"MatrixTranspose cannot promote reserved Feature Metadata "
+                        f"field {column!r}."
+                    )
+                if column not in row_metadata.columns:
+                    raise ValueError(
+                        f"MatrixTranspose row metadata is missing requested field {column!r}."
+                    )
+                promoted[column] = row_metadata[column].to_numpy(copy=True)
+
         result: dict[str, Any] = {
             "values": values,
-            "columns": columns,
-            "row_names": feature_names,
-            "row_name": self.row_name,
+            "feature_metadata": promoted,
         }
-        if feature_metadata is not None:
-            if not isinstance(feature_metadata, pd.DataFrame):
-                raise TypeError(
-                    "MatrixTranspose feature_metadata must be a pandas DataFrame."
-                )
-            if len(feature_metadata) != len(feature_names):
-                raise ValueError(
-                    "MatrixTranspose feature_metadata rows must match the feature "
-                    f"width: {len(feature_metadata)} != {len(feature_names)}."
-                )
-            metadata = _transpose_feature_metadata(feature_metadata)
-            if len(metadata.columns) > 0:
-                result["metadata"] = metadata
+        if feature_metadata is None:
+            feature_metadata = feature_metadata_from_columns(feature_names)
+        elif not isinstance(feature_metadata, pd.DataFrame):
+            raise TypeError(
+                "MatrixTranspose feature_metadata must be a pandas DataFrame."
+            )
+        if len(feature_metadata) != len(feature_names):
+            raise ValueError(
+                "MatrixTranspose feature_metadata rows must match the feature "
+                f"width: {len(feature_metadata)} != {len(feature_names)}."
+            )
+        result["metadata"] = _transpose_feature_metadata(
+            feature_metadata,
+            row_name=self.row_name,
+        )
+        result["row_name_column"] = self.row_name
         return result
 
     def output_specs(
@@ -158,13 +262,21 @@ class MatrixTranspose(BaseTranslator):
         sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
-        _ = sources, mode
-        if params:
+        _ = mode
+        unknown = sorted(set(params) - {"feature_metadata_columns"})
+        if unknown:
             raise OperatorError(
-                "MatrixTranspose does not accept operation parameters; "
-                f"got {sorted(params)}."
+                f"Unknown MatrixTranspose parameter(s): {unknown}."
             )
-        return {}
+        source = single_source(sources, name="MatrixTranspose")
+        promoted, metadata_request = _resolve_promoted_columns(
+            source,
+            params.get("feature_metadata_columns", False),
+        )
+        return {
+            "feature_metadata_columns": list(promoted),
+            "metadata_columns": list(metadata_request),
+        }
 
     def input_request(
         self,
@@ -173,7 +285,6 @@ class MatrixTranspose(BaseTranslator):
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
-        _ = request
         if mode != "translate":
             raise OperatorError(f"Unsupported MatrixTranspose mode {mode!r}.")
         source = single_source(sources, name="MatrixTranspose")
@@ -184,7 +295,6 @@ class MatrixTranspose(BaseTranslator):
         self._source_type = source.artifact_type.value
         feature_getter = getattr(source, "get_feature_metadata", None)
         if not callable(feature_getter):
-            # Compatibility for pre-Feature-Metadata matrix-like sources.
             feature_getter = getattr(source, "get_feature_frame", None)
         if callable(feature_getter):
             feature_metadata = feature_getter()
@@ -204,15 +314,27 @@ class MatrixTranspose(BaseTranslator):
                 "MatrixTranspose source Feature Metadata length does not match source "
                 f"feature width: {len(feature_metadata)} != {len(self._source_features)}."
             )
-        self._source_feature_metadata = _transpose_feature_metadata(feature_metadata)
-        self._source_has_row_names = bool(getattr(source, "has_row_names", False))
+        self._source_feature_metadata = feature_metadata
+
+        promoted = tuple(
+            str(value) for value in request.params.get("feature_metadata_columns", ())
+        )
+        metadata_request = [
+            str(value) for value in request.params.get("metadata_columns", ())
+        ]
+        self._promoted_feature_columns = promoted
+
         return SourceRequest(
             artifact_type=("sparse_matrix", "dense_matrix"),
             mode="full_artifact",
-            columns=ColumnRequest(keys=True, data=True, metadata=False),
+            columns=ColumnRequest(
+                keys=True,
+                data=True,
+                metadata=metadata_request or False,
+            ),
             batch_size=None,
             form="native",
-            metadata_mode="none",
+            metadata_mode="full" if metadata_request else "none",
             include_position=True,
         )
 
@@ -237,26 +359,35 @@ class MatrixTranspose(BaseTranslator):
                 f"execution: expected {len(source_features)}, got {matrix.shape[1]}."
             )
 
-        row_labels = self._source_row_labels(packet, info, key_columns)
+        native = packet.data if isinstance(packet.data, Mapping) else {}
+        embedded_row_names = native.get("row_names")
+        row_labels = self._source_row_labels(
+            info,
+            key_columns,
+            row_names=embedded_row_names,
+        )
         translated = self.translate(
             matrix,
             features=source_features,
             row_labels=row_labels,
             feature_metadata=feature_metadata,
+            row_metadata=info,
+            feature_metadata_columns=self._promoted_feature_columns,
         )
         keys = pd.DataFrame(
             {self.key_name: np.arange(len(source_features), dtype=np.int64)}
         )
         data = {
             "values": translated["values"],
-            "columns": translated["columns"],
-            "row_names": translated["row_names"],
-            "row_name": translated["row_name"],
+            "columns": translated["feature_metadata"]["column"].astype(str).tolist(),
+            "feature_metadata": translated["feature_metadata"],
         }
-        output: dict[str, Any] = {"keys": keys, "data": data}
-        if "metadata" in translated:
-            output["metadata"] = translated["metadata"]
-
+        output: dict[str, Any] = {
+            "keys": keys,
+            "metadata": translated["metadata"],
+            "row_name_column": translated["row_name_column"],
+            "data": data,
+        }
         return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: output})
 
     def handle_batch_result(
@@ -283,7 +414,7 @@ class MatrixTranspose(BaseTranslator):
         return {"key_name": self.key_name, "row_name": self.row_name}
 
     @classmethod
-    def from_json_state(cls, state: Mapping[str, Any]) -> MatrixTranspose:
+    def from_json_state(cls, state: Mapping[str, Any]) -> "MatrixTranspose":
         return cls(
             key_name=str(state.get("key_name", "feature_id")),
             row_name=str(state.get("row_name", "feature")),
@@ -301,18 +432,28 @@ class MatrixTranspose(BaseTranslator):
 
     def _source_row_labels(
         self,
-        packet: InputBatch,
         info: pd.DataFrame,
         key_columns: Sequence[str],
+        *,
+        row_names: Any = None,
     ) -> list[str]:
-        if self._source_has_row_names and isinstance(packet.data, Mapping):
-            raw_names = packet.data.get("row_names")
-            if isinstance(raw_names, Sequence) and not isinstance(
-                raw_names, (str, bytes)
+        if row_names is not None:
+            if isinstance(row_names, (str, bytes)) or not isinstance(
+                row_names, Sequence
             ):
-                names = [str(value) for value in raw_names]
-                if len(names) == len(info):
-                    return names
+                raise ArtifactError(
+                    "MatrixTranspose source row names must be a sequence."
+                )
+            names = [str(value) for value in row_names]
+            if len(names) != len(info):
+                raise ArtifactError(
+                    "MatrixTranspose source row-name count does not match source rows."
+                )
+            if len(set(names)) != len(names):
+                raise ArtifactError(
+                    "MatrixTranspose source row names must be unique."
+                )
+            return names
 
         if not key_columns:
             raise ArtifactError("MatrixTranspose source has no primary-key columns.")
@@ -337,24 +478,104 @@ class MatrixTranspose(BaseTranslator):
         return labels
 
 
-def _transpose_feature_metadata(feature_metadata: pd.DataFrame) -> pd.DataFrame:
-    """Promote feature-axis annotations to row metadata after transpose.
+def _resolve_promoted_columns(
+    source: "BaseArtifact",
+    selection: Any,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Resolve row-level key/metadata fields selected for eager promotion."""
+    if selection is None or selection is False:
+        return (), ()
 
-    ``column_index`` is local positional structure rather than feature metadata,
-    so the new artifact's fresh integer primary key replaces it. All other
-    Feature Metadata columns are preserved verbatim and in feature-axis order.
-    """
+    query_info = source.query_columns(metadata_mode="full")
+    columns = tuple(query_info.get("columns", ()))
+    by_output = {str(column["output_name"]): column for column in columns}
+
+    if selection is True:
+        requested = [
+            str(column["output_name"])
+            for column in columns
+            if column["namespace"] in {"key", "metadata"}
+        ]
+    elif isinstance(selection, str):
+        requested = [selection]
+    elif isinstance(selection, Sequence):
+        requested = [str(value) for value in selection]
+    else:
+        raise OperatorError(
+            "MatrixTranspose feature_metadata_columns must be a column name, "
+            "sequence of names, True, False, or None."
+        )
+
+    if len(set(requested)) != len(requested):
+        raise OperatorError(
+            f"Duplicate MatrixTranspose feature_metadata_columns: {requested!r}."
+        )
+
+    source_row_name = getattr(source, "row_name", None)
+    mapping = dict(query_info.get("mapping", {}))
+    resolved_row_name = (
+        None
+        if not isinstance(source_row_name, str) or not source_row_name
+        else str(mapping.get(f"metadata.{source_row_name}", source_row_name))
+    )
+
+    promoted: list[str] = []
+    metadata_request: list[str] = []
+    for name in requested:
+        column = by_output.get(name)
+        if column is None:
+            ambiguous = query_info.get("ambiguous", {})
+            if name in ambiguous:
+                raise OperatorError(
+                    f"MatrixTranspose column {name!r} is ambiguous; use one of "
+                    f"{ambiguous[name]}."
+                )
+            raise OperatorError(
+                f"MatrixTranspose column {name!r} is not available. Available "
+                f"row-level columns are {sorted(by_output)}."
+            )
+        namespace = str(column["namespace"])
+        if namespace not in {"key", "metadata"}:
+            raise OperatorError(
+                f"MatrixTranspose can promote only row key/metadata fields; "
+                f"{name!r} resolves to {namespace!r}."
+            )
+        if name == resolved_row_name:
+            continue
+        if name in _RESERVED_FEATURE_METADATA_NAMES:
+            raise OperatorError(
+                f"MatrixTranspose cannot promote reserved Feature Metadata field "
+                f"{name!r}."
+            )
+        promoted.append(name)
+        if namespace == "metadata":
+            metadata_request.append(name)
+
+    return tuple(promoted), tuple(metadata_request)
+
+
+def _transpose_feature_metadata(
+    feature_metadata: pd.DataFrame,
+    *,
+    row_name: str,
+) -> pd.DataFrame:
+    """Eagerly promote source Feature Metadata to output row metadata."""
     metadata = feature_metadata.reset_index(drop=True).copy()
     if "column_index" in metadata.columns:
         metadata = metadata.drop(columns=["column_index"])
+    if "column" not in metadata.columns:
+        raise ValueError("MatrixTranspose Feature Metadata must contain 'column'.")
+    if row_name != "column" and row_name in metadata.columns:
+        raise ValueError(
+            f"MatrixTranspose row_name {row_name!r} conflicts with Feature Metadata."
+        )
+    metadata = metadata.rename(columns={"column": row_name})
     return metadata
 
 
 def _scalar_key(value: Any) -> str:
     if isinstance(value, (np.integer, int)) and not isinstance(value, bool):
         return str(int(value))
-    # TeAL primary keys are currently integer-only, but keep deterministic JSON
-    # formatting at this boundary if that contract broadens later.
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
 
 

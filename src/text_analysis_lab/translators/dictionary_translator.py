@@ -26,6 +26,12 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.translators._matrix_transform_utils import (
+    feature_labels,
+    feature_metadata_from_columns,
+    standalone_matrix_payload,
+    unpack_standalone_matrix,
+)
 from text_analysis_lab.dictionaries import (
     Dictionary,
     PolarityDictionary,
@@ -106,9 +112,29 @@ class DictionaryTranslator(BaseTranslator):
         self,
         matrix: Any,
         *,
-        features: Sequence[str],
+        features: Sequence[str] | None = None,
     ) -> dict[str, Any]:
-        """Translate an ordinary lexical count matrix using explicit features."""
+        """Translate lexical counts using explicit or carried Feature Metadata."""
+        matrix, feature_metadata, structured = unpack_standalone_matrix(
+            matrix,
+            name="DictionaryTranslator.translate(...)",
+        )
+        if feature_metadata is not None:
+            observed_features = feature_labels(
+                feature_metadata,
+                name="DictionaryTranslator",
+            )
+            if features is not None and tuple(str(v) for v in features) != tuple(observed_features):
+                raise ValueError(
+                    "DictionaryTranslator received conflicting explicit features and "
+                    "Feature Metadata."
+                )
+            features = observed_features
+        if features is None:
+            raise ValueError(
+                "DictionaryTranslator.translate(...) requires features for raw matrices "
+                "or feature_metadata in a standalone matrix mapping."
+            )
         self._set_source_features(features)
         counts = _validated_count_matrix(matrix)
         projection, matched_mask, columns = self._require_resolution()
@@ -141,7 +167,7 @@ class DictionaryTranslator(BaseTranslator):
 
         return {
             "values": translated,
-            "columns": columns,
+            "feature_metadata": feature_metadata_from_columns(columns),
             "metadata": pd.DataFrame(
                 {
                     "matched": matched,
@@ -256,7 +282,11 @@ class DictionaryTranslator(BaseTranslator):
                     "metadata": translated["metadata"],
                     "data": {
                         "values": translated["values"],
-                        "columns": translated["columns"],
+                        "columns": tuple(
+                            translated["feature_metadata"]["column"]
+                            .astype(str)
+                            .tolist()
+                        ),
                     },
                 }
             }

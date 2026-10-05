@@ -322,4 +322,4 @@ def test_count_vectorizer_porter_stemming_is_persisted_and_applied() -> None:
     )
     assert restored.stemmer == "porter"
     transformed = restored.translate(["runs cats"])
-    assert transformed.shape == (1, len(restored._feature_names()))
+    assert transformed["values"].shape == (1, len(restored._feature_names()))

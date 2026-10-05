@@ -96,7 +96,7 @@ def test_matrix_transpose_promotes_feature_metadata_to_row_metadata() -> None:
         primary_key=["doc_id"],
         get_data_columns=lambda: list(FEATURES),
         get_feature_metadata=lambda: feature_metadata.copy(),
-        has_row_names=False,
+        row_name=None,
     )
     translator = MatrixTranspose()
     request = translator.input_request(
@@ -113,16 +113,71 @@ def test_matrix_transpose_promotes_feature_metadata_to_row_metadata() -> None:
     )
     output = result.outputs["output"]
     assert output["keys"]["feature_id"].tolist() == list(range(len(FEATURES)))
-    assert output["data"]["row_names"] == FEATURES
-    assert output["data"]["row_name"] == "feature"
+    assert output["row_name_column"] == "feature"
     assert sparse.isspmatrix_csr(output["data"]["values"])
     assert output["data"]["values"].shape == (len(FEATURES), COUNTS.shape[0])
 
     metadata = output["metadata"]
-    assert metadata.columns.tolist() == ["column", "family", "score"]
-    assert metadata["column"].tolist() == FEATURES
+    assert metadata.columns.tolist() == ["feature", "family", "score"]
+    assert metadata["feature"].tolist() == FEATURES
     assert metadata["family"].tolist() == ["a", "a", "b", "b", "c"]
     assert metadata["score"].tolist() == [1.0, 2.0, 3.0, 4.0, 5.0]
+    feature_metadata_out = output["data"]["feature_metadata"]
+    assert feature_metadata_out["column"].tolist() == [
+        "doc_id=0",
+        "doc_id=1",
+        "doc_id=2",
+        "doc_id=3",
+        "doc_id=4",
+        "doc_id=5",
+    ]
+
+
+
+
+def test_matrix_transpose_raw_matrix_swaps_feature_names_to_row_names() -> None:
+    translated = MatrixTranspose().translate(
+        np.asarray([[1.0, 2.0], [3.0, 4.0]]),
+        features=["alpha", "beta"],
+    )
+    assert translated["row_name_column"] == "feature"
+    assert translated["metadata"].to_dict("list") == {
+        "feature": ["alpha", "beta"]
+    }
+    assert translated["feature_metadata"]["column"].tolist() == ["0", "1"]
+
+def test_matrix_transpose_eagerly_promotes_selected_row_fields() -> None:
+    feature_metadata = pd.DataFrame(
+        {
+            "column_index": np.arange(len(FEATURES), dtype=np.int64),
+            "column": FEATURES,
+        }
+    )
+    matrix = COUNTS[:2]
+    row_metadata = pd.DataFrame(
+        {
+            "doc_name": ["doc-a", "doc-b"],
+            "year": [2020, 2021],
+            "group": ["train", "test"],
+        }
+    )
+    translated = MatrixTranspose().translate(
+        {
+            "values": matrix,
+            "feature_metadata": feature_metadata,
+            "metadata": row_metadata,
+            "row_name_column": "doc_name",
+        },
+        feature_metadata_columns=["year", "group"],
+    )
+    assert translated["feature_metadata"].to_dict("list") == {
+        "column_index": [0, 1],
+        "column": ["doc-a", "doc-b"],
+        "year": [2020, 2021],
+        "group": ["train", "test"],
+    }
+    assert translated["row_name_column"] == "feature"
+    assert translated["metadata"]["feature"].tolist() == FEATURES
 
 
 def test_tfidf_defaults_to_weighting_without_implicit_normalization() -> None:

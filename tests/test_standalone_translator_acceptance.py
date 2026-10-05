@@ -134,9 +134,9 @@ def test_frozen_pipeline_survives_fresh_interpreter_and_matches_geco_replay(
         finally:
             project.close()
 
-        values = svd.translate(tfidf.translate(count.translate(payload["texts"])))
+        result = svd.translate(tfidf.translate(count.translate(payload["texts"])))
         Path(payload["output_path"]).write_text(
-            json.dumps(np.asarray(values).tolist()),
+            json.dumps(np.asarray(result["values"]).tolist()),
             encoding="utf-8",
         )
         """
@@ -360,7 +360,7 @@ def test_built_wheel_imports_and_standalone_translation_works_outside_checkout(
         from text_analysis_lab.translators import CountVectorizer
 
         translator = CountVectorizer(vocabulary={"alpha": 0, "beta": 1})
-        values = translator.translate(["alpha beta alpha", "beta"]).toarray()
+        values = translator.translate(["alpha beta alpha", "beta"])["values"].toarray()
         Path("result.json").write_text(
             json.dumps(
                 {

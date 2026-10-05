@@ -914,6 +914,12 @@ def _validate_output_basis_labels(
                 f"Output {label!r} declares unknown basis_labels {unknown}. "
                 f"Known labels: {tuple(sorted(known_labels))}."
             )
+        feature_basis = spec.feature_metadata_basis_label
+        if feature_basis is not None and feature_basis not in known_labels:
+            raise OperatorError(
+                f"Output {label!r} declares unknown feature_metadata_basis_label "
+                f"{feature_basis!r}. Known labels: {tuple(sorted(known_labels))}."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1144,6 +1150,12 @@ def _prepare_runtime(
                 source_artifact_ids=source_artifact_ids,
                 output_artifact_ids=output_ids,
             )
+            feature_metadata_basis_artifact_id = _feature_metadata_basis_artifact_id(
+                spec,
+                source_artifact_ids=source_artifact_ids,
+                output_artifact_ids=output_ids,
+                basis_artifact_ids=basis_ids,
+            )
             project.catalog.register_artifact(
                 artifact_id=artifact_id,
                 artifact_type=spec.artifact_type,
@@ -1164,6 +1176,7 @@ def _prepare_runtime(
                 lineage_mode=spec.lineage_mode,
                 basis_artifact_ids=basis_ids,
                 feature_metadata_mode=spec.feature_metadata_mode,
+                feature_metadata_basis_artifact_id=feature_metadata_basis_artifact_id,
                 data_serializer=getattr(spec, "data_serializer", None),
                 data_serializer_ref=getattr(spec, "data_serializer_ref", None),
             )
@@ -1477,6 +1490,25 @@ def _basis_ids(
 
     label_to_artifact_id = {**source_artifact_ids, **output_artifact_ids}
     return [label_to_artifact_id[label] for label in basis_labels]
+
+
+def _feature_metadata_basis_artifact_id(
+    spec: OutputSpec,
+    *,
+    source_artifact_ids: Mapping[str, str],
+    output_artifact_ids: Mapping[str, str],
+    basis_artifact_ids: Sequence[str],
+) -> str | None:
+    if spec.feature_metadata_mode != "inherit":
+        return None
+    label = spec.feature_metadata_basis_label
+    if label is not None:
+        return {**source_artifact_ids, **output_artifact_ids}[label]
+    if len(basis_artifact_ids) != 1:
+        raise OperatorError(
+            "Inherited Feature Metadata requires exactly one resolved basis artifact."
+        )
+    return str(basis_artifact_ids[0])
 
 
 # ---------------------------------------------------------------------------
@@ -2172,6 +2204,7 @@ def _output_specs_from_dict(data: Mapping[str, Any]) -> dict[str, OutputSpec]:
             lineage_mode=validate_lineage_mode(raw.get("lineage_mode", "new_key")),
             basis_labels=tuple(raw.get("basis_labels", ())),
             feature_metadata_mode=feature_metadata_mode,
+            feature_metadata_basis_label=raw.get("feature_metadata_basis_label"),
             data_serializer=(
                 None
                 if serializer_ref is None

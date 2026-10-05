@@ -26,6 +26,7 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.core.types import DEFAULT_SOURCE_LABEL
+from text_analysis_lab.translators._matrix_transform_utils import feature_metadata_from_columns
 from text_analysis_lab.translators._hf_utils import (
     ContextWindowExceededError,
     TransformerResourceError,
@@ -136,7 +137,7 @@ class ContextualTransformer(BaseTranslator):
         self,
         texts: str | Sequence[str] | pd.Series,
         *,
-        device: str = "cpu",
+        device: str = "auto",
         model_batch_size: int = 16,
     ) -> dict[str, Any]:
         """Tokenize ordinary text and return aligned token records and embeddings."""
@@ -247,11 +248,12 @@ class ContextualTransformer(BaseTranslator):
                 "ContextualTransformer internal alignment failure: token rows and contextual "
                 f"embedding rows differ ({len(token_frame)} vs {len(embeddings)})."
             )
+        columns = [f"dim_{index}" for index in range(embeddings.shape[1])]
         return {
             "tokens": token_frame,
             "metadata": metadata,
             "values": embeddings,
-            "columns": [f"dim_{index}" for index in range(embeddings.shape[1])],
+            "feature_metadata": feature_metadata_from_columns(columns),
         }
 
     @property
@@ -354,7 +356,7 @@ class ContextualTransformer(BaseTranslator):
 
         translated = self.translate(
             frame[self.text_field],
-            device=str(request.params.get("device", "cpu")),
+            device=str(request.params.get("device", "auto")),
             model_batch_size=int(request.params.get("model_batch_size", 16)),
         )
         token_frame = translated["tokens"]
@@ -373,7 +375,9 @@ class ContextualTransformer(BaseTranslator):
                     "keys": token_keys.copy(),
                     "data": {
                         "values": translated["values"],
-                        "columns": translated["columns"],
+                        "columns": translated["feature_metadata"]["column"]
+                        .astype(str)
+                        .tolist(),
                     },
                 },
             }

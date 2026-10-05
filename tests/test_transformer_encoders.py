@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 import text_analysis_lab as teal
+from text_analysis_lab.core.errors import OperatorError
 from text_analysis_lab.core.operator import InputBatch, TranslationRequest
 from text_analysis_lab.translators import (
     ContextualTransformer,
@@ -265,6 +266,36 @@ def _request(*, model_batch_size=2):
         batch_size=4,
         params={"device": "cpu", "model_batch_size": model_batch_size},
     )
+
+
+def test_transformer_operation_params_match_standalone_runtime_contract(monkeypatch):
+    monkeypatch.setattr(
+        "text_analysis_lab.translators.contextual_transformer.resolve_device",
+        lambda value: f"resolved:{value}",
+    )
+    monkeypatch.setattr(
+        "text_analysis_lab.translators.sentence_transformer_encoder.resolve_device",
+        lambda value: f"resolved:{value}",
+    )
+    source = SimpleNamespace(artifact_type=SimpleNamespace(value="table"))
+
+    contextual = ContextualTransformer("example/model", revision=_COMMIT)
+    assert contextual.validate_operation_params(
+        {}, sources={"source": source}, mode="translate"
+    ) == {"device": "resolved:auto", "model_batch_size": 16}
+
+    sentence = SentenceTransformerEncoder("example/sbert", revision=_COMMIT)
+    assert sentence.validate_operation_params(
+        {"task": "query"}, sources={"source": source}, mode="translate"
+    ) == {
+        "task": "query",
+        "device": "resolved:auto",
+        "model_batch_size": 32,
+    }
+    with pytest.raises(OperatorError, match="task must be"):
+        sentence.validate_operation_params(
+            {"task": "invalid"}, sources={"source": source}, mode="translate"
+        )
 
 
 def test_contextual_transformer_emits_model_tokens_and_aligned_embeddings(monkeypatch):

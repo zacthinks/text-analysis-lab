@@ -103,7 +103,7 @@ def test_word2vec_is_one_shot_named_row_matrix_contract() -> None:
         )
 
 
-def test_training_payload_uses_row_names_not_word_metadata(
+def test_training_payload_uses_privileged_word_metadata(
     monkeypatch, tmp_path
 ) -> None:
     model = _model()
@@ -126,16 +126,11 @@ def test_training_payload_uses_row_names_not_word_metadata(
     )
     payload = result.outputs["output"]
     assert payload["keys"].to_dict("list") == {"word_id": list(range(6))}
-    assert payload["metadata"].to_dict("list") == {"count": [3, 3, 3, 3, 2, 2]}
-    assert payload["data"]["row_name"] == "word"
-    assert payload["data"]["row_names"] == [
-        "cat",
-        "dog",
-        "king",
-        "queen",
-        "pet",
-        "royal",
-    ]
+    assert payload["metadata"].to_dict("list") == {
+        "word": ["cat", "dog", "king", "queen", "pet", "royal"],
+        "count": [3, 3, 3, 3, 2, 2],
+    }
+    assert payload["row_name_column"] == "word"
     assert np.array_equal(payload["data"]["values"], vectors)
     assert model.training_loss_ == (10.0, 7.0, 5.0, 3.0)
     state = model.to_json_state()
@@ -158,7 +153,7 @@ def test_real_training_is_seeded_and_emits_finite_vectors(architecture: str) -> 
         mode="translate",
         request=TranslationRequest(),
     ).outputs["output"]
-    assert first_payload["data"]["row_names"] == second_payload["data"]["row_names"]
+    assert first_payload["metadata"]["word"].tolist() == second_payload["metadata"]["word"].tolist()
     assert np.array_equal(
         first_payload["data"]["values"], second_payload["data"]["values"]
     )

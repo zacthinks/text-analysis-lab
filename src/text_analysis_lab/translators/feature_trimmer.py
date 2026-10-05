@@ -31,6 +31,8 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
 from text_analysis_lab.translators._matrix_transform_utils import (
+    standalone_matrix_payload,
+    unpack_standalone_matrix,
     key_frame,
     native_matrix_packet,
     single_input,
@@ -102,15 +104,30 @@ class FeatureTrimmer(BaseTranslator):
         return mode == "translate" and route in {"sequential", "parallel"}
 
     def translate(self, matrix: Any) -> Any:
-        """Apply the fitted positional feature mask to an in-memory matrix."""
+        """Apply the fitted positional feature mask and project Feature Metadata."""
+        source_payload = matrix if isinstance(matrix, Mapping) else None
+        matrix, feature_metadata, structured = unpack_standalone_matrix(
+            matrix,
+            name="FeatureTrimmer.translate(...)",
+        )
         source_width = self._require_source_width()
-        shape = getattr(matrix, "shape", None)
-        if shape is None or len(shape) != 2 or int(shape[1]) != source_width:
+        shape = matrix.shape
+        if int(shape[1]) != source_width:
             raise ValueError(
                 "FeatureTrimmer.translate(...) requires the fitted source width "
                 f"{source_width}; got shape={shape!r}."
             )
-        return slice_matrix_features(matrix, self._require_kept_indices())
+        indices = self._require_kept_indices()
+        values = slice_matrix_features(matrix, indices)
+        if structured:
+            projected = feature_metadata.iloc[list(indices)].reset_index(drop=True)
+            return standalone_matrix_payload(
+                values,
+                projected,
+                name="FeatureTrimmer",
+                source=source_payload,
+            )
+        return values
 
     def output_specs(
         self,

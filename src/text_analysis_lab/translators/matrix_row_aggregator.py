@@ -21,6 +21,10 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.translators._matrix_transform_utils import (
+    standalone_matrix_payload,
+    unpack_standalone_matrix,
+)
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -48,7 +52,11 @@ class MatrixRowAggregator(BaseTranslator):
         self.pooling = pooling
 
     def translate(self, matrix: Any, groups: pd.DataFrame) -> dict[str, Any]:
-        """Pool ordinary matrix rows by the configured grouping columns."""
+        """Pool matrix rows while preserving standalone Feature Metadata."""
+        matrix, feature_metadata, structured = unpack_standalone_matrix(
+            matrix,
+            name="MatrixRowAggregator.translate(...)",
+        )
         if not isinstance(groups, pd.DataFrame):
             raise TypeError(
                 "MatrixRowAggregator.translate(...) requires groups as a pandas DataFrame."
@@ -89,11 +97,18 @@ class MatrixRowAggregator(BaseTranslator):
         unique_groups = group_frame.loc[
             ~group_index.duplicated(keep="first")
         ].reset_index(drop=True)
-        return {
+        result = {
             "values": pooled,
             "groups": unique_groups,
             "counts": counts,
         }
+        if structured:
+            result["feature_metadata"] = standalone_matrix_payload(
+                pooled,
+                feature_metadata,
+                name="MatrixRowAggregator",
+            )["feature_metadata"]
+        return result
 
     def output_specs(
         self,

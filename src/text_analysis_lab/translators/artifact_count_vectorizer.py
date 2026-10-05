@@ -30,6 +30,7 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.translators._matrix_transform_utils import feature_metadata_from_columns
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -287,7 +288,9 @@ class ArtifactCountVectorizer(BaseTranslator):
                     "keys": translated["groups"],
                     "data": {
                         "values": translated["values"],
-                        "columns": translated["columns"],
+                        "columns": translated["feature_metadata"]["column"]
+                        .astype(str)
+                        .tolist(),
                     },
                 }
             }
@@ -417,6 +420,7 @@ class ArtifactCountVectorizer(BaseTranslator):
                 "ArtifactCountVectorizer has no fitted vocabulary."
             )
         vocabulary = cast(dict[str, int], self.vocabulary_)
+        columns = _feature_names(vocabulary)
         return {
             "groups": group_keys,
             "values": _events_to_matrix(
@@ -425,7 +429,7 @@ class ArtifactCountVectorizer(BaseTranslator):
                 vocabulary=vocabulary,
                 binary=self.binary,
             ),
-            "columns": _feature_names(vocabulary),
+            "feature_metadata": feature_metadata_from_columns(columns),
         }
 
     def _validate_source_key(self, source_key: Sequence[str]) -> tuple[str, ...]:

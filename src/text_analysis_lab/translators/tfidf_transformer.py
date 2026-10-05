@@ -22,6 +22,9 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
 from text_analysis_lab.translators._matrix_transform_utils import (
+    feature_labels,
+    standalone_matrix_payload,
+    unpack_standalone_matrix,
     clone_estimator,
     dump_estimator,
     establish_or_validate_features,
@@ -91,12 +94,13 @@ class TfidfTransformer(BaseTranslator):
         )
 
     def translate(self, matrix: Any):
-        """Apply fitted TF-IDF weights to an ordinary two-dimensional matrix."""
-        shape = getattr(matrix, "shape", None)
-        if shape is None or len(shape) != 2:
-            raise ValueError(
-                "TfidfTransformer.translate(...) requires a two-dimensional matrix."
-            )
+        """Apply fitted TF-IDF weights while preserving standalone Feature Metadata."""
+        source_payload = matrix if isinstance(matrix, Mapping) else None
+        matrix, feature_metadata, structured = unpack_standalone_matrix(
+            matrix,
+            name="TfidfTransformer.translate(...)",
+        )
+        shape = matrix.shape
         require_nonnegative(matrix, name="TfidfTransformer")
         transformer = self._require_transformer()
         expected_width = (
@@ -109,7 +113,22 @@ class TfidfTransformer(BaseTranslator):
                 "TfidfTransformer.translate(...) requires the fitted feature width "
                 f"{int(expected_width)}; got {int(shape[1])}."
             )
-        return transformer.transform(matrix).tocsr()
+        if feature_metadata is not None and self.source_features_ is not None:
+            observed = tuple(feature_labels(feature_metadata, name="TfidfTransformer"))
+            if observed != tuple(self.source_features_):
+                raise ValueError(
+                    "TfidfTransformer.translate(...) requires the fitted ordered "
+                    "feature schema."
+                )
+        values = transformer.transform(matrix).tocsr()
+        if structured:
+            return standalone_matrix_payload(
+                values,
+                feature_metadata,
+                name="TfidfTransformer",
+                source=source_payload,
+            )
+        return values
 
     def output_specs(
         self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest

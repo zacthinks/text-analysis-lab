@@ -67,6 +67,21 @@ def test_embedding_lookup_maps_named_rows_and_zero_fills_oov(
     }
 
 
+def test_embedding_lookup_separates_row_and_feature_metadata_bases() -> None:
+    tokens = SimpleNamespace(artifact_type=ArtifactType.TABLE)
+    embeddings = SimpleNamespace(
+        artifact_type=ArtifactType.DENSE_MATRIX,
+        has_row_names=True,
+    )
+    spec = EmbeddingLookup(field="lemma").output_specs(
+        sources={"tokens": tokens, "embeddings": embeddings},
+        request=TranslationRequest(),
+    )
+    assert spec.basis_labels == ("tokens",)
+    assert spec.feature_metadata_mode == "inherit"
+    assert spec.feature_metadata_basis_label == "embeddings"
+
+
 def test_embedding_lookup_validates_named_source_and_strict_oov() -> None:
     tokens = SimpleNamespace(artifact_type=ArtifactType.TABLE)
     unnamed = SimpleNamespace(

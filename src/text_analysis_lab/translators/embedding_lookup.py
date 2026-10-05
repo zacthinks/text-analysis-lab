@@ -21,6 +21,11 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 
+from text_analysis_lab.translators._matrix_transform_utils import (
+    normalize_feature_metadata,
+    unpack_standalone_matrix,
+)
+
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
 
@@ -62,9 +67,10 @@ class EmbeddingLookup(BaseTranslator):
         tokens: pd.DataFrame | pd.Series | Sequence[Any],
         embeddings: Any,
         *,
-        row_names: Sequence[str],
+        row_names: Sequence[str] | None = None,
+        feature_metadata: pd.DataFrame | None = None,
     ) -> dict[str, Any]:
-        """Look up ordinary token values in an ordinary named-row matrix."""
+        """Look up token values while preserving the embedding feature axis."""
         if isinstance(tokens, pd.DataFrame):
             if self.field not in tokens.columns:
                 raise ValueError(f"Token data is missing field {self.field!r}.")
@@ -79,11 +85,41 @@ class EmbeddingLookup(BaseTranslator):
                 "sequence of token values."
             )
 
-        shape = getattr(embeddings, "shape", None)
-        if shape is None or len(shape) != 2:
+        payload = embeddings if isinstance(embeddings, Mapping) else None
+        embeddings, embedded_metadata, _ = unpack_standalone_matrix(
+            embeddings,
+            name="EmbeddingLookup.translate(...)",
+        )
+        if embedded_metadata is not None:
+            if feature_metadata is not None and not normalize_feature_metadata(
+                feature_metadata,
+                width=int(embeddings.shape[1]),
+                name="EmbeddingLookup",
+            ).equals(embedded_metadata):
+                raise ValueError(
+                    "EmbeddingLookup received conflicting feature_metadata values."
+                )
+            feature_metadata = embedded_metadata
+        if row_names is None and payload is not None:
+            row_metadata = payload.get("metadata")
+            row_name_column = payload.get("row_name_column")
+            if (
+                isinstance(row_metadata, pd.DataFrame)
+                and isinstance(row_name_column, str)
+                and row_name_column in row_metadata.columns
+            ):
+                row_names = row_metadata[row_name_column].tolist()
+            else:
+                # Backward compatibility for older standalone matrix payloads.
+                raw_names = payload.get("row_names", payload.get("words"))
+                if raw_names is not None:
+                    row_names = raw_names
+        if row_names is None:
             raise ValueError(
-                "EmbeddingLookup.translate(...) requires a two-dimensional matrix."
+                "EmbeddingLookup.translate(...) requires row_names for raw matrices "
+                "or a row_name_column in standalone matrix metadata."
             )
+        shape = embeddings.shape
         names = [str(value) for value in row_names]
         if len(names) != int(shape[0]):
             raise ArtifactError(
@@ -114,7 +150,7 @@ class EmbeddingLookup(BaseTranslator):
                 f"out-of-vocabulary row(s). Example(s): {examples}."
             )
 
-        return {
+        result = {
             "values": _lookup_rows(embeddings, positions, in_vocabulary),
             "metadata": pd.DataFrame(
                 {
@@ -123,6 +159,13 @@ class EmbeddingLookup(BaseTranslator):
                 }
             ),
         }
+        if feature_metadata is not None:
+            result["feature_metadata"] = normalize_feature_metadata(
+                feature_metadata,
+                width=int(shape[1]),
+                name="EmbeddingLookup",
+            )
+        return result
 
     def output_specs(
         self,
@@ -137,7 +180,8 @@ class EmbeddingLookup(BaseTranslator):
             artifact_type=embeddings.artifact_type,
             lineage_mode="preserved_key",
             basis_labels=TOKEN_SOURCE,
-            feature_metadata_mode="own",
+            feature_metadata_mode="inherit",
+            feature_metadata_basis_label=EMBEDDING_SOURCE,
         )
 
     def validate_operation_params(
@@ -216,7 +260,14 @@ class EmbeddingLookup(BaseTranslator):
             raise ArtifactError(
                 "EmbeddingLookup requires a matrix source with named rows."
             )
-        looked_up = self.translate(tokens, matrix, row_names=row_names)
+        looked_up = self.translate(
+            tokens,
+            {
+                "values": matrix,
+                "columns": list(columns),
+                "row_names": list(row_names),
+            },
+        )
         key_columns = list(token_packet.primary_key)
         return BatchResult(
             outputs={

@@ -304,7 +304,8 @@ def test_count_vectorizer_standalone_matches_teal_batch() -> None:
     texts = ["alpha beta alpha", None, "beta"]
 
     direct = translator.translate(texts)
-    assert sparse.isspmatrix_csr(direct)
+    assert sparse.isspmatrix_csr(direct["values"])
+    assert direct["feature_metadata"]["column"].tolist() == ["alpha", "beta"]
 
     frame = pd.DataFrame({"doc_id": [0, 1, 2], "text": texts})
     packet = InputBatch(
@@ -322,10 +323,68 @@ def test_count_vectorizer_standalone_matches_teal_batch() -> None:
         mode="translate",
         request=TranslationRequest(),
     ).outputs["output"]["data"]["values"]
-    np.testing.assert_array_equal(batch.toarray(), direct.toarray())
+    np.testing.assert_array_equal(batch.toarray(), direct["values"].toarray())
 
     with pytest.raises(OperatorNotFittedError, match="fitted vocabulary"):
         CountVectorizer().translate(["alpha"])
+
+
+def test_standalone_matrix_chain_preserves_and_projects_feature_metadata() -> None:
+    count = CountVectorizer(
+        vocabulary={"alpha": 0, "beta": 1, "gamma": 2}
+    )
+    counts = count.translate(
+        ["alpha beta gamma", "alpha alpha gamma", "beta gamma"]
+    )
+    counts["feature_metadata"]["family"] = ["left", "middle", "right"]
+    counts["feature_metadata"]["custom"] = [10, 20, 30]
+
+    trimmer = FeatureTrimmer()
+    trimmer.source_width_ = 3
+    trimmer.kept_indices_ = (0, 2)
+    trimmed = trimmer.translate(counts)
+    assert trimmed["feature_metadata"].to_dict("list") == {
+        "column_index": [0, 1],
+        "column": ["alpha", "gamma"],
+        "family": ["left", "right"],
+        "custom": [10, 30],
+    }
+
+    dictionary = dictionaries.Dictionary(
+        {"alpha_code": ["alpha"], "gamma_code": ["gamma"]},
+        valuetype="fixed",
+        case_sensitive=True,
+    )
+    translated = DictionaryTranslator(dictionary).translate(trimmed)
+    assert translated["feature_metadata"]["column"].tolist() == [
+        "alpha_code",
+        "gamma_code",
+    ]
+
+    tfidf = TfidfTransformer(norm=None)
+    tfidf.source_features_ = ("alpha", "gamma")
+    tfidf._transformer = tfidf._make_transformer().fit(trimmed["values"])
+    weighted = tfidf.translate(trimmed)
+    pd.testing.assert_frame_equal(
+        weighted["feature_metadata"],
+        trimmed["feature_metadata"],
+    )
+
+    normalized = MatrixNormalizer(norm="l2").translate(weighted)
+    pd.testing.assert_frame_equal(
+        normalized["feature_metadata"],
+        trimmed["feature_metadata"],
+    )
+
+    svd = SVD(n_components=1, random_state=0)
+    svd.source_features_ = ("alpha", "gamma")
+    svd._estimator = svd._make_estimator().fit(normalized["values"])
+    reduced = svd.translate(normalized)
+    assert reduced["values"].shape == (3, 1)
+    assert reduced["feature_metadata"].to_dict("list") == {
+        "column_index": [0],
+        "column": ["component_0"],
+    }
 
 
 def test_svd_standalone_matches_teal_batch_and_validates_width() -> None:
@@ -443,6 +502,16 @@ def test_text_length_standalone_supports_text_records_and_frames() -> None:
     assert single.translate({"text": "one two three"}) == {"text_words": 3}
 
 
+def test_transformer_standalone_runtime_defaults_match_teal_contract() -> None:
+    contextual_signature = inspect.signature(ContextualTransformer.translate)
+    sentence_signature = inspect.signature(SentenceTransformerEncoder.translate)
+
+    assert contextual_signature.parameters["device"].default == "auto"
+    assert contextual_signature.parameters["model_batch_size"].default == 16
+    assert sentence_signature.parameters["device"].default == "auto"
+    assert sentence_signature.parameters["model_batch_size"].default == 32
+
+
 def test_sentence_transformer_standalone_matches_teal_batch_and_supports_task_override(
     monkeypatch,
 ) -> None:
@@ -486,8 +555,11 @@ def test_sentence_transformer_standalone_matches_teal_batch_and_supports_task_ov
     texts = ["hello world", "TeAL"]
     direct = translator.translate(texts)
     query = translator.translate(texts, task="query")
-    assert direct.dtype == np.float32
-    assert query[:, 1].tolist() == [2.0, 2.0]
+    series_query = translator.translate(pd.Series(texts), task="query")
+    assert direct["values"].dtype == np.float32
+    assert query["values"][:, 1].tolist() == [2.0, 2.0]
+    np.testing.assert_array_equal(series_query["values"], query["values"])
+    assert query["feature_metadata"]["column"].tolist() == ["dim_0", "dim_1"]
 
     frame = pd.DataFrame({"doc_id": [1, 2], "text": texts})
     packet = InputBatch(
@@ -503,10 +575,12 @@ def test_sentence_transformer_standalone_matches_teal_batch_and_supports_task_ov
     batch = translator.translate_batch(
         {"source": packet},
         mode="translate",
-        request=TranslationRequest(params={"device": "cpu", "model_batch_size": 32}),
+        request=TranslationRequest(
+            params={"task": "query", "device": "cpu", "model_batch_size": 32}
+        ),
     ).outputs["output"]
-    np.testing.assert_allclose(batch["data"]["values"], direct)
-    assert batch["metadata"]["token_count"].tolist() == [2, 1]
+    np.testing.assert_allclose(batch["data"]["values"], query["values"])
+    pd.testing.assert_frame_equal(batch["metadata"], query["metadata"])
 
 
 
@@ -612,13 +686,22 @@ def test_embedding_lookup_standalone_matches_teal_batch(
     )
     translator = EmbeddingLookup(field="lemma")
 
-    direct = translator.translate(tokens, embeddings, row_names=row_names)
+    direct = translator.translate(
+        tokens,
+        {
+            "values": embeddings,
+            "columns": ["d0", "d1"],
+            "metadata": pd.DataFrame({"word": row_names}),
+            "row_name_column": "word",
+        },
+    )
     direct_values = (
         direct["values"].toarray()
         if sparse.issparse(direct["values"])
         else direct["values"]
     )
     np.testing.assert_array_equal(direct_values, [[3, 4], [0, 0], [1, 2]])
+    assert direct["feature_metadata"]["column"].tolist() == ["d0", "d1"]
 
     token_packet = InputBatch(
         source_label="tokens",
@@ -720,16 +803,17 @@ def test_matrix_transpose_standalone_matches_teal_batch() -> None:
         direct["values"].toarray(),
         matrix.toarray().T,
     )
-    assert direct["columns"] == row_labels
-    assert direct["row_names"] == features
-    assert direct["metadata"].columns.tolist() == ["column", "family"]
+    assert direct["feature_metadata"]["column"].tolist() == row_labels
+    assert direct["row_name_column"] == "feature"
+    assert direct["metadata"].columns.tolist() == ["feature", "family"]
+    assert direct["metadata"]["feature"].tolist() == features
 
     source = SimpleNamespace(
         artifact_type=ArtifactType.SPARSE_MATRIX,
         primary_key=["doc_id"],
         get_data_columns=lambda: list(features),
         get_feature_frame=lambda: feature_metadata.copy(),
-        has_row_names=False,
+        row_name=None,
     )
     translator.input_request(
         sources={"source": source},
@@ -758,8 +842,8 @@ def test_matrix_transpose_standalone_matches_teal_batch() -> None:
         batch["data"]["values"].toarray(),
         direct["values"].toarray(),
     )
-    assert batch["data"]["columns"] == direct["columns"]
-    assert batch["data"]["row_names"] == direct["row_names"]
+    assert batch["data"]["columns"] == direct["feature_metadata"]["column"].tolist()
+    assert batch["row_name_column"] == direct["row_name_column"]
     pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
 
 
@@ -843,7 +927,8 @@ def test_artifact_count_vectorizer_standalone_matches_teal_batch() -> None:
 
     direct = translator.translate(frame, source_key=source_key)
     assert direct["groups"].to_dict("list") == {"doc_id": [1, 2]}
-    assert direct["columns"] == ["alpha", "beta"]
+    assert direct["feature_metadata"]["column"].tolist() == ["alpha", "beta"]
+    assert "columns" not in direct
     assert direct["values"].toarray().tolist() == [[2, 1], [0, 2]]
 
     packet = InputBatch(
@@ -866,7 +951,7 @@ def test_artifact_count_vectorizer_standalone_matches_teal_batch() -> None:
         batch["data"]["values"].toarray(),
         direct["values"].toarray(),
     )
-    assert batch["data"]["columns"] == direct["columns"]
+    assert batch["data"]["columns"] == direct["feature_metadata"]["column"].tolist()
 
 
 def test_dictionary_translator_standalone_matches_teal_batch() -> None:
@@ -915,7 +1000,9 @@ def test_dictionary_translator_standalone_matches_teal_batch() -> None:
         batch["data"]["values"].toarray(),
         direct["values"].toarray(),
     )
-    assert batch["data"]["columns"] == direct["columns"]
+    assert batch["data"]["columns"] == tuple(
+        direct["feature_metadata"]["column"].tolist()
+    )
     pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
 
 
@@ -947,7 +1034,20 @@ def test_geco_predictor_standalone_matches_teal_batch() -> None:
     first = sparse.csr_matrix([[0.2], [0.8], [0.4]])
     second = np.asarray([[0.6], [0.1], [0.9]])
 
-    direct = predictor.translate(first, second)
+    direct = predictor.translate(
+        {
+            "values": first,
+            "feature_metadata": pd.DataFrame(
+                {"column_index": [0], "column": ["x0"]}
+            ),
+        },
+        {
+            "values": second,
+            "feature_metadata": pd.DataFrame(
+                {"column_index": [0], "column": ["y0"]}
+            ),
+        },
+    )
     np.testing.assert_allclose(direct["probability"], [0.4, 0.45, 0.65])
     assert direct["prediction"].tolist() == [0, 0, 1]
 
@@ -1010,8 +1110,11 @@ def test_word2vec_standalone_matches_teal_batch(monkeypatch) -> None:
 
     direct = translator.translate(sequences)
     assert direct["words"] == ["alpha", "beta", "gamma"]
+    assert direct["metadata"]["word"].tolist() == ["alpha", "beta", "gamma"]
+    assert direct["row_name_column"] == "word"
     assert direct["counts"].tolist() == [3, 2, 1]
     np.testing.assert_array_equal(direct["values"], vectors)
+    assert direct["feature_metadata"]["column"].tolist() == ["dimension_0", "dimension_1", "dimension_2"]
     assert direct["training_loss"] == (4.0, 2.0)
 
     frame = pd.DataFrame(
@@ -1038,7 +1141,8 @@ def test_word2vec_standalone_matches_teal_batch(monkeypatch) -> None:
         request=TranslationRequest(),
     ).outputs["output"]
     np.testing.assert_array_equal(batch["data"]["values"], direct["values"])
-    assert batch["data"]["row_names"] == direct["words"]
+    assert batch["row_name_column"] == direct["row_name_column"]
+    assert batch["metadata"]["word"].tolist() == direct["words"]
     assert batch["metadata"]["count"].tolist() == direct["counts"].tolist()
 
 
@@ -1203,6 +1307,7 @@ def test_contextual_transformer_standalone_matches_teal_batch(monkeypatch) -> No
     assert direct["tokens"]["source_position"].tolist() == [0, 0, 0]
     assert direct["tokens"]["token_id"].tolist() == [0, 1, 2]
     assert direct["values"].shape == (3, 2)
+    assert direct["feature_metadata"]["column"].tolist() == ["dim_0", "dim_1"]
 
     frame = pd.DataFrame({"doc_id": [9], "text": ["hello"]})
     packet = InputBatch(

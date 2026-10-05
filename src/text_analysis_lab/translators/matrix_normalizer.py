@@ -26,6 +26,8 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
 from text_analysis_lab.translators._matrix_transform_utils import (
+    standalone_matrix_payload,
+    unpack_standalone_matrix,
     key_frame,
     native_matrix_packet,
     single_input,
@@ -66,22 +68,33 @@ class MatrixNormalizer(BaseTranslator):
         return route == "sequential" or (self.axis == "rows" and route == "parallel")
 
     def translate(self, matrix: Any) -> Any:
-        """Normalize an ordinary dense or sparse matrix in memory."""
-        shape = getattr(matrix, "shape", None)
-        if shape is None or len(shape) != 2:
-            raise ValueError(
-                "MatrixNormalizer.translate(...) requires a two-dimensional matrix."
-            )
+        """Normalize matrix values while preserving standalone Feature Metadata."""
+        source_payload = matrix if isinstance(matrix, Mapping) else None
+        matrix, feature_metadata, structured = unpack_standalone_matrix(
+            matrix,
+            name="MatrixNormalizer.translate(...)",
+        )
         values = sklearn_normalize(
             matrix, norm=self.norm, axis=1 if self.axis == "rows" else 0, copy=True
         )
         if sparse.issparse(matrix):
-            return (
+            normalized = (
                 values.tocsr()
                 if sparse.issparse(values)
                 else sparse.csr_matrix(values)
             )
-        return values.toarray() if sparse.issparse(values) else np.asarray(values)
+        else:
+            normalized = (
+                values.toarray() if sparse.issparse(values) else np.asarray(values)
+            )
+        if structured:
+            return standalone_matrix_payload(
+                normalized,
+                feature_metadata,
+                name="MatrixNormalizer",
+                source=source_payload,
+            )
+        return normalized
 
     def output_specs(
         self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest

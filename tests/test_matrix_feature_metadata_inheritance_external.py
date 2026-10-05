@@ -4,11 +4,14 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 from scipy import sparse
 
 import text_analysis_lab as teal
+from text_analysis_lab.core.errors import ArtifactError
 from text_analysis_lab.core.translate import _output_specs_from_dict
 from text_analysis_lab.core.writer import create_artifact_writer
+from text_analysis_lab.translators import EmbeddingLookup
 
 
 def _matrix_source(project: teal.Project):
@@ -87,6 +90,24 @@ def test_legacy_stored_matrix_output_spec_defaults_to_owned_metadata() -> None:
     assert specs["output"].feature_metadata_mode == "own"
 
 
+def test_stored_output_spec_preserves_explicit_feature_metadata_basis() -> None:
+    specs = _output_specs_from_dict(
+        {
+            "output": {
+                "artifact_type": "dense_matrix",
+                "lineage_mode": "preserved_key",
+                "basis_labels": ["tokens"],
+                "feature_metadata_mode": "inherit",
+                "feature_metadata_basis_label": "embeddings",
+            }
+        }
+    )
+    spec = specs["output"]
+    assert spec.basis_labels == ("tokens",)
+    assert spec.feature_metadata_mode == "inherit"
+    assert spec.feature_metadata_basis_label == "embeddings"
+
+
 def test_row_preserving_matrix_operations_inherit_rich_feature_metadata(
     tmp_path: Path,
 ) -> None:
@@ -153,3 +174,147 @@ def test_row_preserving_matrix_operations_inherit_rich_feature_metadata(
             _assert_inherits_feature_metadata(child, expected)
     finally:
         project.close()
+
+
+
+def test_embedding_lookup_inherits_feature_metadata_from_embedding_source(
+    tmp_path: Path,
+) -> None:
+    project = teal.Project.create(tmp_path / "embedding_project", name="embedding_basis")
+    try:
+        token_id = "art_tokens"
+        token_writer = create_artifact_writer(
+            artifact_type="table",
+            artifact_dir=project.storage.artifact_dir(token_id),
+            artifact_id=token_id,
+            label="tokens",
+            lineage_mode="new_key",
+        )
+        token_writer.write(
+            {
+                "keys": pd.DataFrame(
+                    {
+                        "doc_id": [1, 1, 1],
+                        "token_id": [0, 1, 2],
+                    }
+                ),
+                "data": pd.DataFrame({"lemma": ["b", "missing", "a"]}),
+            }
+        )
+        token_writer.finalize()
+        project.catalog.register_artifact(
+            artifact_id=token_id,
+            artifact_type="table",
+            label="tokens",
+            lineage_mode="new_key",
+            status="complete",
+            basis_artifact_ids=(),
+        )
+        tokens = project.get_artifact(token_id)
+
+        embedding_id = "art_embeddings"
+        embedding_writer = create_artifact_writer(
+            artifact_type="dense_matrix",
+            artifact_dir=project.storage.artifact_dir(embedding_id),
+            artifact_id=embedding_id,
+            label="embeddings",
+            lineage_mode="new_key",
+            feature_metadata_mode="own",
+        )
+        embedding_writer.write(
+            {
+                "keys": pd.DataFrame({"word_id": [0, 1]}),
+                "metadata": pd.DataFrame({"word": ["a", "b"]}),
+                "row_name_column": "word",
+                "data": {
+                    "values": np.asarray([[1.0, 2.0], [3.0, 4.0]]),
+                    "columns": ["d0", "d1"],
+                },
+            }
+        )
+        embedding_writer.finalize()
+        project.catalog.register_artifact(
+            artifact_id=embedding_id,
+            artifact_type="dense_matrix",
+            label="embeddings",
+            lineage_mode="new_key",
+            status="complete",
+            basis_artifact_ids=(),
+        )
+        embeddings = project.get_artifact(embedding_id)
+        expected = embeddings.get_feature_metadata()
+        expected["family"] = ["semantic", "semantic"]
+        expected["source"] = ["word2vec", "word2vec"]
+        expected.to_parquet(embeddings.storage.feature_metadata_path, index=False)
+
+        looked_up = project.translate(
+            EmbeddingLookup(field="lemma"),
+            {"tokens": tokens, "embeddings": embeddings},
+        )["output"]
+
+        assert looked_up.descriptor["lineage"]["basis_artifact_ids"] == [token_id]
+        assert (
+            looked_up.descriptor["lineage"]["feature_metadata_basis_artifact_id"]
+            == embedding_id
+        )
+        assert looked_up.descriptor["lineage"]["feature_metadata_mode"] == "inherit"
+        assert not looked_up.storage.feature_metadata_path.exists()
+        pd.testing.assert_frame_equal(looked_up.get_feature_metadata(), expected)
+        assert looked_up.get_matrix().shape == (3, 2)
+    finally:
+        project.close()
+
+
+
+@pytest.mark.parametrize("artifact_type", ["dense_matrix", "sparse_matrix"])
+def test_owned_feature_metadata_must_match_across_matrix_batches(
+    tmp_path: Path,
+    artifact_type: str,
+) -> None:
+    artifact_dir = tmp_path / f"feature_metadata_{artifact_type}"
+    writer = create_artifact_writer(
+        artifact_type=artifact_type,
+        artifact_dir=artifact_dir,
+        artifact_id="art_feature_metadata",
+        label="feature_metadata",
+        feature_metadata_mode="own",
+    )
+    first_values = np.asarray([[1.0, 2.0]])
+    second_values = np.asarray([[3.0, 4.0]])
+    if artifact_type == "sparse_matrix":
+        first_values = sparse.csr_matrix(first_values)
+        second_values = sparse.csr_matrix(second_values)
+
+    writer.write(
+        {
+            "keys": pd.DataFrame({"row_id": [0]}),
+            "data": {
+                "values": first_values,
+                "columns": ["a", "b"],
+                "feature_metadata": pd.DataFrame(
+                    {
+                        "column_index": [0, 1],
+                        "column": ["a", "b"],
+                        "family": ["left", "right"],
+                    }
+                ),
+            },
+        }
+    )
+    with pytest.raises(ArtifactError, match="Feature Metadata changed"):
+        writer.write(
+            {
+                "keys": pd.DataFrame({"row_id": [1]}),
+                "data": {
+                    "values": second_values,
+                    "columns": ["a", "b"],
+                    "feature_metadata": pd.DataFrame(
+                        {
+                            "column_index": [0, 1],
+                            "column": ["a", "b"],
+                            "family": ["changed", "right"],
+                        }
+                    ),
+                },
+            }
+        )

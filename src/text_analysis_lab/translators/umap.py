@@ -25,6 +25,10 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
 from text_analysis_lab.translators._matrix_transform_utils import (
+    feature_labels,
+    feature_metadata_from_columns,
+    standalone_matrix_payload,
+    unpack_standalone_matrix,
     dump_estimator,
     establish_or_validate_features,
     key_frame,
@@ -186,11 +190,14 @@ class UMAP(BaseTranslator):
         if self.reuse == "recompute":
             self._recompute_from_project(project)
 
-    def translate(self, matrix: Any) -> np.ndarray:
-        """Apply an available fitted UMAP estimator to an in-memory matrix."""
-        shape = getattr(matrix, "shape", None)
-        if shape is None or len(shape) != 2:
-            raise ValueError("UMAP.translate(...) requires a two-dimensional matrix.")
+    def translate(self, matrix: Any) -> Any:
+        """Apply fitted UMAP state with standalone matrix schema parity."""
+        source_payload = matrix if isinstance(matrix, Mapping) else None
+        matrix, feature_metadata, structured = unpack_standalone_matrix(
+            matrix,
+            name="UMAP.translate(...)",
+        )
+        shape = matrix.shape
         estimator = self._require_estimator()
         expected_width = len(self.source_features_) if self.source_features_ is not None else None
         if expected_width is not None and int(shape[1]) != expected_width:
@@ -198,7 +205,21 @@ class UMAP(BaseTranslator):
                 "UMAP.translate(...) requires the fitted feature width "
                 f"{expected_width}; got {int(shape[1])}."
             )
-        return np.asarray(estimator.transform(matrix), dtype=float)
+        if feature_metadata is not None and self.source_features_ is not None:
+            observed = tuple(feature_labels(feature_metadata, name="UMAP"))
+            if observed != tuple(self.source_features_):
+                raise ValueError("UMAP.translate(...) requires the fitted ordered feature schema.")
+        values = np.asarray(estimator.transform(matrix), dtype=float)
+        if structured:
+            return standalone_matrix_payload(
+                values,
+                feature_metadata_from_columns(
+                    [f"umap_{i}" for i in range(self.n_components)]
+                ),
+                name="UMAP",
+                source=source_payload,
+            )
+        return values
 
     def output_specs(
         self, *, sources: Mapping[str, BaseArtifact], request: TranslationRequest

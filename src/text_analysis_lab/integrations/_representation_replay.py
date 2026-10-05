@@ -76,6 +76,8 @@ def _replay_texts_like(
             params=params,
         )
     _validate_replayed_rows(values, len(normalized), target)
+    if isinstance(values, Mapping) and "values" in values:
+        return values["values"]
     return values
 
 
@@ -262,6 +264,8 @@ def _operation_descriptor(project: Project, operation_id: str) -> Mapping[str, A
 def _validate_replayed_rows(
     values: Any, expected: int, artifact: BaseArtifact
 ) -> None:
+    if isinstance(values, Mapping) and "values" in values:
+        values = values["values"]
     shape = getattr(values, "shape", None)
     if shape is None or len(shape) != 2 or int(shape[0]) != int(expected):
         raise _RepresentationReplayError(

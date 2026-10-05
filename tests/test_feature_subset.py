@@ -149,7 +149,7 @@ def test_transpose_promotes_projected_feature_metadata_to_metadata(tmp_path: Pat
             metadata_mode="local",
         )
         assert metadata["feature_id"].tolist() == [0, 1]
-        assert metadata["column"].tolist() == ["alpha", "gamma"]
+        assert metadata["feature"].tolist() == ["alpha", "gamma"]
         assert metadata["ngram_n"].tolist() == [1, 2]
         assert metadata["group"].tolist() == ["left", "right"]
         assert "column_index" not in metadata.columns

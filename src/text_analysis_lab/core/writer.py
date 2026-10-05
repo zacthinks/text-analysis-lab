@@ -364,8 +364,8 @@ class ArtifactWriter:
         self._metadata_schema: tuple[str, ...] | None = None
         self._matrix_n_columns: int | None = None
         self._matrix_columns: tuple[str, ...] | None = None
-        self._matrix_has_row_names: bool | None = None
-        self._matrix_row_name: str | None = None
+        self._row_name_declared: bool | None = None
+        self._row_name_column: str | None = None
 
         self._write_descriptor()
 
@@ -408,7 +408,7 @@ class ArtifactWriter:
             raise ArtifactError("Cannot finalize artifact without keys.")
         try:
             self._validate_final_keys()
-            self._validate_final_matrix_row_names()
+            self._validate_final_row_names()
         except Exception as exc:
             self.mark_failed(exc)
             raise
@@ -462,8 +462,8 @@ class ArtifactWriter:
             "matrix_columns": (
                 None if self._matrix_columns is None else list(self._matrix_columns)
             ),
-            "matrix_has_row_names": self._matrix_has_row_names,
-            "matrix_row_name": self._matrix_row_name,
+            "row_name_declared": self._row_name_declared,
+            "row_name_column": self._row_name_column,
         }
         try:
             json.dumps(state)
@@ -560,12 +560,18 @@ class ArtifactWriter:
             None if raw_matrix_n_columns is None else int(raw_matrix_n_columns)
         )
         writer._matrix_columns = _optional_tuple(state.get("matrix_columns"))
-        raw_has_row_names = state.get("matrix_has_row_names")
-        writer._matrix_has_row_names = (
-            None if raw_has_row_names is None else bool(raw_has_row_names)
+        raw_row_name = state.get("row_name_column")
+        if raw_row_name is None and bool(state.get("matrix_has_row_names", False)):
+            raw_row_name = state.get("matrix_row_name")
+        writer._row_name_column = (
+            None if raw_row_name is None else str(raw_row_name)
         )
-        raw_row_name = state.get("matrix_row_name")
-        writer._matrix_row_name = None if raw_row_name is None else str(raw_row_name)
+        raw_declared = state.get("row_name_declared")
+        writer._row_name_declared = (
+            writer._row_name_column is not None
+            if raw_declared is None
+            else bool(raw_declared)
+        )
         return writer
 
     # ------------------------------------------------------------------
@@ -583,6 +589,8 @@ class ArtifactWriter:
             raise ArtifactError(
                 "Zero-row schema payloads are currently supported only for table artifacts."
             )
+
+        self._validate_row_name_declaration(payload, n_rows=n_rows)
 
         if "metadata" in payload and payload.get("metadata") is not None:
             self._write_metadata(
@@ -760,24 +768,21 @@ class ArtifactWriter:
             finally:
                 con.close()
 
-    def _validate_final_matrix_row_names(self) -> None:
-        """Seal the optional named row axis and enforce global uniqueness."""
-        if self._matrix_has_row_names is not True:
+    def _validate_final_row_names(self) -> None:
+        """Validate the privileged row-name metadata column across all batches."""
+        row_name_column = self._row_name_column
+        if row_name_column is None:
             return
-        if self.artifact_type not in {
-            ArtifactType.DENSE_MATRIX,
-            ArtifactType.SPARSE_MATRIX,
-        }:
-            raise ArtifactError("Only matrix artifacts may define row_names.")
 
         part_paths = [
-            self.storage.data_row_names_part_path(part_index)
+            self.storage.metadata_part_path(part_index)
             for part_index in range(self._next_part_index)
         ]
         missing = [path for path in part_paths if not path.exists()]
         if missing:
             raise ArtifactError(
-                f"Missing matrix row_names part(s) during finalization: {missing}."
+                "Named matrix rows require row metadata in every batch; "
+                f"missing metadata part(s): {missing}."
             )
 
         with tempfile.TemporaryDirectory(
@@ -792,7 +797,9 @@ class ArtifactWriter:
                 expected_position = 0
                 total_rows = 0
                 for part_index, path in enumerate(part_paths):
-                    frame = pd.read_parquet(path, columns=["row_name", "_position"])
+                    frame = pd.read_parquet(
+                        path, columns=[row_name_column, "_position"]
+                    )
                     n_rows = len(frame)
                     expected = np.arange(
                         expected_position, expected_position + n_rows, dtype="int64"
@@ -801,22 +808,26 @@ class ArtifactWriter:
                         frame["_position"].to_numpy(dtype="int64"), expected
                     ):
                         raise ArtifactError(
-                            f"Matrix row-name positions are not contiguous in part {part_index}."
+                            "Matrix row-name metadata positions are not contiguous "
+                            f"in part {part_index}."
                         )
+                    names = _coerce_matrix_row_names(
+                        frame[row_name_column], n_rows=n_rows
+                    )
                     try:
                         con.executemany(
                             "INSERT INTO seen_row_names VALUES (?)",
-                            ((str(value),) for value in frame["row_name"].tolist()),
+                            ((name,) for name in names),
                         )
                     except sqlite3.IntegrityError as exc:
                         raise ArtifactError(
-                            "Duplicate matrix row_names across artifact batches."
+                            "Duplicate matrix row names across artifact metadata."
                         ) from exc
                     expected_position += n_rows
                     total_rows += n_rows
                 if total_rows != self._n_rows:
                     raise ArtifactError(
-                        f"Matrix row_names count {total_rows} does not match writer "
+                        f"Matrix row-name count {total_rows} does not match writer "
                         f"row count {self._n_rows}."
                     )
             finally:
@@ -1042,8 +1053,6 @@ class ArtifactWriter:
         labels = self._validate_matrix_columns(
             matrix_payload["columns"], n_columns=n_columns
         )
-        row_names = self._validate_matrix_row_names(matrix_payload, n_rows=n_rows)
-
         values_dir = self.storage.data_values_dir
         self._ensure_component(
             "data",
@@ -1053,16 +1062,10 @@ class ArtifactWriter:
             ),
             self.data_dir,
             values_dir,
-            *((self.storage.data_row_names_dir,) if row_names is not None else ()),
-            on_init=(
-                None
-                if self.feature_metadata_mode == "inherit"
-                else lambda: self._write_feature_metadata(labels)
-            ),
         )
-        if row_names is not None:
-            self._write_matrix_row_names(
-                row_names, start_position=start_position, part_index=part_index
+        if self.feature_metadata_mode != "inherit":
+            self._write_or_validate_feature_metadata(
+                labels, matrix_payload.get("feature_metadata")
             )
         sparse.save_npz(self.storage.data_value_part_path(part_index, "npz"), values)
 
@@ -1091,8 +1094,6 @@ class ArtifactWriter:
         labels = self._validate_matrix_columns(
             matrix_payload["columns"], n_columns=n_columns
         )
-        row_names = self._validate_matrix_row_names(matrix_payload, n_rows=n_rows)
-
         values_dir = self.storage.data_values_dir
         self._ensure_component(
             "data",
@@ -1102,16 +1103,10 @@ class ArtifactWriter:
             ),
             self.data_dir,
             values_dir,
-            *((self.storage.data_row_names_dir,) if row_names is not None else ()),
-            on_init=(
-                None
-                if self.feature_metadata_mode == "inherit"
-                else lambda: self._write_feature_metadata(labels)
-            ),
         )
-        if row_names is not None:
-            self._write_matrix_row_names(
-                row_names, start_position=start_position, part_index=part_index
+        if self.feature_metadata_mode != "inherit":
+            self._write_or_validate_feature_metadata(
+                labels, matrix_payload.get("feature_metadata")
             )
         np.save(self.storage.data_value_part_path(part_index, "npy"), values)
 
@@ -1186,50 +1181,125 @@ class ArtifactWriter:
             raise ArtifactError("Matrix columns changed after they were established.")
         return labels
 
-    def _write_feature_metadata(self, labels: tuple[str, ...]) -> None:
-        """Persist locally owned Feature Metadata for a matrix axis."""
-        path = self.storage.feature_metadata_path
-        frame = pd.DataFrame(
-            {
-                "column_index": np.arange(len(labels), dtype="int64"),
-                "column": list(labels),
-            }
+    def _normalized_feature_metadata_frame(
+        self,
+        labels: tuple[str, ...],
+        feature_metadata: Any = None,
+    ) -> pd.DataFrame:
+        """Normalize one batch's owned Feature Metadata for artifact-wide checks."""
+        if feature_metadata is None:
+            return pd.DataFrame(
+                {
+                    "column_index": np.arange(len(labels), dtype="int64"),
+                    "column": list(labels),
+                }
+            )
+
+        frame = _require_dataframe(
+            feature_metadata,
+            n_rows=len(labels),
+            channel="feature_metadata",
         )
-        frame.to_parquet(path, index=False)
+        frame.columns = [str(col) for col in frame.columns]
+        if "column" in frame.columns:
+            observed = tuple(str(value) for value in frame["column"].tolist())
+            if observed != labels:
+                raise ArtifactError(
+                    "Feature Metadata 'column' values must match matrix columns."
+                )
+        else:
+            frame.insert(0, "column", list(labels))
+        if "column_index" in frame.columns:
+            frame["column_index"] = np.arange(len(labels), dtype="int64")
+        else:
+            frame.insert(
+                0,
+                "column_index",
+                np.arange(len(labels), dtype="int64"),
+            )
+        return frame.reset_index(drop=True)
 
-    def _validate_matrix_row_names(
-        self, matrix_payload: Mapping[str, Any], *, n_rows: int
-    ) -> tuple[str, ...] | None:
-        has_names = "row_names" in matrix_payload
-        has_axis_name = "row_name" in matrix_payload
-        if has_names != has_axis_name:
-            raise ArtifactError(
-                "Named matrix rows require both 'row_names' and 'row_name'."
-            )
-        if self._matrix_has_row_names is None:
-            self._matrix_has_row_names = has_names
-        elif self._matrix_has_row_names != has_names:
-            raise ArtifactError(
-                "Matrix batches must either all define row_names or all omit them."
-            )
-        if not has_names:
-            return None
+    def _write_or_validate_feature_metadata(
+        self,
+        labels: tuple[str, ...],
+        feature_metadata: Any = None,
+    ) -> None:
+        """Write Feature Metadata once and require exact semantic parity thereafter."""
+        path = self.storage.feature_metadata_path
+        frame = self._normalized_feature_metadata_frame(labels, feature_metadata)
+        if not path.exists():
+            frame.to_parquet(path, index=False)
+            return
 
-        axis_name = matrix_payload["row_name"]
-        if not isinstance(axis_name, str) or not axis_name:
-            raise ArtifactError("Matrix row_name must be a non-empty string.")
-        if axis_name in STRUCTURAL_COLUMNS or axis_name.startswith("_"):
-            raise ArtifactError(
-                "Matrix row_name may not be a reserved structural name."
+        existing = pd.read_parquet(path).reset_index(drop=True)
+        try:
+            pd.testing.assert_frame_equal(
+                existing,
+                frame,
+                check_dtype=False,
+                check_like=False,
             )
-        if self._matrix_row_name is None:
-            self._matrix_row_name = axis_name
-        elif self._matrix_row_name != axis_name:
+        except AssertionError as exc:
             raise ArtifactError(
-                f"Matrix row_name changed from {self._matrix_row_name!r} "
-                f"to {axis_name!r}."
+                "Owned Feature Metadata changed after it was established by the "
+                "first matrix batch."
+            ) from exc
+
+    def _write_feature_metadata(
+        self,
+        labels: tuple[str, ...],
+        feature_metadata: Any = None,
+    ) -> None:
+        """Backward-compatible helper for writing owned Feature Metadata."""
+        self._normalized_feature_metadata_frame(
+            labels, feature_metadata
+        ).to_parquet(self.storage.feature_metadata_path, index=False)
+
+    def _validate_row_name_declaration(
+        self, payload: Mapping[str, Any], *, n_rows: int
+    ) -> None:
+        has_declaration = payload.get("row_name_column") is not None
+        if self._row_name_declared is None:
+            self._row_name_declared = has_declaration
+        elif self._row_name_declared != has_declaration:
+            raise ArtifactError(
+                "Artifact batches must either all declare row_name_column or all omit it."
             )
-        return _coerce_matrix_row_names(matrix_payload["row_names"], n_rows=n_rows)
+        if not has_declaration:
+            return
+        if self.artifact_type not in {
+            ArtifactType.DENSE_MATRIX,
+            ArtifactType.SPARSE_MATRIX,
+        }:
+            raise ArtifactError("row_name_column is supported only for matrix artifacts.")
+
+        raw_column = payload.get("row_name_column")
+        if not isinstance(raw_column, str) or not raw_column:
+            raise ArtifactError("row_name_column must be a non-empty string.")
+        if raw_column in STRUCTURAL_COLUMNS or raw_column.startswith("_"):
+            raise ArtifactError(
+                "row_name_column may not use a reserved structural name."
+            )
+        if self._row_name_column is None:
+            self._row_name_column = raw_column
+        elif self._row_name_column != raw_column:
+            raise ArtifactError(
+                f"row_name_column changed from {self._row_name_column!r} "
+                f"to {raw_column!r}."
+            )
+
+        metadata = payload.get("metadata")
+        if metadata is None:
+            raise ArtifactError(
+                "Named matrix rows require the row-name field in ordinary metadata."
+            )
+        frame = _require_dataframe(metadata, n_rows=n_rows, channel="metadata")
+        frame.columns = [str(col) for col in frame.columns]
+        if raw_column not in frame.columns:
+            raise ArtifactError(
+                f"row_name_column {raw_column!r} is not present in metadata."
+            )
+        _coerce_matrix_row_names(frame[raw_column], n_rows=n_rows)
 
     def _matrix_component_descriptor(
         self, *, format: str, values_format: str
@@ -1251,36 +1321,10 @@ class ArtifactWriter:
                 "format": "parquet",
                 "path": "data/columns.parquet",
             }
-        if self._matrix_has_row_names:
-            descriptor["row_names"] = {
-                "format": "parquet_dataset",
-                "path": "data/row_names/",
-                "name": self._matrix_row_name,
-                "unique": True,
-            }
         return descriptor
 
-    def _write_matrix_row_names(
-        self,
-        row_names: tuple[str, ...],
-        *,
-        start_position: int,
-        part_index: int,
-    ) -> None:
-        frame = pd.DataFrame(
-            {
-                "row_name": list(row_names),
-                "_position": np.arange(
-                    start_position,
-                    start_position + len(row_names),
-                    dtype="int64",
-                ),
-            }
-        )
-        frame.to_parquet(self.storage.data_row_names_part_path(part_index), index=False)
-
     def _descriptor(self) -> dict[str, Any]:
-        return {
+        descriptor = {
             "artifact_id": self.artifact_id,
             "artifact_type": self.artifact_type.value,
             "label": self.label,
@@ -1295,6 +1339,9 @@ class ArtifactWriter:
                 "parts": int(self._next_part_index),
             },
         }
+        if self._row_name_column is not None:
+            descriptor["row_name_column"] = self._row_name_column
+        return descriptor
 
     def _write_descriptor(self) -> None:
         _write_json(self.storage.descriptor_path, self._descriptor())
@@ -1318,6 +1365,7 @@ def create_artifact_writer(
     lineage_mode: LineageMode | None = None,
     basis_artifact_ids: Sequence[str] | None = None,
     feature_metadata_mode: FeatureMetadataMode | None = None,
+    feature_metadata_basis_artifact_id: str | None = None,
     data_serializer: OtherDataSerializer | None = None,
     data_serializer_ref: CallableRef | None = None,
 ) -> ArtifactWriter:
@@ -1342,6 +1390,11 @@ def create_artifact_writer(
 
     if feature_metadata_mode is not None:
         resolved_lineage.setdefault("feature_metadata_mode", feature_metadata_mode)
+    if feature_metadata_basis_artifact_id is not None:
+        resolved_lineage.setdefault(
+            "feature_metadata_basis_artifact_id",
+            str(feature_metadata_basis_artifact_id),
+        )
 
     return ArtifactWriter(
         artifact_dir=artifact_dir,

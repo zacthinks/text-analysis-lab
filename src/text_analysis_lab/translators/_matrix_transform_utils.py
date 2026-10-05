@@ -21,6 +21,129 @@ from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import InputBatch
 
 
+def feature_metadata_from_columns(columns: Sequence[str]) -> pd.DataFrame:
+    """Build canonical Feature Metadata from ordered feature labels."""
+    labels = [str(value) for value in columns]
+    return pd.DataFrame(
+        {
+            "column_index": np.arange(len(labels), dtype="int64"),
+            "column": labels,
+        }
+    )
+
+
+def normalize_feature_metadata(
+    feature_metadata: pd.DataFrame,
+    *,
+    width: int,
+    name: str,
+) -> pd.DataFrame:
+    """Validate and normalize Feature Metadata for an in-memory matrix."""
+    if not isinstance(feature_metadata, pd.DataFrame):
+        raise TypeError(f"{name} feature_metadata must be a pandas DataFrame.")
+    if len(feature_metadata) != int(width):
+        raise ValueError(
+            f"{name} Feature Metadata width {len(feature_metadata)} does not match "
+            f"matrix width {int(width)}."
+        )
+    frame = feature_metadata.copy().reset_index(drop=True)
+    if "column_index" in frame.columns:
+        frame["column_index"] = np.arange(len(frame), dtype="int64")
+    else:
+        frame.insert(0, "column_index", np.arange(len(frame), dtype="int64"))
+    return frame
+
+
+def unpack_standalone_matrix(
+    value: Any,
+    *,
+    name: str,
+) -> tuple[Any, pd.DataFrame | None, bool]:
+    """Unpack a raw matrix or canonical standalone matrix mapping."""
+    structured = isinstance(value, Mapping) and "values" in value
+    if structured:
+        matrix = value["values"]
+        feature_metadata = value.get("feature_metadata")
+        if feature_metadata is None and "columns" in value:
+            feature_metadata = feature_metadata_from_columns(value["columns"])
+        if feature_metadata is None:
+            raise ValueError(
+                f"{name} standalone matrix mappings require feature_metadata."
+            )
+    else:
+        matrix = value
+        feature_metadata = None
+
+    shape = getattr(matrix, "shape", None)
+    if shape is None or len(shape) != 2:
+        raise ValueError(f"{name} requires a two-dimensional matrix.")
+    normalized = (
+        None
+        if feature_metadata is None
+        else normalize_feature_metadata(
+            feature_metadata,
+            width=int(shape[1]),
+            name=name,
+        )
+    )
+    return matrix, normalized, structured
+
+
+def standalone_matrix_payload(
+    values: Any,
+    feature_metadata: pd.DataFrame,
+    *,
+    name: str,
+    source: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the canonical standalone matrix representation.
+
+    Row-preserving transforms carry ordinary row metadata and its optional
+    privileged row-name designation forward unchanged.
+    """
+    shape = getattr(values, "shape", None)
+    if shape is None or len(shape) != 2:
+        raise ValueError(f"{name} requires a two-dimensional matrix.")
+    payload: dict[str, Any] = {
+        "values": values,
+        "feature_metadata": normalize_feature_metadata(
+            feature_metadata,
+            width=int(shape[1]),
+            name=name,
+        ),
+    }
+    if source is not None:
+        metadata = source.get("metadata")
+        if metadata is not None:
+            if not isinstance(metadata, pd.DataFrame):
+                raise TypeError(f"{name} standalone metadata must be a pandas DataFrame.")
+            if len(metadata) != int(shape[0]):
+                raise ValueError(
+                    f"{name} row metadata count {len(metadata)} does not match "
+                    f"matrix row count {int(shape[0])}."
+                )
+            payload["metadata"] = metadata.reset_index(drop=True).copy()
+        row_name_column = source.get("row_name_column")
+        if row_name_column is not None:
+            if not isinstance(row_name_column, str) or not row_name_column:
+                raise ValueError(f"{name} row_name_column must be a non-empty string.")
+            if "metadata" not in payload or row_name_column not in payload["metadata"].columns:
+                raise ValueError(
+                    f"{name} row_name_column {row_name_column!r} is not present in metadata."
+                )
+            payload["row_name_column"] = row_name_column
+    return payload
+
+
+def feature_labels(feature_metadata: pd.DataFrame, *, name: str) -> list[str]:
+    if "column" not in feature_metadata.columns:
+        raise ValueError(
+            f"{name} Feature Metadata must contain a 'column' field when feature "
+            "labels are required."
+        )
+    return [str(value) for value in feature_metadata["column"].tolist()]
+
+
 def single_source(sources: Mapping[str, Any], *, name: str):
     if set(sources) != {"source"}:
         raise OperatorError(f"{name} requires exactly one source under 'source'.")
