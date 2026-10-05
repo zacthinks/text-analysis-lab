@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -30,6 +30,7 @@ class PipelinePort:
     kind: PipelinePortKind
     name: str
     output_label: str | None = None
+    _owner: object = field(repr=False, compare=False, default=None)
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -57,7 +58,7 @@ class PipelineInputRef:
                 f"Unknown pipeline input {value!r}. "
                 f"Declared inputs: {list(self._pipeline.input_names)!r}."
             )
-        return PipelinePort("input", value)
+        return PipelinePort("input", value, _owner=self._pipeline._port_owner)
 
     @property
     def port(self) -> PipelinePort:
@@ -66,7 +67,11 @@ class PipelineInputRef:
                 "pipeline.input is ambiguous because this Pipeline has multiple inputs. "
                 "Use pipeline.input['name']."
             )
-        return PipelinePort("input", self._pipeline.input_names[0])
+        return PipelinePort(
+            "input",
+            self._pipeline.input_names[0],
+            _owner=self._pipeline._port_owner,
+        )
 
 
 class PipelineStageRef:
@@ -80,7 +85,12 @@ class PipelineStageRef:
         label = str(output_label)
         if not label:
             raise PipelineError("Pipeline output labels must be non-empty strings.")
-        return PipelinePort("stage", self.stage_name, label)
+        return PipelinePort(
+            "stage",
+            self.stage_name,
+            label,
+            _owner=self._pipeline._port_owner,
+        )
 
     @property
     def output(self) -> PipelinePort:
@@ -134,6 +144,7 @@ class Pipeline:
         if len(set(names)) != len(names):
             raise PipelineError("Pipeline input names must be unique.")
         self._input_names = names
+        self._port_owner = object()
         self._stages: dict[str, PipelineStage] = {}
         self._outputs: dict[str, PipelinePort] = {}
         self._input_accessor = PipelineInputRef(self)
@@ -445,12 +456,19 @@ class Pipeline:
         if len(terminal) == 1:
             return {
                 DEFAULT_OUTPUT_LABEL: PipelinePort(
-                    "stage", terminal[0], DEFAULT_OUTPUT_LABEL
+                    "stage",
+                    terminal[0],
+                    DEFAULT_OUTPUT_LABEL,
+                    _owner=self._port_owner,
                 )
             }
         if not self._stages and len(self._input_names) == 1:
             return {
-                DEFAULT_OUTPUT_LABEL: PipelinePort("input", self._input_names[0])
+                DEFAULT_OUTPUT_LABEL: PipelinePort(
+                    "input",
+                    self._input_names[0],
+                    _owner=self._port_owner,
+                )
             }
         raise PipelineError(
             "Pipeline outputs are ambiguous. Declare them explicitly with "
@@ -501,6 +519,10 @@ class Pipeline:
         self._topological_order(set(self._stages))
 
     def _validate_port(self, port: PipelinePort) -> None:
+        if port._owner is not self._port_owner:
+            raise PipelineError(
+                "Pipeline ports cannot be wired across different Pipeline instances."
+            )
         if port.kind == "input":
             if port.name not in self._input_names:
                 raise PipelineError(
@@ -640,9 +662,6 @@ class Pipeline:
         bound: Mapping[str, Any],
     ) -> Any:
         values = tuple(bound.values())
-        if len(values) == 1:
-            return translator.translate(values[0])
-
         signature = inspect.signature(translator.translate)
         params = signature.parameters
         can_use_keywords = all(
