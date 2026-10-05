@@ -170,8 +170,6 @@ class SemanticRoleLabeler(BaseTranslator):
             "pos",
             "tag",
             "dep",
-            "head_token_id",
-            "ent_type",
             "char_start",
             "char_end",
         ]
@@ -430,8 +428,6 @@ class SemanticRoleLabeler(BaseTranslator):
                         "pos",
                         "tag",
                         "dep",
-                        "head_token_id",
-                        "ent_type",
                         "char_start",
                         "char_end",
                     ),
