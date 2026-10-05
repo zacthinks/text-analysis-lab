@@ -803,7 +803,7 @@ def test_matrix_transpose_standalone_matches_teal_batch() -> None:
         direct["values"].toarray(),
         matrix.toarray().T,
     )
-    assert direct["columns"] == row_labels
+    assert direct["feature_metadata"]["column"].tolist() == row_labels
     assert direct["row_name_column"] == "feature"
     assert direct["metadata"].columns.tolist() == ["feature", "family"]
     assert direct["metadata"]["feature"].tolist() == features
@@ -842,7 +842,7 @@ def test_matrix_transpose_standalone_matches_teal_batch() -> None:
         batch["data"]["values"].toarray(),
         direct["values"].toarray(),
     )
-    assert batch["data"]["columns"] == direct["columns"]
+    assert batch["data"]["columns"] == direct["feature_metadata"]["column"].tolist()
     assert batch["row_name_column"] == direct["row_name_column"]
     pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
 
@@ -999,7 +999,7 @@ def test_dictionary_translator_standalone_matches_teal_batch() -> None:
         batch["data"]["values"].toarray(),
         direct["values"].toarray(),
     )
-    assert batch["data"]["columns"] == direct["columns"]
+    assert batch["data"]["columns"] == direct["feature_metadata"]["column"].tolist()
     pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
 
 

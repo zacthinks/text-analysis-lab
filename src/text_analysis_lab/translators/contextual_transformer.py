@@ -253,7 +253,6 @@ class ContextualTransformer(BaseTranslator):
             "tokens": token_frame,
             "metadata": metadata,
             "values": embeddings,
-            "columns": columns,
             "feature_metadata": feature_metadata_from_columns(columns),
         }
 
@@ -376,7 +375,9 @@ class ContextualTransformer(BaseTranslator):
                     "keys": token_keys.copy(),
                     "data": {
                         "values": translated["values"],
-                        "columns": translated["columns"],
+                        "columns": translated["feature_metadata"]["column"]
+                        .astype(str)
+                        .tolist(),
                     },
                 },
             }

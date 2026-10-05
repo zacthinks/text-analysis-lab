@@ -221,7 +221,6 @@ class SentenceTransformerEncoder(BaseTranslator):
         columns = [f"dim_{index}" for index in range(values.shape[1])]
         return {
             "values": values,
-            "columns": columns,
             "feature_metadata": feature_metadata_from_columns(columns),
             "metadata": metadata,
         }

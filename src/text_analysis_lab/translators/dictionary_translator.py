@@ -165,9 +165,9 @@ class DictionaryTranslator(BaseTranslator):
                     "neutral must equal matched."
                 )
 
-        result = {
+        return {
             "values": translated,
-            "columns": columns,
+            "feature_metadata": feature_metadata_from_columns(columns),
             "metadata": pd.DataFrame(
                 {
                     "matched": matched,
@@ -176,8 +176,6 @@ class DictionaryTranslator(BaseTranslator):
                 }
             ),
         }
-        result["feature_metadata"] = feature_metadata_from_columns(columns)
-        return result
 
     @property
     def supports_parallel_translate(self) -> bool:
@@ -284,7 +282,9 @@ class DictionaryTranslator(BaseTranslator):
                     "metadata": translated["metadata"],
                     "data": {
                         "values": translated["values"],
-                        "columns": translated["columns"],
+                        "columns": translated["feature_metadata"]["column"]
+                        .astype(str)
+                        .tolist(),
                     },
                 }
             }

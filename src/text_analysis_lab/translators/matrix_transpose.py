@@ -216,7 +216,6 @@ class MatrixTranspose(BaseTranslator):
 
         result: dict[str, Any] = {
             "values": values,
-            "columns": columns,
             "feature_metadata": promoted,
         }
         if feature_metadata is None:
@@ -380,7 +379,7 @@ class MatrixTranspose(BaseTranslator):
         )
         data = {
             "values": translated["values"],
-            "columns": translated["columns"],
+            "columns": translated["feature_metadata"]["column"].astype(str).tolist(),
             "feature_metadata": translated["feature_metadata"],
         }
         output: dict[str, Any] = {

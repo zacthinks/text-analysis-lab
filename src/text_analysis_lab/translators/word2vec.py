@@ -163,7 +163,6 @@ class Word2Vec(BaseTranslator):
             "words": words,
             "counts": counts,
             "values": vectors,
-            "columns": columns,
             "feature_metadata": feature_metadata_from_columns(columns),
             "metadata": pd.DataFrame(
                 {
@@ -269,7 +268,9 @@ class Word2Vec(BaseTranslator):
                     "row_name_column": self.row_name,
                     "data": {
                         "values": trained["values"],
-                        "columns": trained["columns"],
+                        "columns": trained["feature_metadata"]["column"]
+                        .astype(str)
+                        .tolist(),
                     },
                 }
             }
