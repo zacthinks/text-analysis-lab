@@ -136,7 +136,7 @@ class ContextualTransformer(BaseTranslator):
         self,
         texts: str | Sequence[str] | pd.Series,
         *,
-        device: str = "cpu",
+        device: str = "auto",
         model_batch_size: int = 16,
     ) -> dict[str, Any]:
         """Tokenize ordinary text and return aligned token records and embeddings."""
@@ -354,7 +354,7 @@ class ContextualTransformer(BaseTranslator):
 
         translated = self.translate(
             frame[self.text_field],
-            device=str(request.params.get("device", "cpu")),
+            device=str(request.params.get("device", "auto")),
             model_batch_size=int(request.params.get("model_batch_size", 16)),
         )
         token_frame = translated["tokens"]
