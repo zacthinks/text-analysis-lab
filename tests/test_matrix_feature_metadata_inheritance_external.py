@@ -88,6 +88,24 @@ def test_legacy_stored_matrix_output_spec_defaults_to_owned_metadata() -> None:
     assert specs["output"].feature_metadata_mode == "own"
 
 
+def test_stored_output_spec_preserves_explicit_feature_metadata_basis() -> None:
+    specs = _output_specs_from_dict(
+        {
+            "output": {
+                "artifact_type": "dense_matrix",
+                "lineage_mode": "preserved_key",
+                "basis_labels": ["tokens"],
+                "feature_metadata_mode": "inherit",
+                "feature_metadata_basis_label": "embeddings",
+            }
+        }
+    )
+    spec = specs["output"]
+    assert spec.basis_labels == ("tokens",)
+    assert spec.feature_metadata_mode == "inherit"
+    assert spec.feature_metadata_basis_label == "embeddings"
+
+
 def test_row_preserving_matrix_operations_inherit_rich_feature_metadata(
     tmp_path: Path,
 ) -> None:
