@@ -101,11 +101,12 @@ class PipelineStage:
 
 @dataclass(frozen=True)
 class PipelineCapabilityIssue:
-    """One stage-level reason a pipeline execution mode is unavailable."""
+    """One stage-level reason one or more capabilities are unavailable."""
 
     stage: str
     translator: str
     reason: str
+    blocked: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -284,12 +285,23 @@ class Pipeline:
             for requirement in caps.requirements:
                 if requirement not in requirements:
                     requirements.append(requirement)
+            blocked = tuple(
+                name
+                for name, available in (
+                    ("reusable", caps.reusable),
+                    ("artifact", caps.artifact),
+                    ("native", caps.native),
+                    ("portable", caps.portable),
+                )
+                if not available
+            )
             for reason in caps.reasons:
                 issues.append(
                     PipelineCapabilityIssue(
                         stage=stage_name,
                         translator=stage.translator.__class__.__name__,
                         reason=reason,
+                        blocked=blocked,
                     )
                 )
 
@@ -666,12 +678,7 @@ class Pipeline:
     @staticmethod
     def _capability_message(mode: str, caps: PipelineCapabilities) -> str:
         relevant = [
-            issue
-            for issue in caps.issues
-            if (
-                mode == "native"
-                or mode == "artifact"
-            )
+            issue for issue in caps.issues if mode in issue.blocked
         ]
         if not relevant:
             return f"Pipeline cannot execute in {mode} mode."
