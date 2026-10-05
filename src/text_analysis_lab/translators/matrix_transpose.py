@@ -182,6 +182,9 @@ class MatrixTranspose(BaseTranslator):
             )
         self._source_type = source.artifact_type.value
         feature_getter = getattr(source, "get_feature_metadata", None)
+        if not callable(feature_getter):
+            # Compatibility for pre-Feature-Metadata matrix-like sources.
+            feature_getter = getattr(source, "get_feature_frame", None)
         if callable(feature_getter):
             feature_metadata = feature_getter()
             if not isinstance(feature_metadata, pd.DataFrame):

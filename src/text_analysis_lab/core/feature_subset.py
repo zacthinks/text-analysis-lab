@@ -146,7 +146,7 @@ def feature_subset(
     getter = getattr(artifact, "get_feature_metadata", None)
     if not callable(getter):
         raise ArtifactError(
-            f"Matrix artifact {artifact.artifact_id} does not expose a Feature Metadata."
+            f"Matrix artifact {artifact.artifact_id} does not expose Feature Metadata."
         )
     if not callable(function):
         raise TypeError("feature_subset function must be callable.")
