@@ -32,6 +32,7 @@ from text_analysis_lab.core.operator import (
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
 from text_analysis_lab.translators._matrix_transform_utils import (
     clone_estimator,
+    unpack_standalone_matrix,
     dump_estimator,
     load_estimator,
 )
@@ -140,6 +141,11 @@ class FittedPredictor(BaseTranslator):
     def translate(self, values: Any) -> pd.DataFrame:
         """Apply the fitted prediction object to ordinary in-memory values."""
 
+        if isinstance(values, Mapping) and "values" in values:
+            values, _, _ = unpack_standalone_matrix(
+                values,
+                name="FittedPredictor.translate(...)",
+            )
         model = self._require_model()
         expected_rows = _input_row_count(values)
         prediction = _one_dimensional(

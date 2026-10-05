@@ -161,6 +161,7 @@ class Word2Vec(BaseTranslator):
         columns = _dimension_columns(self.vector_size)
         return {
             "words": words,
+            "row_names": words,
             "counts": counts,
             "values": vectors,
             "columns": columns,

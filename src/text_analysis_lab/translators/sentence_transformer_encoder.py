@@ -27,6 +27,9 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.translators._matrix_transform_utils import (
+    feature_metadata_from_columns,
+)
 from text_analysis_lab.translators._hf_utils import (
     ContextWindowExceededError,
     TransformerResourceError,
@@ -197,16 +200,31 @@ class SentenceTransformerEncoder(BaseTranslator):
         task: SentenceTask | str | None = None,
         device: str = "auto",
         model_batch_size: int = 32,
-    ) -> np.ndarray:
-        """Encode ordinary in-memory text with the configured model recipe."""
+    ) -> dict[str, Any]:
+        """Encode ordinary text using the same matrix schema as artifact execution."""
 
-        values, _, _ = self._translate_texts(
+        values, token_counts, context_limit = self._translate_texts(
             texts,
             task=task,
             device=device,
             model_batch_size=model_batch_size,
         )
-        return values
+        embedded_counts = [min(count, context_limit) for count in token_counts]
+        metadata = pd.DataFrame(
+            {
+                "token_count": np.asarray(token_counts, dtype=np.int64),
+                "embedded_token_count": np.asarray(embedded_counts, dtype=np.int64),
+                "truncated": np.asarray(token_counts, dtype=np.int64)
+                > np.asarray(embedded_counts, dtype=np.int64),
+            }
+        )
+        columns = [f"dim_{index}" for index in range(values.shape[1])]
+        return {
+            "values": values,
+            "columns": columns,
+            "feature_metadata": feature_metadata_from_columns(columns),
+            "metadata": metadata,
+        }
 
     def _translate_texts(
         self,

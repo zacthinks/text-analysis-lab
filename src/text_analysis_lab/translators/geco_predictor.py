@@ -35,6 +35,7 @@ from text_analysis_lab.core.operator import (
 from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
 from text_analysis_lab.translators._matrix_transform_utils import (
     clone_estimator,
+    unpack_standalone_matrix,
     dump_estimator,
     load_estimator,
 )
@@ -203,6 +204,11 @@ class GeCoPredictor(BaseTranslator):
         for source_index, (matrix, spec) in enumerate(
             zip(matrices, self.source_specs, strict=True)
         ):
+            if isinstance(matrix, Mapping) and "values" in matrix:
+                matrix, _, _ = unpack_standalone_matrix(
+                    matrix,
+                    name="GeCoPredictor source",
+                )
             if sparse.issparse(matrix):
                 if len(matrix.shape) != 2:
                     raise ArtifactError("GeCoPredictor source matrix must be two-dimensional.")
