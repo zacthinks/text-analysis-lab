@@ -21,7 +21,6 @@ from text_analysis_lab.core.operator import (
 from text_analysis_lab.linguistics.cache import user_cache_paths
 from text_analysis_lab.linguistics.srl.resources import prepare_project_srl_runtime
 from text_analysis_lab.linguistics.srl.runtime import AllenNlpSrlRuntime
-from text_analysis_lab.linguistics.srl.structures import content_head_indices
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -29,7 +28,7 @@ if TYPE_CHECKING:
 SENTENCES = "sentences"
 TOKENS = "tokens"
 PREDICATES = "predicates"
-ROLES = "roles"
+ROLE_SPANS = "role_spans"
 FAILURES = "failures"
 
 PREDICATE_DATA_COLUMNS = (
@@ -40,18 +39,13 @@ PREDICATE_DATA_COLUMNS = (
     "lemma",
     "pos",
 )
-ROLE_DATA_COLUMNS = (
+ROLE_SPAN_DATA_COLUMNS = (
     "role",
     "token_start_id",
     "token_end_id",
     "char_start",
     "char_end",
     "text",
-    "head_token_id",
-    "head_text",
-    "head_lemma",
-    "head_pos",
-    "ent_type",
     "score",
 )
 FAILURE_DATA_COLUMNS = ("reason", "detail")
@@ -206,8 +200,8 @@ class SemanticRoleLabeler(BaseTranslator):
 
         predicate_keys: list[dict[str, Any]] = []
         predicate_data: list[dict[str, Any]] = []
-        role_keys: list[dict[str, Any]] = []
-        role_data: list[dict[str, Any]] = []
+        role_span_keys: list[dict[str, Any]] = []
+        role_span_data: list[dict[str, Any]] = []
         failures: dict[tuple[int, ...], list[dict[str, Any]]] = {}
         sentence_key_records: dict[tuple[int, ...], dict[str, int]] = {}
 
@@ -304,25 +298,6 @@ class SemanticRoleLabeler(BaseTranslator):
                         ),
                     )
                 for role_id, span in enumerate(prediction.spans):
-                    head_indices = content_head_indices(
-                        start=int(span.start),
-                        end=int(span.end),
-                        token_ids=[int(v) for v in sentence_tokens[self.token_key]],
-                        head_token_ids=[
-                            None if pd.isna(v) else int(v)
-                            for v in sentence_tokens["head_token_id"]
-                        ],
-                        dependencies=[
-                            None if pd.isna(v) else str(v)
-                            for v in sentence_tokens["dep"]
-                        ],
-                        pos=[
-                            None if pd.isna(v) else str(v)
-                            for v in sentence_tokens["pos"]
-                        ],
-                        text=token_texts,
-                        role=str(span.label),
-                    )
                     start_row = sentence_tokens.iloc[int(span.start)]
                     end_row = sentence_tokens.iloc[int(span.end) - 1]
                     sentence_start = int(sentence_row["char_start"])
@@ -333,37 +308,23 @@ class SemanticRoleLabeler(BaseTranslator):
                     span_score = float(
                         np.mean(prediction.word_scores[int(span.start) : int(span.end)])
                     )
-                    for head_id, head_index in enumerate(head_indices):
-                        head = sentence_tokens.iloc[int(head_index)]
-                        role_keys.append(
-                            {
-                                **predicate_key,
-                                "role_id": int(role_id),
-                                "head_id": int(head_id),
-                            }
-                        )
-                        role_data.append(
-                            {
-                                "role": str(span.label),
-                                "token_start_id": int(start_row[self.token_key]),
-                                "token_end_id": int(end_row[self.token_key]) + 1,
-                                "char_start": int(start_row["char_start"]),
-                                "char_end": int(end_row["char_end"]),
-                                "text": span_text,
-                                "head_token_id": int(head[self.token_key]),
-                                "head_text": str(head["text"]),
-                                "head_lemma": None
-                                if pd.isna(head["lemma"])
-                                else str(head["lemma"]),
-                                "head_pos": None
-                                if pd.isna(head["pos"])
-                                else str(head["pos"]),
-                                "ent_type": None
-                                if pd.isna(head["ent_type"])
-                                else str(head["ent_type"]),
-                                "score": span_score,
-                            }
-                        )
+                    role_span_keys.append(
+                        {
+                            **predicate_key,
+                            "role_id": int(role_id),
+                        }
+                    )
+                    role_span_data.append(
+                        {
+                            "role": str(span.label),
+                            "token_start_id": int(start_row[self.token_key]),
+                            "token_end_id": int(end_row[self.token_key]) + 1,
+                            "char_start": int(start_row["char_start"]),
+                            "char_end": int(end_row["char_end"]),
+                            "text": span_text,
+                            "score": span_score,
+                        }
+                    )
 
         failure_keys: list[dict[str, Any]] = []
         failure_data: list[dict[str, Any]] = []
@@ -386,13 +347,13 @@ class SemanticRoleLabeler(BaseTranslator):
                     predicate_data, columns=list(PREDICATE_DATA_COLUMNS)
                 ),
             },
-            ROLES: {
+            ROLE_SPANS: {
                 "keys": pd.DataFrame.from_records(
-                    role_keys,
-                    columns=[*sentence_keys, "predicate_id", "role_id", "head_id"],
+                    role_span_keys,
+                    columns=[*sentence_keys, "predicate_id", "role_id"],
                 ),
                 "data": pd.DataFrame.from_records(
-                    role_data, columns=list(ROLE_DATA_COLUMNS)
+                    role_span_data, columns=list(ROLE_SPAN_DATA_COLUMNS)
                 ),
             },
             FAILURES: {
@@ -422,7 +383,7 @@ class SemanticRoleLabeler(BaseTranslator):
                 lineage_mode="extended_key",
                 basis_labels=SENTENCES,
             ),
-            ROLES: OutputSpec(
+            ROLE_SPANS: OutputSpec(
                 artifact_type="table",
                 lineage_mode="extended_key",
                 basis_labels=PREDICATES,
