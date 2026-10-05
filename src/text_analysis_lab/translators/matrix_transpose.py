@@ -66,7 +66,6 @@ class MatrixTranspose(BaseTranslator):
         self._source_type: str | None = None
         self._source_features: tuple[str, ...] | None = None
         self._source_feature_metadata: pd.DataFrame | None = None
-        self._source_row_label_column: str | None = None
         self._promoted_feature_columns: tuple[str, ...] = ()
 
     def translate(
@@ -326,16 +325,6 @@ class MatrixTranspose(BaseTranslator):
         ]
         self._promoted_feature_columns = promoted
 
-        self._source_row_label_column = None
-        source_row_name = getattr(source, "row_name", None)
-        if isinstance(source_row_name, str) and source_row_name:
-            query_info = source.query_columns(metadata_mode="full")
-            mapping = dict(query_info.get("mapping", {}))
-            resolved = mapping.get(f"metadata.{source_row_name}", source_row_name)
-            self._source_row_label_column = str(resolved)
-            if resolved not in metadata_request:
-                metadata_request.append(str(resolved))
-
         return SourceRequest(
             artifact_type=("sparse_matrix", "dense_matrix"),
             mode="full_artifact",
@@ -371,7 +360,13 @@ class MatrixTranspose(BaseTranslator):
                 f"execution: expected {len(source_features)}, got {matrix.shape[1]}."
             )
 
-        row_labels = self._source_row_labels(info, key_columns)
+        native = packet.data if isinstance(packet.data, Mapping) else {}
+        embedded_row_names = native.get("row_names")
+        row_labels = self._source_row_labels(
+            info,
+            key_columns,
+            row_names=embedded_row_names,
+        )
         translated = self.translate(
             matrix,
             features=source_features,
@@ -440,14 +435,21 @@ class MatrixTranspose(BaseTranslator):
         self,
         info: pd.DataFrame,
         key_columns: Sequence[str],
+        *,
+        row_names: Any = None,
     ) -> list[str]:
-        if self._source_row_label_column is not None:
-            column = self._source_row_label_column
-            if column not in info.columns:
+        if row_names is not None:
+            if isinstance(row_names, (str, bytes)) or not isinstance(
+                row_names, Sequence
+            ):
                 raise ArtifactError(
-                    f"MatrixTranspose source packet is missing row-name column {column!r}."
+                    "MatrixTranspose source row names must be a sequence."
                 )
-            names = [str(value) for value in info[column].tolist()]
+            names = [str(value) for value in row_names]
+            if len(names) != len(info):
+                raise ArtifactError(
+                    "MatrixTranspose source row-name count does not match source rows."
+                )
             if len(set(names)) != len(names):
                 raise ArtifactError(
                     "MatrixTranspose source row names must be unique."
