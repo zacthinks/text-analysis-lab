@@ -4,9 +4,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 from scipy import sparse
 
 import text_analysis_lab as teal
+from text_analysis_lab.core.errors import ArtifactError
 from text_analysis_lab.core.translate import _output_specs_from_dict
 from text_analysis_lab.core.writer import create_artifact_writer
 from text_analysis_lab.translators import EmbeddingLookup
