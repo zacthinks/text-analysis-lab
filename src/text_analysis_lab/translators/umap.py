@@ -215,9 +215,9 @@ class UMAP(BaseTranslator):
                 values,
                 feature_metadata_from_columns(
                     [f"umap_{i}" for i in range(self.n_components)]
-                    source=source_payload,
-            ),
+                ),
                 name="UMAP",
+                source=source_payload,
             )
         return values
 

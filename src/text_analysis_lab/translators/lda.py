@@ -211,9 +211,9 @@ class LDA(BaseTranslator):
                 values,
                 feature_metadata_from_columns(
                     [f"topic_{i}" for i in range(self.n_components)]
-                    source=source_payload,
-            ),
+                ),
                 name="LDA",
+                source=source_payload,
             )
         return values
 

@@ -476,18 +476,32 @@ class _MatrixArtifact(BaseArtifact):
         )
         return [basis_indices[index] for index in local]
 
+    def _row_name_column(self) -> str | None:
+        """Resolve the privileged row-name metadata field through row lineage."""
+        value = self.descriptor.get("row_name_column")
+        if isinstance(value, str) and value:
+            return value
+
+        lineage = artifact_lineage(self)
+        if str(lineage.get("lineage_mode")) not in {"preserved_key", "rekeyed_key"}:
+            return None
+        basis_ids = basis_artifact_ids(self)
+        if len(basis_ids) != 1:
+            return None
+        basis = self.project.get_artifact(basis_ids[0])
+        if not isinstance(basis, _MatrixArtifact):
+            return None
+        return basis._row_name_column()
+
     @property
     def has_row_names(self) -> bool:
         """Whether this matrix designates one ordinary metadata column as row names."""
-        value = self.descriptor.get("row_name_column")
-        return isinstance(value, str) and bool(value)
+        return self._row_name_column() is not None
 
     @property
     def row_name(self) -> str | None:
         """Return the privileged row-name metadata column, such as ``"word"``."""
-        if not self.has_row_names:
-            return None
-        return str(self.descriptor["row_name_column"])
+        return self._row_name_column()
 
     def get_row_names(self, *, positions: Sequence[int] | None = None) -> list[str]:
         """Return values from the privileged row-name metadata column."""
