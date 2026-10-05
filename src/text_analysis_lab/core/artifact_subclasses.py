@@ -577,6 +577,8 @@ class _MatrixArtifact(BaseArtifact):
             for column in query_info.get("columns", ())
             if str(column.get("namespace")) == "metadata"
             and str(column.get("base_name")) == row_name_column
+            and str(column.get("source_artifact_id"))
+            == str(source_artifact.artifact_id)
         ]
         if len(matches) != 1:
             raise ArtifactError(
