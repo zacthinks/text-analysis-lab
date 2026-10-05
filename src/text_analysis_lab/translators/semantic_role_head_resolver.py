@@ -18,6 +18,7 @@ from text_analysis_lab.core.operator import (
 )
 from text_analysis_lab.linguistics.heads import (
     SemanticHeadRules,
+    load_semantic_head_rules,
     resolve_semantic_head_indices,
 )
 
@@ -48,7 +49,7 @@ class SemanticRoleHeadResolver(BaseTranslator):
         *,
         sentence_key: str = "sentence_id",
         token_key: str = "token_id",
-        head_rules: SemanticHeadRules | None = None,
+        head_rules: SemanticHeadRules | Mapping[str, Any] | str | None = None,
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
@@ -56,11 +57,9 @@ class SemanticRoleHeadResolver(BaseTranslator):
             raise ValueError(
                 "sentence_key and token_key must be distinct non-empty names."
             )
-        if head_rules is not None and not isinstance(head_rules, SemanticHeadRules):
-            raise TypeError("head_rules must be a SemanticHeadRules instance or None.")
         self.sentence_key = str(sentence_key)
         self.token_key = str(token_key)
-        self.head_rules = SemanticHeadRules() if head_rules is None else head_rules
+        self.head_rules = load_semantic_head_rules(head_rules)
 
     def translate(
         self,
@@ -182,6 +181,15 @@ class SemanticRoleHeadResolver(BaseTranslator):
                     for value in sentence["pos"]
                 ],
                 text=[str(value) for value in sentence["text"]],
+                lemmas=[
+                    None if pd.isna(value) else str(value)
+                    for value in sentence["lemma"]
+                ],
+                ent_types=[
+                    None if pd.isna(value) else str(value)
+                    for value in sentence["ent_type"]
+                ],
+                source="srl",
                 role=str(span["role"]),
                 rules=self.head_rules,
             )
