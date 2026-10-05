@@ -11,6 +11,10 @@ class OperatorError(TeALError):
     """Base exception for operator-related errors."""
 
 
+class PipelineError(TeALError):
+    """Raised when a pipeline graph or execution contract is invalid."""
+
+
 class OperatorNotFittedError(OperatorError):
     """Raised when an operator that requires fitting is used before fitting."""
 
