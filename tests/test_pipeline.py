@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
 import text_analysis_lab as teal
 from text_analysis_lab.core.errors import PipelineError
-from text_analysis_lab.translators import CountVectorizer, RegexCleaner, Word2Vec
+from text_analysis_lab.core.operator import ExecutionCapabilities
+from text_analysis_lab.translators import (
+    CountVectorizer,
+    EmbeddingLookup,
+    RegexCleaner,
+    Word2Vec,
+)
 
 
 def _source(project: teal.Project, tmp_path: Path):
@@ -23,6 +30,100 @@ def _source(project: teal.Project, tmp_path: Path):
         metadata_fields=None,
         batch_size=1,
     )
+
+
+
+
+class _StandaloneMultiOutput(teal.BaseTranslator):
+    def translate(self, values):
+        values = pd.Series(values)
+        return {
+            "left": values.str.lower(),
+            "right": values.str.upper(),
+        }
+
+    def execution_capabilities(self, *, project=None):
+        _ = project
+        return ExecutionCapabilities(
+            reusable=True,
+            artifact=False,
+            native=True,
+            portable=True,
+        )
+
+    def output_specs(self, *, sources, request):
+        _ = sources, request
+        raise NotImplementedError
+
+    def input_request(self, *, sources, mode, request):
+        _ = sources, mode, request
+        raise NotImplementedError
+
+    def translate_batch(self, inputs, *, mode, request):
+        _ = inputs, mode, request
+        raise NotImplementedError
+
+    def handle_batch_result(self, result, *, batch_index, mode, request):
+        _ = result, batch_index, mode, request
+        raise NotImplementedError
+
+    def finalize_translation(self, *, mode, request):
+        _ = mode, request
+        raise NotImplementedError
+
+
+def test_pipeline_native_multi_input_preserves_structured_default_output() -> None:
+    pipeline = teal.Pipeline(inputs=["tokens", "embeddings"])
+    lookup = pipeline.add(
+        "lookup",
+        EmbeddingLookup(field="word"),
+        sources={
+            "tokens": pipeline.input["tokens"],
+            "embeddings": pipeline.input["embeddings"],
+        },
+    )
+    pipeline.output("vectors", lookup["output"])
+
+    embeddings = {
+        "values": np.asarray([[1.0, 2.0], [3.0, 4.0]]),
+        "metadata": pd.DataFrame({"word": ["alpha", "beta"]}),
+        "row_name_column": "word",
+        "feature_metadata": pd.DataFrame({"column": ["x", "y"]}),
+    }
+    result = pipeline.translate(
+        inputs={
+            "tokens": pd.DataFrame({"word": ["beta", "alpha"]}),
+            "embeddings": embeddings,
+        }
+    )
+
+    vectors = result["vectors"]
+    np.testing.assert_allclose(vectors["values"], [[3.0, 4.0], [1.0, 2.0]])
+    assert vectors["feature_metadata"]["column"].tolist() == ["x", "y"]
+
+
+def test_pipeline_native_multi_output_routes_only_referenced_labels() -> None:
+    pipeline = teal.Pipeline()
+    split = pipeline.add(
+        "split",
+        _StandaloneMultiOutput(),
+        source=pipeline.input,
+    )
+    cleaned = pipeline.add(
+        "cleaned",
+        RegexCleaner(rules=({"pattern": "a", "replacement": "@"},)),
+        source=split["left"],
+    )
+    pipeline.output("cleaned", cleaned["output"])
+    pipeline.output("upper", split["right"])
+
+    result = pipeline.translate(
+        pd.Series(["Alpha", "Beta"]),
+        outputs=["cleaned", "upper"],
+    )
+
+    assert result["cleaned"].tolist() == ["@lph@", "bet@"]
+    assert result["upper"].tolist() == ["ALPHA", "BETA"]
 
 
 def test_pipeline_native_linear_execution_uses_translator_contracts() -> None:
