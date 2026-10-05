@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast, get_args
