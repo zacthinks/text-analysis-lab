@@ -92,6 +92,32 @@ def test_named_matrix_rows_round_trip_and_analytics(
         project.close()
 
 
+
+
+def test_named_row_privilege_follows_row_preserving_matrix_lineage(
+    tmp_path: Path,
+) -> None:
+    project = teal.Project.create(tmp_path / "named_lineage", name="named_lineage")
+    try:
+        matrix = _register(
+            project,
+            "art_named",
+            batches=[
+                (["alpha", "beta", "gamma"], [[1, 0], [0, 1], [1, 1]])
+            ],
+        )
+        selected = project.select_keys(
+            matrix,
+            [0, 2],
+            output_label="selected",
+        )
+        assert selected.has_row_names
+        assert selected.row_name == "term"
+        assert selected.get_row_names() == ["alpha", "gamma"]
+        assert selected.position_by_row_name("gamma") == 1
+    finally:
+        project.close()
+
 def test_named_rows_must_be_consistent_and_globally_unique(tmp_path: Path) -> None:
     artifact_dir = tmp_path / "duplicate"
     writer = create_artifact_writer(
