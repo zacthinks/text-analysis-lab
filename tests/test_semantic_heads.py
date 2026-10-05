@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-import pandas as pd
+import copy
+import json
 
+import pandas as pd
+import pytest
+
+from text_analysis_lab.core.operator import BaseOperator
 from text_analysis_lab.linguistics.heads import (
     SemanticHeadRules,
+    export_default_semantic_head_rules,
+    get_default_semantic_head_rules,
+    load_semantic_head_rules,
     resolve_semantic_head_indices,
 )
 from text_analysis_lab.linguistics.srl.structures import content_head_indices
@@ -43,6 +51,60 @@ def _quantifier_span() -> pd.DataFrame:
     )
 
 
+def _resolve(
+    *,
+    text,
+    lemmas,
+    pos,
+    dep,
+    heads,
+    start=0,
+    end=None,
+    role=None,
+    source="srl",
+    rules=None,
+):
+    end = len(text) if end is None else end
+    return resolve_semantic_head_indices(
+        start=start,
+        end=end,
+        token_ids=list(range(len(text))),
+        head_token_ids=heads,
+        dependencies=dep,
+        pos=pos,
+        text=text,
+        lemmas=lemmas,
+        role=role,
+        source=source,
+        rules=rules,
+    )
+
+
+def test_default_rule_document_matches_stabilized_boi_contract() -> None:
+    document = get_default_semantic_head_rules()
+
+    assert document["schema_version"] == 1
+    assert [rule["id"] for rule in document["rules"]] == [
+        "causal_thanks_to",
+        "causal_owing_to",
+        "causal_due_to",
+        "causal_because_of",
+        "causal_result_of",
+        "manner_by_means_of",
+        "quantifier_of_object",
+        "collection_quantifier_of_object",
+        "preposition_object",
+    ]
+    assert document["rules"][0] == {
+        "id": "causal_thanks_to",
+        "when": {"role": ["ARGM-CAU"], "lemma": ["thank", "thanks"]},
+        "move": [
+            {"within": {"lemma": ["to"]}},
+            {"child": {"dep": ["pobj", "obj", "obl"]}},
+        ],
+    }
+
+
 def test_default_rules_reproduce_quantifier_normalization() -> None:
     tokens = _quantifier_tokens()
     kwargs = {
@@ -56,8 +118,26 @@ def test_default_rules_reproduce_quantifier_normalization() -> None:
         "role": "ARG1",
     }
 
-    assert resolve_semantic_head_indices(**kwargs) == (5,)
+    assert resolve_semantic_head_indices(
+        **kwargs,
+        lemmas=tokens["lemma"].tolist(),
+        source="srl",
+    ) == (5,)
     assert content_head_indices(**kwargs) == (5,)
+
+
+def test_role_aware_boi_rule_moves_only_with_matching_role() -> None:
+    common = dict(
+        text=["thanks", "to", "rain"],
+        lemmas=["thanks", "to", "rain"],
+        pos=["NOUN", "ADP", "NOUN"],
+        dep=["advmod", "prep", "pobj"],
+        heads=[3, 0, 1],
+    )
+
+    assert _resolve(**common, role="ARGM-CAU") == (2,)
+    assert _resolve(**common, role="ARGM-ADV") == (0,)
+    assert _resolve(**common, role=None, source="coreference") == (0,)
 
 
 def test_head_policy_override_changes_heads_without_touching_raw_span(
@@ -81,12 +161,15 @@ def test_head_policy_override_changes_heads_without_touching_raw_span(
         tokens,
         sentence_keys=["row_id", "sentence_id"],
     )["role_heads"]
-    overridden = SemanticRoleHeadResolver(
-        head_rules=SemanticHeadRules(
-            rewrite_quantifier_links=False,
-            move_off_function_pos=False,
-        )
-    ).translate(
+
+    custom = get_default_semantic_head_rules()
+    custom["name"] = "no-quantifier-rewrite"
+    custom["rules"] = [
+        rule
+        for rule in custom["rules"]
+        if rule["id"] != "quantifier_of_object"
+    ]
+    overridden = SemanticRoleHeadResolver(head_rules=custom).translate(
         spans,
         tokens,
         sentence_keys=["row_id", "sentence_id"],
@@ -95,6 +178,173 @@ def test_head_policy_override_changes_heads_without_touching_raw_span(
     assert default["head_text"].tolist() == ["apples"]
     assert overridden["head_text"].tolist() == ["all"]
     pd.testing.assert_frame_equal(spans, original)
+
+
+def test_json_file_override_uses_original_boi_rule_shape(tmp_path) -> None:
+    custom = get_default_semantic_head_rules()
+    custom["name"] = "custom-according-to-complement"
+    custom["rules"].insert(
+        0,
+        {
+            "id": "according_to_complement",
+            "when": {"lemma": ["accord"]},
+            "move": [
+                {"within": {"lemma": ["to"]}},
+                {"child": {"dep": ["pobj", "obj", "obl"]}},
+            ],
+        },
+    )
+    path = tmp_path / "semantic_head_rules.json"
+    path.write_text(json.dumps(custom), encoding="utf-8")
+
+    loaded = load_semantic_head_rules(path)
+    assert loaded.to_dict() == custom
+
+    assert _resolve(
+        text=["According", "to", "report"],
+        lemmas=["accord", "to", "report"],
+        pos=["VERB", "ADP", "NOUN"],
+        dep=["advmod", "prep", "pobj"],
+        heads=[3, 0, 1],
+        role="ARGM-ADV",
+        rules=path,
+    ) == (2,)
+
+
+def test_rule_conditions_support_any_not_and_and_or_semantics() -> None:
+    rules = {
+        "schema_version": 1,
+        "name": "boolean-conditions",
+        "description": "",
+        "rules": [
+            {
+                "id": "allowed_a_or_x",
+                "when": {
+                    "any": [{"lemma": ["a"]}, {"text": ["X"]}],
+                    "not": {"role": ["BLOCKED"]},
+                    "pos": ["NOUN", "PROPN"],
+                },
+                "move": [{"child": {"lemma": ["b", "bee"]}}],
+            }
+        ],
+    }
+    common = dict(
+        text=["A", "B"],
+        lemmas=["a", "b"],
+        pos=["NOUN", "NOUN"],
+        dep=["ROOT", "dobj"],
+        heads=[0, 0],
+        rules=rules,
+    )
+
+    assert _resolve(**common, role="ARG1") == (1,)
+    assert _resolve(**common, role="BLOCKED") == (0,)
+
+
+def test_move_path_is_atomic_when_later_step_fails() -> None:
+    rules = {
+        "schema_version": 1,
+        "name": "atomic-path",
+        "description": "",
+        "rules": [
+            {
+                "id": "incomplete",
+                "when": {"lemma": ["a"]},
+                "move": [
+                    {"child": {"lemma": ["b"]}},
+                    {"child": {"lemma": ["missing"]}},
+                ],
+            }
+        ],
+    }
+
+    assert _resolve(
+        text=["a", "b"],
+        lemmas=["a", "b"],
+        pos=["NOUN", "NOUN"],
+        dep=["ROOT", "dobj"],
+        heads=[0, 0],
+        role="ARG1",
+        rules=rules,
+    ) == (0,)
+
+
+def test_successful_move_restarts_rule_evaluation_from_first_rule() -> None:
+    rules = {
+        "schema_version": 1,
+        "name": "restart",
+        "description": "",
+        "rules": [
+            {
+                "id": "b_to_c",
+                "when": {"lemma": ["b"]},
+                "move": [{"child": {"lemma": ["c"]}}],
+            },
+            {
+                "id": "a_to_b",
+                "when": {"lemma": ["a"]},
+                "move": [{"child": {"lemma": ["b"]}}],
+            },
+        ],
+    }
+
+    assert _resolve(
+        text=["a", "b", "c"],
+        lemmas=["a", "b", "c"],
+        pos=["NOUN", "NOUN", "NOUN"],
+        dep=["ROOT", "dobj", "compound"],
+        heads=[0, 0, 1],
+        role="ARG1",
+        rules=rules,
+    ) == (2,)
+
+
+def test_parent_and_within_moves_are_supported() -> None:
+    parent_rules = {
+        "schema_version": 1,
+        "name": "parent",
+        "description": "",
+        "rules": [
+            {
+                "id": "to_parent",
+                "when": {"lemma": ["apple"]},
+                "move": [{"parent": {"lemma": ["of"]}}],
+            }
+        ],
+    }
+    assert _resolve(
+        text=["of", "apples"],
+        lemmas=["of", "apple"],
+        pos=["ADP", "NOUN"],
+        dep=["ROOT", "pobj"],
+        heads=[0, 0],
+        start=1,
+        end=2,
+        role="ARG1",
+        rules=parent_rules,
+    ) == (1,)
+
+    within_rules = {
+        "schema_version": 1,
+        "name": "within",
+        "description": "",
+        "rules": [
+            {
+                "id": "find_marker",
+                "when": {"lemma": ["a"]},
+                "move": [{"within": {"lemma": ["marker"]}}],
+            }
+        ],
+    }
+    assert _resolve(
+        text=["a", "marker", "x"],
+        lemmas=["a", "marker", "x"],
+        pos=["NOUN", "ADP", "NOUN"],
+        dep=["ROOT", "prep", "pobj"],
+        heads=[0, 0, 1],
+        role="ARG1",
+        rules=within_rules,
+    ) == (1,)
 
 
 def test_coordination_preserves_each_content_head() -> None:
@@ -112,7 +362,9 @@ def test_coordination_preserves_each_content_head() -> None:
         dependencies=dep,
         pos=pos,
         text=text,
+        lemmas=[value.casefold() for value in text],
         role="ARG0",
+        source="srl",
     )
     object_ = resolve_semantic_head_indices(
         start=4,
@@ -122,24 +374,42 @@ def test_coordination_preserves_each_content_head() -> None:
         dependencies=dep,
         pos=pos,
         text=text,
+        lemmas=[value.casefold() for value in text],
         role="ARG1",
+        source="srl",
     )
 
     assert subject == (0, 2)
     assert object_ == (4, 6)
 
 
-def test_semantic_head_rules_and_translators_round_trip_json_state() -> None:
-    rules = SemanticHeadRules(
-        function_pos=("DET", "ADP"),
-        move_off_function_pos=False,
-        quantifiers=("all", "each"),
-        quantifier_links=("of",),
-        rewrite_quantifier_links=False,
-        preserve_coordination=False,
-        coordination_excluded_roles=("V", "ARGM"),
+def test_default_export_and_rule_fingerprint_are_stable(tmp_path) -> None:
+    first = SemanticHeadRules()
+    second = SemanticHeadRules.from_dict(first.to_dict())
+    assert first == second
+    assert first.fingerprint == second.fingerprint
+
+    path = export_default_semantic_head_rules(tmp_path / "rules.json")
+    exported = json.loads(path.read_text(encoding="utf-8"))
+    assert exported == first.to_dict()
+    assert load_semantic_head_rules(path).fingerprint == first.fingerprint
+
+    with pytest.raises(FileExistsError):
+        export_default_semantic_head_rules(path)
+
+
+def test_semantic_head_rules_and_translators_round_trip_json_state(tmp_path) -> None:
+    custom = copy.deepcopy(get_default_semantic_head_rules())
+    custom["name"] = "custom"
+    custom["rules"].insert(
+        0,
+        {
+            "id": "custom_rule",
+            "when": {"any": [{"lemma": ["accord"]}, {"lemma": ["according"]}]},
+            "move": [{"within": {"lemma": ["to"]}}],
+        },
     )
-    assert SemanticHeadRules.from_dict(rules.to_dict()) == rules
+    rules = SemanticHeadRules.from_dict(custom)
 
     resolver = SemanticRoleHeadResolver(
         sentence_key="sent",
@@ -152,6 +422,13 @@ def test_semantic_head_rules_and_translators_round_trip_json_state() -> None:
     assert restored_resolver.to_json_state() == resolver.to_json_state()
     assert restored_resolver.head_rules == rules
 
+    snapshot = tmp_path / "operator"
+    resolver.save_to_dir(snapshot, operator_id="semantic-head-test")
+    frozen = BaseOperator.load_from_dir(snapshot)
+    assert isinstance(frozen, SemanticRoleHeadResolver)
+    assert frozen.head_rules == rules
+    assert frozen.head_rules.fingerprint == rules.fingerprint
+
     coref = CoreferenceResolver(
         sentence_key="sent",
         token_key="tok",
@@ -160,3 +437,23 @@ def test_semantic_head_rules_and_translators_round_trip_json_state() -> None:
     restored_coref = CoreferenceResolver.from_json_state(coref.to_json_state())
     assert restored_coref.to_json_state() == coref.to_json_state()
     assert restored_coref.head_rules == rules
+
+
+def test_invalid_rule_documents_fail_early() -> None:
+    with pytest.raises(ValueError, match="schema_version"):
+        SemanticHeadRules.from_dict({"schema_version": 2, "rules": []})
+    with pytest.raises(ValueError, match="unsupported move"):
+        SemanticHeadRules.from_dict(
+            {
+                "schema_version": 1,
+                "name": "bad",
+                "description": "",
+                "rules": [
+                    {
+                        "id": "bad",
+                        "when": {},
+                        "move": [{"descendant": {"lemma": ["x"]}}],
+                    }
+                ],
+            }
+        )
