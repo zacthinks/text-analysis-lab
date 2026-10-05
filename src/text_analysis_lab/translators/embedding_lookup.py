@@ -170,7 +170,8 @@ class EmbeddingLookup(BaseTranslator):
             artifact_type=embeddings.artifact_type,
             lineage_mode="preserved_key",
             basis_labels=TOKEN_SOURCE,
-            feature_metadata_mode="own",
+            feature_metadata_mode="inherit",
+            feature_metadata_basis_label=EMBEDDING_SOURCE,
         )
 
     def validate_operation_params(

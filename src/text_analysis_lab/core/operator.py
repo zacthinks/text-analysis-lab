@@ -133,6 +133,7 @@ class OutputSpec:
     lineage_mode: LineageMode = "new_key"
     basis_labels: str | Sequence[str] | None = None
     feature_metadata_mode: FeatureMetadataMode | None = None
+    feature_metadata_basis_label: str | None = None
     data_serializer: OtherDataSerializer | None = None
     data_serializer_ref: Mapping[str, str] | None = field(init=False, default=None)
 
@@ -178,14 +179,33 @@ class OutputSpec:
                 raise OutputSpecError(
                     "Matrix OutputSpec.feature_metadata_mode must be 'own' or 'inherit'."
                 )
-            if feature_metadata_mode == "inherit" and len(basis_labels) != 1:
+            feature_metadata_basis_label = self.feature_metadata_basis_label
+            if feature_metadata_basis_label is not None:
+                if (
+                    not isinstance(feature_metadata_basis_label, str)
+                    or not feature_metadata_basis_label
+                ):
+                    raise OutputSpecError(
+                        "feature_metadata_basis_label must be a non-empty string or None."
+                    )
+                if feature_metadata_mode != "inherit":
+                    raise OutputSpecError(
+                        "feature_metadata_basis_label requires feature_metadata_mode='inherit'."
+                    )
+            elif feature_metadata_mode == "inherit" and len(basis_labels) != 1:
                 raise OutputSpecError(
-                    "Inherited Feature Metadata requires exactly one basis_label."
+                    "Inherited Feature Metadata requires exactly one basis_label unless "
+                    "feature_metadata_basis_label is explicitly set."
                 )
-        elif feature_metadata_mode is not None:
-            raise OutputSpecError(
-                "feature_metadata_mode is valid only for matrix outputs."
-            )
+        else:
+            if feature_metadata_mode is not None:
+                raise OutputSpecError(
+                    "feature_metadata_mode is valid only for matrix outputs."
+                )
+            if self.feature_metadata_basis_label is not None:
+                raise OutputSpecError(
+                    "feature_metadata_basis_label is valid only for matrix outputs."
+                )
         object.__setattr__(self, "feature_metadata_mode", feature_metadata_mode)
 
         if artifact_type == ArtifactType.OTHER:
@@ -224,6 +244,7 @@ class OutputSpec:
             "lineage_mode": lineage_mode,
             "basis_labels": self.basis_labels,
             "feature_metadata_mode": self.feature_metadata_mode,
+            "feature_metadata_basis_label": self.feature_metadata_basis_label,
             "data_serializer": self.data_serializer_ref,
         }
 

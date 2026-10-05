@@ -352,7 +352,12 @@ class _MatrixArtifact(BaseArtifact):
 
     def _feature_metadata_basis(self) -> _MatrixArtifact:
         """Return the single matrix basis for inherited Feature Metadata."""
-        basis_ids = basis_artifact_ids(self)
+        lineage = artifact_lineage(self)
+        explicit_basis_id = lineage.get("feature_metadata_basis_artifact_id")
+        if explicit_basis_id is not None:
+            basis_ids = [str(explicit_basis_id)]
+        else:
+            basis_ids = basis_artifact_ids(self)
         if len(basis_ids) != 1:
             raise ArtifactError(
                 f"Matrix artifact {self.artifact_id} requires exactly one basis "

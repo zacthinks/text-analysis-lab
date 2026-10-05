@@ -1318,6 +1318,7 @@ def create_artifact_writer(
     lineage_mode: LineageMode | None = None,
     basis_artifact_ids: Sequence[str] | None = None,
     feature_metadata_mode: FeatureMetadataMode | None = None,
+    feature_metadata_basis_artifact_id: str | None = None,
     data_serializer: OtherDataSerializer | None = None,
     data_serializer_ref: CallableRef | None = None,
 ) -> ArtifactWriter:
@@ -1342,6 +1343,11 @@ def create_artifact_writer(
 
     if feature_metadata_mode is not None:
         resolved_lineage.setdefault("feature_metadata_mode", feature_metadata_mode)
+    if feature_metadata_basis_artifact_id is not None:
+        resolved_lineage.setdefault(
+            "feature_metadata_basis_artifact_id",
+            str(feature_metadata_basis_artifact_id),
+        )
 
     return ArtifactWriter(
         artifact_dir=artifact_dir,
