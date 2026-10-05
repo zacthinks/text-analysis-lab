@@ -50,6 +50,18 @@ OutputMap = Mapping[str, WriterPayload]
 
 
 @dataclass(frozen=True)
+class ExecutionCapabilities:
+    """Current reuse/execution capabilities of one translator."""
+
+    reusable: bool
+    artifact: bool
+    native: bool
+    portable: bool
+    requirements: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ColumnRequest:
     """Column roles to request from a source artifact."""
 
@@ -694,6 +706,40 @@ class BaseTranslator(BaseOperator):
         _ = args, kwargs
         raise StandaloneTranslationNotSupportedError(
             f"{self.__class__.__name__} does not expose a standalone translate(...) contract."
+        )
+
+    def execution_capabilities(
+        self,
+        *,
+        project: Project | None = None,
+    ) -> ExecutionCapabilities:
+        """Return state-aware transform/reuse capabilities for composition.
+
+        The default covers ordinary stateless and retained-state translators.
+        Translators with special reuse policies, project-backed reconstruction,
+        or one-shot training semantics should override this method.
+        """
+        _ = project
+        native_contract = self.__class__.translate is not BaseTranslator.translate
+        ready = not self.requires_fit or self.is_fitted
+        if not ready:
+            reason = f"{self.__class__.__name__} requires fitted state before reuse."
+            return ExecutionCapabilities(
+                reusable=False,
+                artifact=False,
+                native=False,
+                portable=False,
+                reasons=(reason,),
+            )
+        reasons = () if native_contract else (
+            f"{self.__class__.__name__} has no standalone translate(...) contract.",
+        )
+        return ExecutionCapabilities(
+            reusable=True,
+            artifact=True,
+            native=native_contract,
+            portable=True,
+            reasons=reasons,
         )
 
     @property
