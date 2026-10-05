@@ -374,6 +374,7 @@ class Pipeline:
         external = self._normalize_artifact_sources(project, sources)
         selected = self._select_outputs(outputs)
         required = self._required_stages(selected.values())
+        self.validate(mode="artifact", project=project, outputs=tuple(selected))
         stage_values: dict[tuple[str, str], BaseArtifact] = {}
 
         for stage_name in self._topological_order(required):
