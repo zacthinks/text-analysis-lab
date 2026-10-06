@@ -673,6 +673,26 @@ class BaseOperator(ABC):
         if not isinstance(descriptor, dict):
             raise OperatorError("operator.json must contain a JSON object.")
 
+        raw_schema_version = descriptor.get("schema_version", 1)
+        try:
+            schema_version = int(raw_schema_version)
+        except (TypeError, ValueError) as exc:
+            raise OperatorError(
+                f"operator.json has invalid schema_version={raw_schema_version!r}."
+            ) from exc
+        if schema_version != 2:
+            if schema_version == 1:
+                raise OperatorError(
+                    "Operator snapshot schema v1 is pre-strict legacy state and cannot "
+                    "be loaded as a frozen reusable operator. Use "
+                    "Project.legacy_operator_status(...) and "
+                    "Project.migrate_legacy_operator(...) instead."
+                )
+            raise OperatorError(
+                f"Unsupported operator snapshot schema_version={schema_version}; "
+                "this TeAL version requires schema v2."
+            )
+
         class_info = descriptor.get("class")
         if not isinstance(class_info, Mapping):
             raise OperatorError("operator.json is missing class metadata.")
