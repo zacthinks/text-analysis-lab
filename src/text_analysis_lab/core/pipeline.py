@@ -7,9 +7,11 @@ introduces pipeline-specific scientific data representations.
 from __future__ import annotations
 
 import inspect
+import types
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from itertools import permutations
+from typing import TYPE_CHECKING, Any, Literal, get_args, get_origin, get_type_hints
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
 from text_analysis_lab.core.errors import PipelineError
@@ -266,12 +268,6 @@ class Pipeline:
                             f"Operation {operation_id!r} used "
                             f"{translator.__class__.__name__}, not a reusable translator; "
                             "artifact-derived Pipelines are transform-only."
-                        )
-                    if translator.requires_fit and not translator.is_fitted:
-                        raise PipelineError(
-                            f"Operation {operation_id!r} uses unfitted "
-                            f"{translator.__class__.__name__}; artifact-derived Pipelines "
-                            "cannot refit recorded stages."
                         )
                     caps = translator.execution_capabilities(project=project)
                     if not caps.reusable or not caps.native:
@@ -836,21 +832,117 @@ class Pipeline:
         translator: BaseTranslator,
         bound: Mapping[str, Any],
     ) -> Any:
-        values = tuple(bound.values())
         signature = inspect.signature(translator.translate)
         params = signature.parameters
-        can_use_keywords = all(
-            label in params
+
+        keyword_bound = {
+            label: value
+            for label, value in bound.items()
+            if label in params
             and params[label].kind
             in {
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,
                 inspect.Parameter.KEYWORD_ONLY,
             }
-            for label in bound
-        )
-        if can_use_keywords:
-            return translator.translate(**bound)
-        return translator.translate(*values)
+        }
+        if len(keyword_bound) == len(bound):
+            return translator.translate(**keyword_bound)
+
+        if len(bound) == 1:
+            return translator.translate(next(iter(bound.values())))
+
+        unmatched = {
+            label: value for label, value in bound.items() if label not in keyword_bound
+        }
+        available = {
+            name: parameter
+            for name, parameter in params.items()
+            if name not in keyword_bound
+            and parameter.kind
+            in {
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            }
+        }
+        try:
+            hints = get_type_hints(translator.translate)
+        except (NameError, TypeError):
+            hints = {}
+
+        source_labels = tuple(unmatched)
+        parameter_names = tuple(available)
+        matches: list[dict[str, str]] = []
+        if len(source_labels) <= len(parameter_names):
+            for chosen in permutations(parameter_names, len(source_labels)):
+                candidate = dict(zip(source_labels, chosen, strict=True))
+                if all(
+                    Pipeline._value_matches_annotation(
+                        unmatched[label],
+                        hints.get(parameter_name, available[parameter_name].annotation),
+                    )
+                    for label, parameter_name in candidate.items()
+                ):
+                    matches.append(candidate)
+                    if len(matches) > 1:
+                        break
+
+        if len(matches) != 1:
+            detail = (
+                "no complete type match"
+                if not matches
+                else "multiple type-compatible bindings"
+            )
+            raise PipelineError(
+                f"{translator.__class__.__name__}.translate(...) cannot bind recorded "
+                f"multi-source labels {list(bound)!r} unambiguously: {detail}. "
+                "Use source labels that match keyword-capable parameters or distinct "
+                "runtime input annotations."
+            )
+
+        matched = matches[0]
+        by_parameter = {
+            parameter_name: unmatched[label]
+            for label, parameter_name in matched.items()
+        }
+        args: list[Any] = []
+        kwargs = dict(keyword_bound)
+        for name, parameter in params.items():
+            if name not in by_parameter:
+                continue
+            value = by_parameter[name]
+            if parameter.kind == inspect.Parameter.POSITIONAL_ONLY:
+                args.append(value)
+            else:
+                kwargs[name] = value
+        return translator.translate(*args, **kwargs)
+
+    @staticmethod
+    def _value_matches_annotation(value: Any, annotation: Any) -> bool:
+        if annotation in {inspect.Parameter.empty, Any}:
+            return False
+        origin = get_origin(annotation)
+        if origin in {types.UnionType}:
+            return any(
+                Pipeline._value_matches_annotation(value, item)
+                for item in get_args(annotation)
+            )
+        if origin is not None:
+            if origin is Literal:
+                return value in get_args(annotation)
+            try:
+                return isinstance(value, origin)
+            except TypeError:
+                return False
+        if isinstance(annotation, types.UnionType):
+            return any(
+                Pipeline._value_matches_annotation(value, item)
+                for item in get_args(annotation)
+            )
+        try:
+            return isinstance(value, annotation)
+        except TypeError:
+            return False
 
     @staticmethod
     def _format_port(port: PipelinePort) -> str:
