@@ -67,7 +67,7 @@ class _KeywordOnlyTranslator(teal.BaseTranslator):
         raise NotImplementedError
 
 
-class _DistinctTypedInputs(teal.BaseTranslator):
+class _DistinctTypedInputs(_KeywordOnlyTranslator):
     def translate(
         self,
         table: pd.DataFrame,
@@ -76,13 +76,55 @@ class _DistinctTypedInputs(teal.BaseTranslator):
         return len(table), str(payload["name"])
 
 
-class _AmbiguousTypedInputs(teal.BaseTranslator):
+class _AmbiguousTypedInputs(_KeywordOnlyTranslator):
     def translate(
         self,
         left: pd.DataFrame,
         right: pd.DataFrame,
     ) -> tuple[int, int]:
         return len(left), len(right)
+
+
+class _MixedKeywordTypedInputs(_KeywordOnlyTranslator):
+    def translate(
+        self,
+        table: pd.DataFrame,
+        payload: dict[str, object],
+    ) -> tuple[int, str]:
+        return len(table), str(payload["name"])
+
+
+class _IncompleteTypedInputs(_KeywordOnlyTranslator):
+    def translate(
+        self,
+        table: pd.DataFrame,
+        payload: dict[str, object],
+        required: str,
+    ) -> tuple[int, str, str]:
+        return len(table), str(payload["name"]), required
+
+
+class _UnionTypedInputs(_KeywordOnlyTranslator):
+    def translate(
+        self,
+        table: pd.DataFrame,
+        payload: dict[str, object] | str,
+    ) -> tuple[int, str]:
+        value = payload["name"] if isinstance(payload, dict) else payload
+        return len(table), str(value)
+
+
+class _PositionalOnlyTypedInputs(_KeywordOnlyTranslator):
+    def translate(
+        self,
+        prefix: str = "default",
+        table: pd.DataFrame | None = None,
+        /,
+        *,
+        payload: dict[str, object],
+    ) -> tuple[str, int, str]:
+        assert table is not None
+        return prefix, len(table), str(payload["name"])
 
 
 class _StandaloneMultiOutput(teal.BaseTranslator):
@@ -236,6 +278,93 @@ def test_pipeline_multi_source_rejects_ambiguous_runtime_type_binding() -> None:
                 "second": pd.DataFrame({"x": [2]}),
             }
         )
+
+
+def test_pipeline_multi_source_combines_keyword_and_type_binding() -> None:
+    pipeline = teal.Pipeline(inputs=["table_input", "payload_input"])
+    combined = pipeline.add(
+        "combined",
+        _MixedKeywordTypedInputs(),
+        sources={
+            "table": pipeline.input["table_input"],
+            "recorded_payload": pipeline.input["payload_input"],
+        },
+    )
+    pipeline.output("output", combined["output"])
+
+    result = pipeline.translate(
+        inputs={
+            "table_input": pd.DataFrame({"x": [1, 2]}),
+            "payload_input": {"name": "mixed"},
+        }
+    )
+
+    assert result["output"] == (2, "mixed")
+
+
+def test_pipeline_multi_source_requires_all_required_parameters() -> None:
+    pipeline = teal.Pipeline(inputs=["table_input", "payload_input"])
+    combined = pipeline.add(
+        "combined",
+        _IncompleteTypedInputs(),
+        sources={
+            "recorded_table": pipeline.input["table_input"],
+            "recorded_payload": pipeline.input["payload_input"],
+        },
+    )
+    pipeline.output("output", combined["output"])
+
+    with pytest.raises(PipelineError, match="no complete type match"):
+        pipeline.translate(
+            inputs={
+                "table_input": pd.DataFrame({"x": [1]}),
+                "payload_input": {"name": "missing-required"},
+            }
+        )
+
+
+def test_pipeline_multi_source_type_binding_supports_union_annotations() -> None:
+    pipeline = teal.Pipeline(inputs=["payload_input", "table_input"])
+    combined = pipeline.add(
+        "combined",
+        _UnionTypedInputs(),
+        sources={
+            "recorded_payload": pipeline.input["payload_input"],
+            "recorded_table": pipeline.input["table_input"],
+        },
+    )
+    pipeline.output("output", combined["output"])
+
+    result = pipeline.translate(
+        inputs={
+            "payload_input": {"name": "union"},
+            "table_input": pd.DataFrame({"x": [1, 2, 3]}),
+        }
+    )
+
+    assert result["output"] == (3, "union")
+
+
+def test_pipeline_multi_source_type_binding_handles_positional_only_defaults() -> None:
+    pipeline = teal.Pipeline(inputs=["table_input", "payload_input"])
+    combined = pipeline.add(
+        "combined",
+        _PositionalOnlyTypedInputs(),
+        sources={
+            "recorded_table": pipeline.input["table_input"],
+            "payload": pipeline.input["payload_input"],
+        },
+    )
+    pipeline.output("output", combined["output"])
+
+    result = pipeline.translate(
+        inputs={
+            "table_input": pd.DataFrame({"x": [1, 2]}),
+            "payload_input": {"name": "positional"},
+        }
+    )
+
+    assert result["output"] == ("default", 2, "positional")
 
 
 def test_pipeline_native_multi_output_routes_only_referenced_labels() -> None:
