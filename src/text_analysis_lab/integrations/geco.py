@@ -23,7 +23,7 @@ import pandas as pd
 from scipy import sparse
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
-from text_analysis_lab.core.errors import ArtifactNotFoundError
+from text_analysis_lab.core.errors import ArtifactNotFoundError, PipelineError
 from text_analysis_lab.integrations._representation_replay import (
     _can_replay_texts_like,
     _replay_texts_like,
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from text_analysis_lab.core.project import Project
 
 
-_LINK_SCHEMA_VERSION = 2
+_LINK_SCHEMA_VERSION = 3
 _WORKSPACE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _MATRIX_TYPES = {ArtifactType.SPARSE_MATRIX, ArtifactType.DENSE_MATRIX}
 
@@ -178,15 +178,21 @@ class TeALGeCoProvider:
             ) from exc
 
     def transform_texts(self, external_ref: Any, texts: list[str]) -> Any:
-        """Replay one registered geometry's frozen TeAL lineage on new text."""
+        """Run a registered geometry's recovered TeAL Pipeline on new text."""
         with self._project_session() as project:
             artifact = self._matrix_artifact(project, external_ref, purpose="geometry")
+            start_id = _representation_artifact_id_from_external_ref(external_ref)
             try:
-                values = _replay_texts_like(project, artifact, texts, query=False)
+                pipeline = project.pipeline(start=start_id, end=artifact)
+                result = pipeline.translate(
+                    ["" if value is None else str(value) for value in texts],
+                    project=project,
+                )["output"]
+                values = result["values"] if isinstance(result, Mapping) else result
             except Exception as exc:
                 raise GeCoIntegrationError(
                     f"Could not transform new text through TeAL geometry "
-                    f"{artifact.artifact_id!r}."
+                    f"{artifact.artifact_id!r} from representation start {start_id!r}."
                 ) from exc
             return values.copy() if hasattr(values, "copy") else values
 
@@ -666,9 +672,17 @@ class LinkedGeCoWorkspace:
             )
         keys = self._manager._document_keys(self.documents)
         self._provider.geometry_matrix(_external_ref(geometry), keys)
-        text_replay = _can_replay_texts_like(
-            self._project, geometry, query=False
+        representation = self._project.get_artifact(
+            str(self._manifest["representation_text_artifact_id"])
         )
+        try:
+            self._project.pipeline(start=representation, end=geometry)
+        except PipelineError as exc:
+            raise GeCoIntegrationError(
+                f"TeAL geometry {geometry.artifact_id!r} is not replayable from "
+                f"declared representation_text {representation.artifact_id!r}."
+            ) from exc
+        text_replay = True
         query_replay = _can_replay_texts_like(
             self._project, geometry, query=True
         )
@@ -683,7 +697,10 @@ class LinkedGeCoWorkspace:
         return int(
             self._coder.register_external_geometry(
                 name=geometry_name,
-                external_ref=_external_ref(geometry),
+                external_ref=_external_ref(
+                    geometry,
+                    representation_text=representation,
+                ),
                 supports_query=resolved_supports_query,
                 supports_text_transform=text_replay,
             )
@@ -784,6 +801,8 @@ class GeCoManager:
         documents: BaseArtifact | str,
         text_field: str,
         geometry: BaseArtifact | str,
+        representation_text: BaseArtifact | str | None = None,
+        display_text: BaseArtifact | str | None = None,
         projections: Mapping[str, BaseArtifact | str] | None = None,
         metadata_fields: Sequence[str] | None = None,
         geometry_name: str | None = None,
@@ -803,6 +822,21 @@ class GeCoManager:
             raise GeCoIntegrationError(
                 "GeCo documents artifact must contain at least one row."
             )
+        representation_artifact = self.project.get_artifact(
+            documents_artifact if representation_text is None else representation_text
+        )
+        display_artifact = self.project.get_artifact(
+            representation_artifact if display_text is None else display_text
+        )
+        for label, artifact in (
+            ("representation_text", representation_artifact),
+            ("display_text", display_artifact),
+        ):
+            if artifact.primary_key != documents_artifact.primary_key:
+                raise GeCoIntegrationError(
+                    f"GeCo {label} primary key {artifact.primary_key!r} does not match "
+                    f"documents primary key {documents_artifact.primary_key!r}."
+                )
 
         geometry_artifact = self._validate_numerical_resource(
             geometry, documents_artifact, purpose="geometry"
@@ -834,15 +868,25 @@ class GeCoManager:
             if workspace_path.exists():
                 shutil.rmtree(workspace_path)
 
-        document_frame = self._document_frame(
+        document_frame = self._source_document_frame(
             documents_artifact,
+            display_artifact,
             text_field=text_field,
             metadata_fields=metadata,
         )
         ordered_keys = _key_records(document_frame, documents_artifact.primary_key)
-        text_replay = _can_replay_texts_like(
-            self.project, geometry_artifact, query=False
-        )
+        try:
+            self.project.pipeline(
+                start=representation_artifact,
+                end=geometry_artifact,
+            )
+        except PipelineError as exc:
+            raise GeCoIntegrationError(
+                f"TeAL geometry {geometry_artifact.artifact_id!r} is not replayable "
+                f"from declared representation_text "
+                f"{representation_artifact.artifact_id!r}."
+            ) from exc
+        text_replay = True
         query_replay = _can_replay_texts_like(
             self.project, geometry_artifact, query=True
         )
@@ -858,7 +902,11 @@ class GeCoManager:
 
         # Preflight the exact stable-key order before creating any mutable GeCo state.
         matrix = provider.geometry_matrix(
-            _external_ref(geometry_artifact), ordered_keys
+            _external_ref(
+                geometry_artifact,
+                representation_text=representation_artifact,
+            ),
+            ordered_keys
         )
         _validate_matrix_rows(
             matrix, expected_rows=len(document_frame), purpose="geometry"
@@ -886,7 +934,10 @@ class GeCoManager:
             geometry_id = int(
                 coder.register_external_geometry(
                     name=external_geometry_name,
-                    external_ref=_external_ref(geometry_artifact),
+                    external_ref=_external_ref(
+                        geometry_artifact,
+                        representation_text=representation_artifact,
+                    ),
                     supports_query=resolved_supports_query,
                     supports_text_transform=text_replay,
                 )
@@ -904,6 +955,8 @@ class GeCoManager:
                 "mode": "explore",
                 "workspace_path": str(workspace_path.relative_to(self.root)),
                 "documents_artifact_id": documents_artifact.artifact_id,
+                "representation_text_artifact_id": representation_artifact.artifact_id,
+                "display_text_artifact_id": display_artifact.artifact_id,
                 "text_field": text_field,
                 "metadata_fields": list(metadata),
                 "created_with_geco_version": _installed_geco_version(),
@@ -1075,6 +1128,9 @@ class GeCoManager:
             return cached
         manifest = self._read_manifest(workspace_name)
         self.project.get_artifact(str(manifest["documents_artifact_id"]))
+        if str(manifest.get("mode", "explore")) == "explore":
+            self.project.get_artifact(str(manifest["representation_text_artifact_id"]))
+            self.project.get_artifact(str(manifest["display_text_artifact_id"]))
         mode = str(manifest.get("mode", "explore"))
         provider = TeALGeCoProvider(self.project) if mode == "explore" else None
         GeometricCoder = _load_geometric_coder()
@@ -1105,6 +1161,12 @@ class GeCoManager:
                     "name": manifest["name"],
                     "mode": manifest.get("mode", "explore"),
                     "documents_artifact_id": manifest["documents_artifact_id"],
+                    "representation_text_artifact_id": manifest.get(
+                        "representation_text_artifact_id"
+                    ),
+                    "display_text_artifact_id": manifest.get(
+                        "display_text_artifact_id"
+                    ),
                     "codes": [dict(row) for row in manifest.get("codes", [])],
                     "allow_unsure": manifest.get("allow_unsure"),
                     "text_field": manifest.get("text_field"),
@@ -1193,6 +1255,75 @@ class GeCoManager:
         merged[text_field] = merged[text_field].astype(str)
         return (
             merged.drop(columns=["_focus_position"])
+            .loc[:, expected]
+            .reset_index(drop=True)
+        )
+
+    def _source_document_frame(
+        self,
+        documents: BaseArtifact,
+        source: BaseArtifact,
+        *,
+        text_field: str,
+        metadata_fields: Sequence[str],
+    ) -> pd.DataFrame:
+        """Resolve display text/metadata onto the fixed GeCo key universe."""
+        key_columns = list(documents.primary_key)
+        overlap = sorted(set(metadata_fields).intersection([*key_columns, text_field]))
+        if text_field in key_columns or overlap:
+            raise GeCoIntegrationError(
+                "GeCo display text/metadata fields may not collide with primary-key columns."
+            )
+        target = documents.query(
+            key_columns=True,
+            data_columns=False,
+            metadata_columns=False,
+            order_by="_position",
+            include_position=True,
+            form="table",
+        ).sort_values("_position", kind="stable")
+        target = target.loc[:, [*key_columns, "_position"]].rename(
+            columns={"_position": "_geco_position"}
+        )
+        try:
+            source_frame = source.query(
+                key_columns=True,
+                data_columns=[text_field],
+                metadata_columns=list(metadata_fields) if metadata_fields else False,
+                metadata_mode="full" if metadata_fields else "none",
+                order_by="_position",
+                include_position=False,
+                form="table",
+            )
+        except Exception as exc:
+            raise GeCoIntegrationError(
+                f"Could not resolve text_field={text_field!r} and requested metadata "
+                f"from display_text artifact {source.artifact_id!r}."
+            ) from exc
+        expected = [*key_columns, text_field, *metadata_fields]
+        missing = [column for column in expected if column not in source_frame.columns]
+        if missing:
+            raise GeCoIntegrationError(
+                f"GeCo display_text source is missing requested column(s) {missing!r}."
+            )
+        if source_frame.duplicated(subset=key_columns).any():
+            raise GeCoIntegrationError(
+                "GeCo display_text source contains duplicate stable keys."
+            )
+        merged = target.merge(
+            source_frame.loc[:, expected],
+            on=key_columns,
+            how="left",
+            validate="one_to_one",
+        ).sort_values("_geco_position", kind="stable")
+        if merged[text_field].isna().any():
+            missing_keys = int(merged[text_field].isna().sum())
+            raise GeCoIntegrationError(
+                f"GeCo display_text does not cover {missing_keys} document key(s)."
+            )
+        merged[text_field] = merged[text_field].astype(str)
+        return (
+            merged.drop(columns=["_geco_position"])
             .loc[:, expected]
             .reset_index(drop=True)
         )
@@ -1684,8 +1815,29 @@ def _artifact_id_from_external_ref(external_ref: Any) -> str:
     return artifact_id
 
 
-def _external_ref(artifact: BaseArtifact) -> dict[str, str]:
-    return {"artifact_id": artifact.artifact_id}
+def _representation_artifact_id_from_external_ref(external_ref: Any) -> str:
+    if not isinstance(external_ref, Mapping):
+        raise GeCoIntegrationError(
+            "TeAL-backed GeCo external_ref must be a mapping."
+        )
+    artifact_id = external_ref.get("representation_artifact_id")
+    if not isinstance(artifact_id, str) or not artifact_id:
+        raise GeCoIntegrationError(
+            "TeAL-backed GeCo geometry ref is missing representation_artifact_id. "
+            "Recreate the linked workspace with the current representation contract."
+        )
+    return artifact_id
+
+
+def _external_ref(
+    artifact: BaseArtifact,
+    *,
+    representation_text: BaseArtifact | None = None,
+) -> dict[str, str]:
+    ref = {"artifact_id": artifact.artifact_id}
+    if representation_text is not None:
+        ref["representation_artifact_id"] = representation_text.artifact_id
+    return ref
 
 
 def _normalize_ordered_keys(
