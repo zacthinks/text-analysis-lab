@@ -728,7 +728,13 @@ def test_project_pipeline_reconstructs_unambiguous_multi_source_dag(
         )
         replayed = recovered.translate(held_out, project=project)["output"]
 
-        np.testing.assert_allclose(replayed["values"], manual["values"])
+        replayed_values = replayed["values"]
+        manual_values = manual["values"]
+        if hasattr(replayed_values, "toarray"):
+            replayed_values = replayed_values.toarray()
+        if hasattr(manual_values, "toarray"):
+            manual_values = manual_values.toarray()
+        np.testing.assert_allclose(replayed_values, manual_values)
         pd.testing.assert_frame_equal(
             replayed["feature_metadata"],
             manual["feature_metadata"],
