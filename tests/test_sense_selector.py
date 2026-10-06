@@ -246,3 +246,75 @@ def test_sense_selector_serialization_round_trip_and_output_contract() -> None:
     )["senses"]
     assert spec.lineage_mode == "reduced_key"
     assert spec.basis_labels == ("candidates",)
+
+
+def test_sense_selector_infers_teal_candidate_keys_for_native_replay() -> None:
+    candidates = _candidates()
+    explicit = SenseSelector().translate(
+        candidates,
+        candidate_keys=CANDIDATE_KEYS,
+    )["senses"]
+    inferred = SenseSelector().translate(candidates)["senses"]
+
+    pd.testing.assert_frame_equal(
+        inferred.reset_index(drop=True),
+        explicit.reset_index(drop=True),
+    )
+
+
+def test_sense_selector_requires_explicit_keys_for_reordered_standalone_frames() -> None:
+    candidates = _candidates()
+    reordered = candidates[
+        ["row_id", "surface_form", "sentence_id", "token_id", "candidate_id", *[
+            column
+            for column in candidates.columns
+            if column not in {
+                "row_id",
+                "surface_form",
+                "sentence_id",
+                "token_id",
+                "candidate_id",
+            }
+        ]]
+    ]
+
+    with pytest.raises(ValueError, match="Pass candidate_keys explicitly"):
+        SenseSelector().translate(reordered)
+
+    selected = SenseSelector().translate(
+        reordered,
+        candidate_keys=CANDIDATE_KEYS,
+    )["senses"]
+    assert selected["sense_id"].tolist() == ["bank-finance", "run-move"]
+
+
+def test_sense_selector_rejects_duplicate_candidate_identity() -> None:
+    candidates = pd.concat([_candidates(), _candidates().iloc[[0]]], ignore_index=True)
+
+    with pytest.raises(ArtifactError, match="duplicate candidate keys"):
+        SenseSelector().translate(candidates, candidate_keys=CANDIDATE_KEYS)
+
+
+def test_sense_selector_rejects_inconsistent_token_context() -> None:
+    candidates = _candidates()
+    candidates.loc[
+        (candidates["token_id"] == 0) & (candidates["candidate_id"] == 1),
+        "parser_lemma",
+    ] = "different"
+
+    with pytest.raises(ArtifactError, match="disagree on 'parser_lemma'"):
+        SenseSelector().translate(candidates, candidate_keys=CANDIDATE_KEYS)
+
+
+def test_sense_selector_token_rules_must_match_complete_stable_key() -> None:
+    selector = SenseSelector(
+        forced_sense_ids_by_token=[
+            {
+                "key": {"row_id": 4, "token_id": 0},
+                "sense_id": "bank-river",
+            }
+        ]
+    )
+
+    with pytest.raises(ArtifactError, match="must identify exactly"):
+        selector.translate(_candidates(), candidate_keys=CANDIDATE_KEYS)
