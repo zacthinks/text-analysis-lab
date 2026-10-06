@@ -303,33 +303,65 @@ def test_spacy_translator_rejects_pipeline_without_sentence_boundaries(
         )
 
 
-def test_spacy_strict_freeze_persists_operator_local_pipeline_asset(
+
+def test_spacy_strict_freeze_references_static_resource_by_default(
     monkeypatch, tmp_path: Path
 ) -> None:
     import text_analysis_lab.translators.spacy_translator as module
     from text_analysis_lab.core.operator import BaseOperator
 
     doc = _annotated_doc()
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "meta.json").write_text("{}", encoding="utf-8")
     fake_nlp = _PipeOnlyNLP({doc.text: doc})
+    fake_nlp.path = model_dir
+
     monkeypatch.setattr(module, "_load_spacy_pipeline", lambda model, disable: fake_nlp)
     monkeypatch.setattr(module, "_spacy_runtime_version", lambda: "3.test")
 
-    translator = SpacyTranslator(model="fake")
+    translator = SpacyTranslator(model=str(model_dir))
     path = tmp_path / "spacy"
     translator.save_to_dir(path, operator_id="op_spacy")
 
     assert translator.is_frozen
     assert translator.resolved_spacy_version == "3.test"
-    assert (path / "assets" / "spacy_model" / "fake_model.txt").exists()
+    assert translator.resource_identity is not None
+    assert translator.resource_identity["kind"] == "path"
+    assert not (path / "assets" / "spacy_model").exists()
 
     restored = BaseOperator.load_from_dir(path)
     assert isinstance(restored, SpacyTranslator)
     assert restored.is_frozen
-    assert restored.resolved_spacy_version == "3.test"
-    assert restored._frozen_model_path == str(path / "assets" / "spacy_model")
-
+    assert restored._frozen_model_path is None
     restored.translate([doc.text])
 
+
+def test_spacy_vendor_mode_persists_operator_local_pipeline_asset(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import text_analysis_lab.translators.spacy_translator as module
+    from text_analysis_lab.core.operator import BaseOperator
+
+    doc = _annotated_doc()
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "meta.json").write_text("{}", encoding="utf-8")
+    fake_nlp = _PipeOnlyNLP({doc.text: doc})
+    fake_nlp.path = model_dir
+
+    monkeypatch.setattr(module, "_load_spacy_pipeline", lambda model, disable: fake_nlp)
+    monkeypatch.setattr(module, "_spacy_runtime_version", lambda: "3.test")
+
+    translator = SpacyTranslator(model=str(model_dir), save_model=True)
+    path = tmp_path / "spacy"
+    translator.save_to_dir(path, operator_id="op_spacy")
+
+    assert (path / "assets" / "spacy_model" / "meta.json").exists()
+
+    restored = BaseOperator.load_from_dir(path)
+    assert isinstance(restored, SpacyTranslator)
+    assert restored._frozen_model_path == str(path / "assets" / "spacy_model")
 
 
 def test_legacy_frozen_spacy_snapshot_without_identity_is_not_reusable(
@@ -343,7 +375,7 @@ def test_legacy_frozen_spacy_snapshot_without_identity_is_not_reusable(
 
     legacy = SpacyTranslator.from_json_state({"model": "fake"})
     legacy.is_frozen = True
-    with pytest.raises(Exception, match="missing an operator-local spaCy pipeline asset"):
+    with pytest.raises(Exception, match="missing exact spaCy resource identity"):
         legacy.translate([doc.text])
 
 
