@@ -138,3 +138,14 @@ def test_openai_translator_does_not_store_credentials_and_requires_env(monkeypat
     monkeypatch.delenv("MY_KEY", raising=False)
     with pytest.raises(Exception, match="credentials"):
         restored._request("hello")
+
+
+def test_openai_translator_is_provenance_only_not_reusable_transform() -> None:
+    translator = OpenAIResponsesTranslator("gpt-test", "{text}")
+    caps = translator.execution_capabilities()
+
+    assert not caps.reusable
+    assert not caps.artifact
+    assert not caps.native
+    assert not caps.portable
+    assert any("not a deterministic frozen function" in reason for reason in caps.reasons)
