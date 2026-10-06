@@ -843,3 +843,36 @@ def test_project_create_delete_existing_resets_only_teal_state(tmp_path: Path) -
         assert replacement.storage.teal_dir.exists()
     finally:
         replacement.close()
+
+
+def test_provenance_only_operator_is_not_reusable_frozen_transform(tmp_path: Path) -> None:
+    from text_analysis_lab.core.operator import BaseTranslator, OutputSpec
+    from text_analysis_lab.core.translate import _prepare_operator_snapshot
+
+    class ProvenanceOnlyTranslator(BaseTranslator):
+        def output_specs(self, *, sources, request):
+            _ = sources, request
+            return OutputSpec(artifact_type="table", lineage_mode="preserved_key")
+
+    project = teal.Project.create(tmp_path / "project", name="reuse_status")
+    try:
+        translator = ProvenanceOnlyTranslator(operator_id="optr_000001")
+        translator.is_frozen = True
+        project.catalog.register_operator(
+            operator_id="optr_000001",
+            operation_type="translate",
+            snapshot_status="serialized",
+            reuse_status="provenance_only",
+        )
+        operator_dir = project.storage.operator_dir("optr_000001")
+        operator_dir.mkdir(parents=True, exist_ok=True)
+        (operator_dir / "operator.json").write_text("{}", encoding="utf-8")
+
+        with pytest.raises(Exception, match="not a reusable frozen transform"):
+            _prepare_operator_snapshot(
+                project=project,
+                translator=translator,
+                mode="translate",
+            )
+    finally:
+        project.close()
