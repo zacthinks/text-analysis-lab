@@ -624,7 +624,7 @@ class BaseOperator(ABC):
             self.to_json_state(), name="operator json_state"
         )
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "operator_id": self.operator_id,
             "operation_type": operation_type,
             "class": {
