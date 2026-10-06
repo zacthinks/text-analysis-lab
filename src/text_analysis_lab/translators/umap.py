@@ -121,6 +121,12 @@ class UMAP(BaseTranslator):
             raise ValueError(
                 f"reuse must be one of {sorted(_VALID_REUSE)}; got {reuse!r}."
             )
+        if reuse == "recompute" and random_state is None:
+            raise ValueError(
+                "UMAP reuse='recompute' requires a fixed random_state so the frozen "
+                "reconstruction recipe can reproduce the same fitted transformation."
+            )
+
         if reuse == "stored":
             storage = "compact" if storage is None else str(storage)
             if storage not in _VALID_STORAGE:
