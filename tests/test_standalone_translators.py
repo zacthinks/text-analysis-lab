@@ -512,7 +512,7 @@ def test_transformer_standalone_runtime_defaults_match_teal_contract() -> None:
     assert sentence_signature.parameters["model_batch_size"].default == 32
 
 
-def test_sentence_transformer_standalone_matches_teal_batch_and_supports_task_override(
+def test_sentence_transformer_standalone_matches_teal_batch_for_fixed_task(
     monkeypatch,
 ) -> None:
     import text_analysis_lab.translators.sentence_transformer_encoder as module
@@ -554,8 +554,19 @@ def test_sentence_transformer_standalone_matches_teal_batch_and_supports_task_ov
 
     texts = ["hello world", "TeAL"]
     direct = translator.translate(texts)
-    query = translator.translate(texts, task="query")
-    series_query = translator.translate(pd.Series(texts), task="query")
+    query_translator = translator.for_task("query")
+    monkeypatch.setattr(
+        query_translator,
+        "_runtime_component",
+        lambda *, device: fake_model,
+    )
+    monkeypatch.setattr(
+        query_translator,
+        "_context_limit",
+        lambda *, model, tokenizer: 100,
+    )
+    query = query_translator.translate(texts)
+    series_query = query_translator.translate(pd.Series(texts))
     assert direct["values"].dtype == np.float32
     assert query["values"][:, 1].tolist() == [2.0, 2.0]
     np.testing.assert_array_equal(series_query["values"], query["values"])
@@ -572,11 +583,11 @@ def test_sentence_transformer_standalone_matches_teal_batch_and_supports_task_ov
         is_first=True,
         is_last=True,
     )
-    batch = translator.translate_batch(
+    batch = query_translator.translate_batch(
         {"source": packet},
         mode="translate",
         request=TranslationRequest(
-            params={"task": "query", "device": "cpu", "model_batch_size": 32}
+            params={"device": "cpu", "model_batch_size": 32}
         ),
     ).outputs["output"]
     np.testing.assert_allclose(batch["data"]["values"], query["values"])
