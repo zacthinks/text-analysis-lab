@@ -56,6 +56,8 @@ class FunctionMapper(BaseTranslator):
 
     operation_type = "translate"
 
+    frozen_runtime_fields = frozenset(['_source_type','_data_columns','_metadata_columns','_metadata_mode'])
+
     def __init__(
         self,
         function: MapperFunction | None,
