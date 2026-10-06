@@ -508,7 +508,8 @@ def test_umap_recompute_rebuilds_from_fitting_artifact(monkeypatch) -> None:
     translator.translate_batch(
         {"source": _packet()}, mode="fit_translate", request=TranslationRequest()
     )
-    assert not translator.is_fitted
+    assert translator.is_fitted
+    assert translator._estimator is None
     assert translator.fit_source_artifact_id_ == "art_counts"
 
     class FitSource:
@@ -569,7 +570,8 @@ def test_umap_recompute_snapshot_keeps_recipe_without_estimator(
     assert restored.fit_source_artifact_id_ == "art_counts"
     assert restored.source_features_ == tuple(FEATURES)
     assert restored._fit_completed is True
-    assert not restored.is_fitted
+    assert restored.is_fitted
+    assert restored._estimator is None
 
 
 def test_umap_legacy_state_maps_to_previous_persistence_semantics() -> None:
