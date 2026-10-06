@@ -231,3 +231,41 @@ def test_fixture_primary_key_columns_are_unique() -> None:
     assert not fixture.tokens.duplicated(list(TOKEN_KEYS)).any()
     assert not fixture.role_spans.duplicated(list(ROLE_SPAN_KEYS)).any()
     assert not fixture.candidates.duplicated(list(CANDIDATE_KEYS)).any()
+
+
+def test_filtered_source_absence_does_not_require_synthetic_failure_rows() -> None:
+    fixture = build_boi_linguistic_fixture()
+
+    sentences = fixture.sentences.loc[fixture.sentences["row_id"] != 4].reset_index(drop=True)
+    tokens = fixture.tokens.loc[fixture.tokens["row_id"] != 4].reset_index(drop=True)
+    predicates = fixture.predicates.loc[fixture.predicates["row_id"] != 4].reset_index(drop=True)
+    role_spans = fixture.role_spans.loc[fixture.role_spans["row_id"] != 4].reset_index(drop=True)
+    candidates = fixture.candidates.loc[fixture.candidates["row_id"] != 4].reset_index(drop=True)
+    unresolved = fixture.wsd_unresolved.loc[
+        fixture.wsd_unresolved["row_id"] != 4
+    ].reset_index(drop=True)
+    mentions = fixture.mentions.loc[fixture.mentions["row_id"] != 4].reset_index(drop=True)
+
+    role_heads = SemanticRoleHeadResolver().translate(
+        role_spans,
+        tokens,
+    )["role_heads"]
+    senses = SenseSelector().translate(
+        candidates,
+        candidate_keys=CANDIDATE_KEYS,
+    )["senses"]
+
+    validate_linguistic_contracts(
+        sentences=sentences,
+        tokens=tokens,
+        predicates=predicates,
+        role_spans=role_spans,
+        role_heads=role_heads,
+        candidates=candidates,
+        senses=senses,
+        wsd_unresolved=unresolved,
+        mentions=mentions,
+    )
+
+    assert 4 not in set(tokens["row_id"])
+    assert 4 not in set(unresolved["row_id"])
