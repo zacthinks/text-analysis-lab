@@ -112,7 +112,11 @@ class FittedPredictor(BaseTranslator):
         return True
 
     def supports_resume(self, *, mode: TranslationMode, route: RunRoute) -> bool:
-        return mode == "translate" and route in {"sequential", "parallel"}
+        return (
+            self.save_model
+            and mode == "translate"
+            and route in {"sequential", "parallel"}
+        )
 
     def output_specs(
         self,
