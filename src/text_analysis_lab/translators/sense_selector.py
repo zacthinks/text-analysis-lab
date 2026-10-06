@@ -102,14 +102,17 @@ class SenseSelector(BaseTranslator):
         self,
         candidates: pd.DataFrame,
         *,
-        candidate_keys: Sequence[str],
+        candidate_keys: Sequence[str] | None = None,
     ) -> dict[str, pd.DataFrame]:
         """Select senses from an ordinary WSD-candidate table."""
         if not isinstance(candidates, pd.DataFrame):
             raise TypeError(
                 "SenseSelector.translate(...) requires a pandas DataFrame."
             )
-        keys = [str(value) for value in candidate_keys]
+        keys = _standalone_candidate_keys(
+            candidates,
+            candidate_keys=candidate_keys,
+        )
         token_keys = _validate_candidate_key(keys)
         payload = self._translate_frame(
             candidates.reset_index(drop=True),
@@ -369,6 +372,37 @@ def _validate_sources(sources):
     if candidates.artifact_type.value != "table":
         raise OperatorError("SenseSelector requires a table candidate artifact.")
     return candidates
+
+
+def _standalone_candidate_keys(
+    candidates: pd.DataFrame,
+    *,
+    candidate_keys: Sequence[str] | None,
+) -> list[str]:
+    if candidate_keys is not None:
+        return [str(value) for value in candidate_keys]
+
+    columns = [str(value) for value in candidates.columns]
+    if CANDIDATE_ID not in columns:
+        raise ValueError(
+            "SenseSelector.translate(...) could not infer candidate_keys because "
+            f"{CANDIDATE_ID!r} is absent. Pass candidate_keys explicitly."
+        )
+    candidate_index = columns.index(CANDIDATE_ID)
+    inferred = columns[: candidate_index + 1]
+    required_positions = [
+        columns.index(name)
+        for name in _REQUIRED_CANDIDATE_COLUMNS
+        if name in columns
+    ]
+    if any(position < candidate_index for position in required_positions):
+        raise ValueError(
+            "SenseSelector.translate(...) can infer candidate_keys only from "
+            "TeAL-style frames with key columns before candidate data columns. "
+            "Pass candidate_keys explicitly for reordered frames."
+        )
+    _validate_candidate_key(inferred)
+    return inferred
 
 
 def _validate_candidate_key(candidate_keys: Sequence[str]) -> list[str]:
