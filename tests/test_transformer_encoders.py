@@ -286,15 +286,14 @@ def test_transformer_operation_params_match_standalone_runtime_contract(monkeypa
 
     sentence = SentenceTransformerEncoder("example/sbert", revision=_COMMIT)
     assert sentence.validate_operation_params(
-        {"task": "query"}, sources={"source": source}, mode="translate"
+        {}, sources={"source": source}, mode="translate"
     ) == {
-        "task": "query",
         "device": "resolved:auto",
         "model_batch_size": 32,
     }
-    with pytest.raises(OperatorError, match="task must be"):
+    with pytest.raises(OperatorError, match="unknown operation parameter"):
         sentence.validate_operation_params(
-            {"task": "invalid"}, sources={"source": source}, mode="translate"
+            {"task": "query"}, sources={"source": source}, mode="translate"
         )
 
 
@@ -363,6 +362,25 @@ def test_contextual_transformer_output_lineage_uses_token_basis(monkeypatch):
     assert specs["tokens"].basis_labels == ("source",)
     assert specs["contextual_embeddings"].lineage_mode == "preserved_key"
     assert specs["contextual_embeddings"].basis_labels == ("tokens",)
+
+
+def test_sentence_transformer_task_variant_is_explicit_frozen_state():
+    document = SentenceTransformerEncoder("example/sbert", revision=_COMMIT, task="document")
+    query = document.for_task("query")
+
+    assert document.task == "document"
+    assert query.task == "query"
+    assert query.operator_id is None
+    assert query.to_json_state()["task"] == "query"
+
+    explicit_prompt = SentenceTransformerEncoder(
+        "example/sbert",
+        revision=_COMMIT,
+        task="document",
+        prompt="doc: ",
+    )
+    with pytest.raises(OperatorError, match="explicit prompt_name/prompt"):
+        explicit_prompt.for_task("query")
 
 
 def test_sentence_transformer_uses_document_recipe_and_counts_prompt(monkeypatch):
