@@ -18,7 +18,10 @@ requires lightweight Python iteration over the already-processed objects.
 
 from __future__ import annotations
 
+import hashlib
+import importlib.metadata
 import json
+import shutil
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -112,6 +115,10 @@ class SpacyTranslator(BaseTranslator):
     disable:
         Optional spaCy pipeline components to disable while loading the model.
         The resulting pipeline must still provide sentence boundaries.
+    save_model:
+        If True, vendor the exact spaCy pipeline under the operator assets.
+        The default is False: freeze an exact resource reference without copying
+        the heavyweight model bytes into the TeAL project.
 
     Notes
     -----
@@ -121,6 +128,7 @@ class SpacyTranslator(BaseTranslator):
     """
 
     operation_type = "translate"
+    frozen_runtime_fields = frozenset({"_resource_verified"})
 
     def __init__(
         self,
@@ -131,6 +139,7 @@ class SpacyTranslator(BaseTranslator):
         token_key: str = "token_id",
         spacy_batch_size: int = 128,
         disable: Sequence[str] = (),
+        save_model: bool = False,
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
@@ -162,8 +171,11 @@ class SpacyTranslator(BaseTranslator):
         self.token_key = token_key
         self.spacy_batch_size = int(spacy_batch_size)
         self.disable = normalized_disable
+        self.save_model = bool(save_model)
         self.resolved_spacy_version: str | None = None
+        self.resource_identity: dict[str, str] | None = None
         self._frozen_model_path: str | None = None
+        self._resource_verified = False
 
     def translate(
         self,
@@ -183,19 +195,10 @@ class SpacyTranslator(BaseTranslator):
             )
 
         model_source = self._frozen_model_path or self.model
-        if self.is_frozen and self._frozen_model_path is None:
-            raise OperatorError(
-                "Frozen SpacyTranslator snapshot is missing an operator-local spaCy "
-                "pipeline asset and cannot be reused under strict freeze semantics."
-            )
+        if self.is_frozen and not self._resource_verified:
+            self._verify_frozen_resource()
+            self._resource_verified = True
         nlp = _load_spacy_pipeline(model_source, self.disable)
-        if self.resolved_spacy_version is not None:
-            current_version = _spacy_runtime_version()
-            if current_version != self.resolved_spacy_version:
-                raise OperatorError(
-                    "SpacyTranslator requires the spaCy runtime version recorded in its "
-                    f"frozen snapshot ({self.resolved_spacy_version}); found {current_version}."
-                )
         docs = nlp.pipe(values, batch_size=self.spacy_batch_size, n_process=1)
         sentence_rows: list[dict[str, Any]] = []
         token_rows: list[dict[str, Any]] = []
@@ -380,6 +383,7 @@ class SpacyTranslator(BaseTranslator):
         _ = mode, request
         worker = self.from_json_state(self.to_json_state())
         worker._frozen_model_path = self._frozen_model_path
+        worker._resource_verified = False
         worker.is_frozen = self.is_frozen
         return worker
 
