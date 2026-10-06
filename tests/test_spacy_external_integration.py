@@ -82,7 +82,7 @@ def test_real_spacy_saved_pipeline_parallel_two_output_structure_and_reopen(
     try:
         source = _seed_documents(project, rows)
         outputs = project.translate(
-            SpacyTranslator(model=str(model_dir), spacy_batch_size=2),
+            SpacyTranslator(model=str(model_dir), spacy_batch_size=2, save_model=True),
             source,
             workers=2,
             batch_size=2,
