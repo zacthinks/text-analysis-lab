@@ -15,6 +15,8 @@ from text_analysis_lab.translators import (
     CountVectorizer,
     EmbeddingLookup,
     FeatureTrimmer,
+    FunctionMapper,
+    MatrixTranspose,
     RegexCleaner,
     SVD,
     TfidfTransformer,
@@ -522,8 +524,9 @@ def test_project_pipeline_executes_each_stage_as_normal_translation(
 def test_project_pipeline_reconstructs_recorded_representation_chain(
     tmp_path: Path,
 ) -> None:
+    project_path = tmp_path / "project-reconstruct"
     project = teal.Project.create(
-        tmp_path / "project-reconstruct",
+        project_path,
         name="pipeline_reconstruct",
         delete_existing=True,
     )
@@ -538,33 +541,43 @@ def test_project_pipeline_reconstructs_recorded_representation_chain(
         svd = SVD(n_components=1, random_state=7)
         reduced = project.translate(svd, weighted)["output"]
 
-        recovered = project.pipeline(start=source, end=reduced)
-        assert [stage.translator.operator_id for stage in recovered.stages] == [
-            count.operator_id,
-            trimmer.operator_id,
-            tfidf.operator_id,
-            svd.operator_id,
-        ]
-
         held_out = pd.Series(["alpha gamma", "beta alpha"])
-        manual = svd.translate(
+        expected = svd.translate(
             tfidf.translate(
                 trimmer.translate(
                     count.translate(held_out)
                 )
             )
         )
-        before = len(project.list_operations())
-        replayed = recovered.translate(held_out, project=project)["output"]
-        assert len(project.list_operations()) == before
-
-        np.testing.assert_allclose(replayed["values"], manual["values"])
-        pd.testing.assert_frame_equal(
-            replayed["feature_metadata"],
-            manual["feature_metadata"],
-        )
+        expected_values = np.asarray(expected["values"]).copy()
+        expected_feature_metadata = expected["feature_metadata"].copy()
+        source_id = str(source.artifact_id)
+        reduced_id = str(reduced.artifact_id)
+        operator_ids = [
+            count.operator_id,
+            trimmer.operator_id,
+            tfidf.operator_id,
+            svd.operator_id,
+        ]
     finally:
         project.close()
+
+    reopened = teal.Project.open(project_path)
+    try:
+        recovered = reopened.pipeline(start=source_id, end=reduced_id)
+        assert [stage.translator.operator_id for stage in recovered.stages] == operator_ids
+
+        before = len(reopened.list_operations())
+        replayed = recovered.translate(held_out, project=reopened)["output"]
+        assert len(reopened.list_operations()) == before
+
+        np.testing.assert_allclose(replayed["values"], expected_values)
+        pd.testing.assert_frame_equal(
+            replayed["feature_metadata"],
+            expected_feature_metadata,
+        )
+    finally:
+        reopened.close()
 
 
 def test_project_pipeline_reconstructs_recomputable_umap(
@@ -574,27 +587,47 @@ def test_project_pipeline_reconstructs_recomputable_umap(
     class FakeUMAP:
         def __init__(self, *, n_components=2, **kwargs):
             self.n_components = n_components
+            self._fit_offset = None
+
+        @staticmethod
+        def _dense(matrix):
+            return matrix.toarray() if hasattr(matrix, "toarray") else np.asarray(matrix)
 
         def fit_transform(self, matrix):
-            dense = matrix.toarray() if hasattr(matrix, "toarray") else np.asarray(matrix)
-            return dense[:, : self.n_components]
+            self.fit(matrix)
+            return self.transform(matrix)
 
         def fit(self, matrix):
-            self._seen = matrix.shape
+            dense = self._dense(matrix)
+            self._fit_offset = dense.mean(axis=0)
             return self
 
         def transform(self, matrix):
-            dense = matrix.toarray() if hasattr(matrix, "toarray") else np.asarray(matrix)
-            return dense[:, : self.n_components]
+            if self._fit_offset is None:
+                raise AssertionError("FakeUMAP.transform(...) called before fit(...).")
+            dense = self._dense(matrix)
+            return (
+                dense[:, : self.n_components]
+                + self._fit_offset[: self.n_components]
+            )
 
     monkeypatch.setitem(sys.modules, "umap", SimpleNamespace(UMAP=FakeUMAP))
+    project_path = tmp_path / "project-reconstruct-umap"
+    training_texts = ["alpha alpha alpha", "beta"]
+    source_path = tmp_path / "umap-documents.csv"
+    pd.DataFrame({"text": training_texts}).to_csv(source_path, index=False)
+
     project = teal.Project.create(
-        tmp_path / "project-reconstruct-umap",
+        project_path,
         name="pipeline_reconstruct_umap",
         delete_existing=True,
     )
     try:
-        source = _source(project, tmp_path)
+        source = project.read_csv(
+            source_path,
+            text_fields="text",
+            metadata_fields=None,
+        )
         count = CountVectorizer(text_field="text", min_df=1)
         counts = project.translate(count, source)["output"]
         reducer = UMAP(
@@ -607,19 +640,162 @@ def test_project_pipeline_reconstructs_recomputable_umap(
 
         assert reducer.is_fitted
         assert reducer._estimator is None
+        source_id = str(source.artifact_id)
+        reduced_id = str(reduced.artifact_id)
+        count_operator_id = count.operator_id
+        reducer_operator_id = reducer.operator_id
+    finally:
+        project.close()
 
-        recovered = project.pipeline(start=source, end=reduced)
+    reopened = teal.Project.open(project_path)
+    try:
+        recovered = reopened.pipeline(start=source_id, end=reduced_id)
+        assert [stage.translator.operator_id for stage in recovered.stages] == [
+            count_operator_id,
+            reducer_operator_id,
+        ]
+        recovered_count = recovered.stages[0].translator
         recovered_umap = recovered.stages[-1].translator
         assert recovered_umap.is_fitted
         assert recovered_umap._estimator is None
 
+        held_out = pd.Series(["alpha", "beta beta beta"])
+        fit_payload = recovered_count.translate(pd.Series(training_texts))
+        held_out_payload = recovered_count.translate(held_out)
+        fit_values = fit_payload["values"]
+        held_out_values = held_out_payload["values"]
+        if hasattr(fit_values, "toarray"):
+            fit_values = fit_values.toarray()
+        if hasattr(held_out_values, "toarray"):
+            held_out_values = held_out_values.toarray()
+        expected = (
+            np.asarray(held_out_values)[:, :1]
+            + np.asarray(fit_values).mean(axis=0)[:1]
+        )
+
         replayed = recovered.translate(
-            pd.Series(["alpha gamma", "beta alpha"]),
-            project=project,
+            held_out,
+            project=reopened,
         )["output"]
 
-        assert replayed["values"].shape == (2, 1)
+        np.testing.assert_allclose(replayed["values"], expected)
         assert recovered_umap._estimator is not None
+    finally:
+        reopened.close()
+
+
+def test_project_pipeline_reconstructs_unambiguous_multi_source_dag(
+    tmp_path: Path,
+) -> None:
+    project = teal.Project.create(
+        tmp_path / "project-reconstruct-dag",
+        name="pipeline_reconstruct_dag",
+        delete_existing=True,
+    )
+    try:
+        source_path = tmp_path / "dag-documents.csv"
+        pd.DataFrame({"text": ["alpha", "beta", "gamma"]}).to_csv(
+            source_path,
+            index=False,
+        )
+        source = project.read_csv(
+            source_path,
+            text_fields="text",
+            metadata_fields=None,
+        )
+
+        count = CountVectorizer(text_field="text", min_df=1)
+        counts = project.translate(count, source)["output"]
+        transpose = MatrixTranspose()
+        embeddings = project.translate(transpose, counts)["output"]
+        lookup = EmbeddingLookup(field="text")
+        looked_up = project.translate(
+            lookup,
+            {"tokens": source, "embeddings": embeddings},
+        )["output"]
+
+        recovered = project.pipeline(start=source, end=looked_up)
+        assert [stage.translator.operator_id for stage in recovered.stages] == [
+            count.operator_id,
+            transpose.operator_id,
+            lookup.operator_id,
+        ]
+
+        held_out = pd.Series(["gamma", "alpha"])
+        manual = lookup.translate(
+            held_out,
+            transpose.translate(count.translate(held_out)),
+        )
+        replayed = recovered.translate(held_out, project=project)["output"]
+
+        np.testing.assert_allclose(replayed["values"], manual["values"])
+        pd.testing.assert_frame_equal(
+            replayed["feature_metadata"],
+            manual["feature_metadata"],
+        )
+    finally:
+        project.close()
+
+
+def test_project_pipeline_rejects_external_dependency_inside_multi_source_dag(
+    tmp_path: Path,
+) -> None:
+    project = teal.Project.create(
+        tmp_path / "project-reconstruct-external-dag",
+        name="pipeline_reconstruct_external_dag",
+        delete_existing=True,
+    )
+    try:
+        source_path = tmp_path / "dag-primary.csv"
+        pd.DataFrame({"text": ["alpha", "beta"]}).to_csv(source_path, index=False)
+        source = project.read_csv(
+            source_path,
+            text_fields="text",
+            metadata_fields=None,
+        )
+
+        external_path = tmp_path / "dag-external.csv"
+        pd.DataFrame({"text": ["alpha", "beta"]}).to_csv(external_path, index=False)
+        external = project.read_csv(
+            external_path,
+            text_fields="text",
+            metadata_fields=None,
+        )
+        external_count = CountVectorizer(text_field="text", min_df=1)
+        external_counts = project.translate(external_count, external)["output"]
+        external_embeddings = project.translate(
+            MatrixTranspose(),
+            external_counts,
+        )["output"]
+        target = project.translate(
+            EmbeddingLookup(field="text"),
+            {"tokens": source, "embeddings": external_embeddings},
+        )["output"]
+
+        with pytest.raises(PipelineError, match="not reachable from declared start"):
+            project.pipeline(start=source, end=target)
+    finally:
+        project.close()
+
+
+def test_project_pipeline_rejects_nonreusable_recorded_stage(
+    tmp_path: Path,
+) -> None:
+    project = teal.Project.create(
+        tmp_path / "project-reconstruct-nonreusable",
+        name="pipeline_reconstruct_nonreusable",
+        delete_existing=True,
+    )
+    try:
+        source = _source(project, tmp_path)
+        mapper = FunctionMapper(lambda packet: packet, save_function=False)
+        mapped = project.translate(mapper, source)["output"]
+
+        with pytest.raises(
+            PipelineError,
+            match="cannot be reconstructed.*reusable",
+        ):
+            project.pipeline(start=source, end=mapped)
     finally:
         project.close()
 
