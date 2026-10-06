@@ -14,6 +14,7 @@ from text_analysis_lab.linguistics.heads import (
     get_default_semantic_head_rules,
     load_semantic_head_rules,
     resolve_semantic_head_indices,
+    resolve_semantic_heads,
 )
 from text_analysis_lab.linguistics.srl.structures import content_head_indices
 from text_analysis_lab.translators.coreference_resolver import CoreferenceResolver
@@ -517,6 +518,94 @@ def test_semantic_head_resolver_executes_inside_native_pipeline() -> None:
     )
 
     assert result["role_heads"]["head_text"].tolist() == ["apples"]
+
+
+def test_role_head_rows_preserve_resolution_provenance() -> None:
+    resolver = SemanticRoleHeadResolver()
+    resolved = resolver.translate(
+        _quantifier_span(),
+        _quantifier_tokens(),
+    )["role_heads"]
+
+    row = resolved.iloc[0]
+    assert row["syntactic_root_token_id"] == 2
+    assert row["head_token_id"] == 5
+    assert row["rule"] == "quantifier_of_object"
+    assert row["rules_fingerprint"] == resolver.head_rules.fingerprint
+    assert json.loads(row["resolution_path"]) == [
+        {
+            "rule": "quantifier_of_object",
+            "kind": "child",
+            "from_token_id": 2,
+            "to_token_id": 3,
+        },
+        {
+            "rule": "quantifier_of_object",
+            "kind": "child",
+            "from_token_id": 3,
+            "to_token_id": 5,
+        },
+    ]
+
+
+def test_rich_resolution_records_keep_coordination_and_rule_trace() -> None:
+    results = resolve_semantic_heads(
+        start=0,
+        end=5,
+        token_ids=list(range(5)),
+        head_token_ids=[0, 0, 3, 0, 3],
+        dependencies=["ROOT", "pobj", "cc", "conj", "pobj"],
+        pos=["ADP", "PROPN", "CCONJ", "ADP", "PROPN"],
+        text=["from", "Boston", "and", "from", "New York"],
+        lemmas=["from", "Boston", "and", "from", "New York"],
+        role="ARGM-LOC",
+        source="srl",
+    )
+
+    assert [result.semantic_head_index for result in results] == [1, 4]
+    assert results[0].syntactic_root_index == 0
+    assert results[0].rule_id == "preposition_object"
+    assert [move.kind for move in results[0].resolution_path] == ["child"]
+    assert [move.kind for move in results[1].resolution_path] == [
+        "coordination",
+        "child",
+    ]
+
+
+def test_semantic_head_rules_are_deeply_immutable() -> None:
+    rules = SemanticHeadRules()
+    fingerprint = rules.fingerprint
+
+    with pytest.raises(TypeError):
+        rules.rules[0]["id"] = "mutated"
+    with pytest.raises(TypeError):
+        rules.rules[0]["when"]["role"] = ("ARG0",)
+    with pytest.raises(TypeError):
+        rules.rules[0]["when"]["role"][0] = "ARG0"
+
+    assert rules.fingerprint == fingerprint
+    assert rules.to_dict() == get_default_semantic_head_rules()
+
+
+def test_boi_defaults_intentionally_differ_from_legacy_function_word_fallback() -> None:
+    common = {
+        "start": 0,
+        "end": 2,
+        "token_ids": [0, 1],
+        "head_token_ids": [0, 0],
+        "dependencies": ["ROOT", "det"],
+        "pos": ["DET", "NOUN"],
+        "text": ["the", "dog"],
+        "role": "ARG1",
+    }
+
+    assert content_head_indices(**common) == (1,)
+    assert resolve_semantic_head_indices(
+        **common,
+        lemmas=["the", "dog"],
+        source="srl",
+    ) == (0,)
+
 
 def test_default_export_and_rule_fingerprint_are_stable(tmp_path) -> None:
     first = SemanticHeadRules()
