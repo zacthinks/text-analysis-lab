@@ -445,6 +445,8 @@ def translate(
             mode=mode,
             route=route,
         )
+        if mode == "translate":
+            _serialize_pending_operator_snapshot(project, translator, runtime)
         _run_plan(
             translator=translator,
             runtime=runtime,
@@ -1285,15 +1287,8 @@ def _prepare_operator_snapshot(
             operator_id=operator_id,
             operation_type=translator.operation_type,
             snapshot_status="pending",
+            reuse_status="pending",
         )
-        if mode == "translate":
-            try:
-                _save_operator(project, translator, operator_id)
-            except Exception:
-                project.catalog.mark_operator_snapshot_failed(operator_id)
-                raise
-            project.catalog.mark_operator_serialized(operator_id)
-            return _PreparedOperator(operator_id=operator_id, snapshot_pending=False)
         return _PreparedOperator(operator_id=operator_id, snapshot_pending=True)
 
     operator_id = str(translator.operator_id)
@@ -1323,6 +1318,14 @@ def _prepare_operator_snapshot(
         raise OperatorError(
             f"Cannot fit_translate serialized operator {operator_id}. "
             "Create a new unsaved translator so fitting can produce a new operator snapshot."
+        )
+
+    reuse_status = project.catalog.operator_reuse_status(operator_id)
+    if reuse_status != "reusable":
+        raise OperatorError(
+            f"Operator {operator_id} is serialized for provenance but is not a "
+            f"reusable frozen transform (reuse_status={reuse_status!r}). "
+            "Create a new translator for a new scientific execution."
         )
 
     if not translator.is_frozen:
@@ -1467,6 +1470,11 @@ def _serialize_pending_operator_snapshot(
         return
     _save_operator(project, translator, runtime.operator_id)
     project.catalog.mark_operator_serialized(runtime.operator_id)
+    caps = translator.execution_capabilities(project=project)
+    if caps.reusable:
+        project.catalog.mark_operator_reusable(runtime.operator_id)
+    else:
+        project.catalog.mark_operator_provenance_only(runtime.operator_id)
     runtime.operator_snapshot_pending = False
 
 
