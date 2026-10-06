@@ -404,6 +404,15 @@ class SentenceTransformerEncoder(BaseTranslator):
         self._runtime_component(device="cpu")
         return self.resolved_revision
 
+    def prepare_for_freeze(self) -> None:
+        """Resolve the exact model revision before the durable snapshot is committed."""
+        self._runtime_component(device="cpu")
+        if self.resolved_revision is None:
+            raise OperatorError(
+                "SentenceTransformerEncoder could not resolve an exact model revision; "
+                "the translator cannot be frozen reproducibly."
+            )
+
     def to_json_state(self) -> dict[str, Any]:
         return {
             "model": self.model,
