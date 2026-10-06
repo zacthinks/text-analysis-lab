@@ -175,6 +175,9 @@ def test_spacy_two_output_resume_after_mid_operation_failure(
     sentinel = tmp_path / "failed_once.txt"
 
     class FailOncePipe:
+        def to_disk(self, path):
+            nlp.to_disk(path)
+
         def pipe(self, texts, *, batch_size, n_process):
             texts = list(texts)
             if any("TRIGGER" in text for text in texts) and not sentinel.exists():
