@@ -139,39 +139,54 @@ def test_provider_does_not_mislabel_catalog_threading_failures_as_missing():
         )
 
 
-def test_provider_delegates_new_text_and_query_to_frozen_teal_geometry(monkeypatch):
-
+def test_provider_uses_recovered_pipeline_for_new_text_and_legacy_query_replay(
+    monkeypatch,
+):
     import text_analysis_lab.integrations.geco as bridge
 
     matrix = sparse.eye(3, format="csr")
     artifact = _FakeArtifact(
         "art_geometry", ArtifactType.SPARSE_MATRIX, matrix, [0, 1, 2]
     )
-    project = _FakeProject([artifact])
-    calls = []
+    representation = _FakeArtifact(
+        "art_documents", ArtifactType.DENSE_MATRIX, np.zeros((3, 1)), [0, 1, 2]
+    )
+
+    class FakePipeline:
+        def translate(self, texts, *, project=None):
+            assert project is project_obj
+            values = sparse.csr_matrix(
+                np.arange(len(texts) * 3, dtype=float).reshape(len(texts), 3)
+            )
+            return {"output": {"values": values}}
+
+    class PipelineProject(_FakeProject):
+        def pipeline(self, *, start, end):
+            assert start == "art_documents"
+            assert end is artifact
+            return FakePipeline()
+
+    project_obj = PipelineProject([artifact, representation])
+    query_calls = []
 
     def replay_texts_like(project_arg, target, texts, *, query=False):
-        assert project_arg is project
-        calls.append((target.artifact_id, list(texts), query))
-        if query:
-            return sparse.csr_matrix([[1.0, 2.0, 3.0]])
-        return sparse.csr_matrix(
-            np.arange(len(texts) * 3, dtype=float).reshape(len(texts), 3)
-        )
+        assert project_arg is project_obj
+        query_calls.append((target.artifact_id, list(texts), query))
+        return sparse.csr_matrix([[1.0, 2.0, 3.0]])
 
     monkeypatch.setattr(bridge, "_replay_texts_like", replay_texts_like)
-    provider = TeALGeCoProvider(project)
-    query = provider.transform_query(
-        {"artifact_id": "art_geometry"}, "room temperature"
-    )
-    texts = provider.transform_texts({"artifact_id": "art_geometry"}, ["a", "b"])
+    provider = TeALGeCoProvider(project_obj)
+    external_ref = {
+        "artifact_id": "art_geometry",
+        "representation_artifact_id": "art_documents",
+    }
+    query = provider.transform_query(external_ref, "room temperature")
+    texts = provider.transform_texts(external_ref, ["a", "b"])
     np.testing.assert_array_equal(query.toarray(), [[1.0, 2.0, 3.0]])
     np.testing.assert_array_equal(texts.toarray(), [[0, 1, 2], [3, 4, 5]])
-    assert calls == [
+    assert query_calls == [
         ("art_geometry", ["room temperature"], True),
-        ("art_geometry", ["a", "b"], False),
     ]
-
 
 def test_geco_contract_gate_rejects_pre_capability_build(monkeypatch):
     import sys
