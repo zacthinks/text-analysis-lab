@@ -72,6 +72,8 @@ class UMAP(BaseTranslator):
 
     operation_type = "translate"
 
+    frozen_runtime_fields = frozenset(['_estimator'])
+
     def __init__(
         self,
         n_components: int = 2,
