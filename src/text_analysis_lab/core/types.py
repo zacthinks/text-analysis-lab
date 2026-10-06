@@ -33,6 +33,8 @@ OperationStatus = Literal["incomplete", "complete", "failed"]
 
 OperatorSnapshotStatus = Literal["pending", "serialized", "failed"]
 
+OperatorReuseStatus = Literal["pending", "reusable", "provenance_only", "legacy_unknown"]
+
 MemoTargetType = Literal["project", "artifact", "operator", "operation", "standalone"]
 
 StructuralColumn = Literal["_position", "_batch", "_row_offset"]
