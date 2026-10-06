@@ -31,6 +31,7 @@ from text_analysis_lab.translators.pdf_text_extractor import PdfTextExtractor
 from text_analysis_lab.translators.regex_cleaner import RegexCleaner, RegexReplaceRule
 from text_analysis_lab.translators.semantic_role_head_resolver import SemanticRoleHeadResolver
 from text_analysis_lab.translators.semantic_role_labeler import SemanticRoleLabeler
+from text_analysis_lab.translators.sense_selector import SenseSelector
 from text_analysis_lab.translators.sentence_transformer_encoder import (
     SentenceTransformerEncoder,
 )
@@ -82,6 +83,7 @@ __all__ = [
     "RegexReplaceRule",
     "SemanticRoleHeadResolver",
     "SemanticRoleLabeler",
+    "SenseSelector",
     "SentenceTransformerEncoder",
     "SpacyTranslator",
     "TextFileExtractor",

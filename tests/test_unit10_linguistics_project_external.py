@@ -14,6 +14,7 @@ from text_analysis_lab.translators import (
     CoreferenceResolver,
     SemanticRoleHeadResolver,
     SemanticRoleLabeler,
+    SenseSelector,
     WordSenseDisambiguator,
 )
 
@@ -303,5 +304,43 @@ def test_unit10_translators_write_teal_native_lineage(
         assert set(sense_frame["surface_form"].tolist()) == {"Alice", "left", "slept"}
         assert "She" not in sense_frame["surface_form"].tolist()
         assert _frame(wsd["unresolved"]).empty
+
+        selector = SenseSelector(excluded_sense_ids=["alice-1"])
+        reselected = project.translate(
+            selector,
+            {"candidates": wsd["candidates"]},
+        )
+        reselected_frame = _frame(reselected["senses"])
+        alice = reselected_frame.loc[
+            reselected_frame["surface_form"] == "Alice"
+        ].iloc[0]
+        assert alice["sense_id"] == "alice-2"
+        assert alice["selection_reason"] == "top_ranked_after_exclusion"
+        assert not bool(alice["model_selected"])
+        assert reselected["senses"].descriptor["lineage"]["basis_artifact_ids"] == [
+            wsd["candidates"].artifact_id
+        ]
+
+        operator_id = selector.operator_id
+        assert operator_id is not None
+        loaded = project.get_operator(operator_id)
+        assert loaded.is_frozen
+        replay = loaded.translate(_frame(wsd["candidates"]))["senses"]
+        pd.testing.assert_frame_equal(
+            replay.reset_index(drop=True),
+            reselected_frame.reset_index(drop=True),
+            check_dtype=False,
+        )
+
+        recovered = project.pipeline(
+            start=wsd["candidates"],
+            end=reselected["senses"],
+        )
+        native = recovered.translate(_frame(wsd["candidates"]))["output"]
+        pd.testing.assert_frame_equal(
+            native.reset_index(drop=True),
+            reselected_frame.reset_index(drop=True),
+            check_dtype=False,
+        )
     finally:
         project.close()

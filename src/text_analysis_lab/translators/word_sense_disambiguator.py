@@ -51,6 +51,9 @@ SENSE_DATA_COLUMNS = (
     "model_revision",
 )
 CANDIDATE_DATA_COLUMNS = (
+    "surface_form",
+    "parser_lemma",
+    "pos",
     "sense_id",
     "synset_id",
     "sense_label",
@@ -338,12 +341,20 @@ class WordSenseDisambiguator(BaseTranslator):
             ordered = sorted(
                 target_rows, key=lambda item: (int(item.rank), item.sense_id)
             )
+            surface, parser_lemma, source_pos = target_context[target_id]
             for candidate_id, row in enumerate(ordered):
                 candidate_keys.append({**key_record, "candidate_id": int(candidate_id)})
-                candidate_data.append(_candidate_record(self, row))
+                candidate_data.append(
+                    _candidate_record(
+                        self,
+                        row,
+                        surface_form=surface,
+                        parser_lemma=parser_lemma,
+                        source_pos=source_pos,
+                    )
+                )
             selected = next((row for row in ordered if bool(row.selected)), None)
             if selected is not None:
-                surface, parser_lemma, source_pos = target_context[target_id]
                 resolved_lemma = str(selected.lemma)
                 sense_keys.append(dict(key_record))
                 sense_data.append(
@@ -538,8 +549,18 @@ def _make_backend(*, model_name, model_revision, device, precision, local_files_
     )
 
 
-def _candidate_record(translator: WordSenseDisambiguator, row: Any) -> dict[str, Any]:
+def _candidate_record(
+    translator: WordSenseDisambiguator,
+    row: Any,
+    *,
+    surface_form: str,
+    parser_lemma: str,
+    source_pos: str,
+) -> dict[str, Any]:
     return {
+        "surface_form": str(surface_form),
+        "parser_lemma": str(parser_lemma),
+        "pos": str(source_pos),
         "sense_id": str(row.sense_id),
         "synset_id": str(row.synset_id),
         "sense_label": row.sense_label,
