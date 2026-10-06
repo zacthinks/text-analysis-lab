@@ -169,9 +169,9 @@ def _replay_stage(
     """Execute one frozen replay stage through the ordinary translation contract."""
     if kind == "texts":
         if operator.__class__.__name__ == "SentenceTransformerEncoder":
-            return operator.translate(
+            encoder = operator.for_task("query") if query else operator
+            return encoder.translate(
                 values,
-                task="query" if query else None,
                 device="auto",
                 model_batch_size=int(params.get("model_batch_size", 32)),
             )
