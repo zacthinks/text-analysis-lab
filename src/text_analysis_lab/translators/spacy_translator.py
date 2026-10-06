@@ -18,7 +18,6 @@ requires lightweight Python iteration over the already-processed objects.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
@@ -164,7 +163,7 @@ class SpacyTranslator(BaseTranslator):
         self.spacy_batch_size = int(spacy_batch_size)
         self.disable = normalized_disable
         self.resolved_spacy_version: str | None = None
-        self.resolved_model_hash: str | None = None
+        self._frozen_model_path: str | None = None
 
     def translate(
         self,
@@ -183,8 +182,20 @@ class SpacyTranslator(BaseTranslator):
                 "or pandas Series."
             )
 
-        nlp = _load_spacy_pipeline(self.model, self.disable)
-        self._verify_resolved_pipeline(nlp)
+        model_source = self._frozen_model_path or self.model
+        if self.is_frozen and self._frozen_model_path is None:
+            raise OperatorError(
+                "Frozen SpacyTranslator snapshot is missing an operator-local spaCy "
+                "pipeline asset and cannot be reused under strict freeze semantics."
+            )
+        nlp = _load_spacy_pipeline(model_source, self.disable)
+        if self.resolved_spacy_version is not None:
+            current_version = _spacy_runtime_version()
+            if current_version != self.resolved_spacy_version:
+                raise OperatorError(
+                    "SpacyTranslator requires the spaCy runtime version recorded in its "
+                    f"frozen snapshot ({self.resolved_spacy_version}); found {current_version}."
+                )
         docs = nlp.pipe(values, batch_size=self.spacy_batch_size, n_process=1)
         sentence_rows: list[dict[str, Any]] = []
         token_rows: list[dict[str, Any]] = []
@@ -367,34 +378,44 @@ class SpacyTranslator(BaseTranslator):
         request: TranslationRequest,
     ) -> SpacyTranslator:
         _ = mode, request
-        return self.from_json_state(self.to_json_state())
+        worker = self.from_json_state(self.to_json_state())
+        worker._frozen_model_path = self._frozen_model_path
+        worker.is_frozen = self.is_frozen
+        return worker
 
     def prepare_for_freeze(self) -> None:
-        """Resolve and pin the exact spaCy pipeline used by this translator."""
-        nlp = _load_spacy_pipeline(self.model, self.disable)
+        """Resolve the configured spaCy pipeline before durable snapshot commit."""
+        _load_spacy_pipeline(self.model, self.disable)
         self.resolved_spacy_version = _spacy_runtime_version()
-        self.resolved_model_hash = _spacy_pipeline_hash(nlp)
 
-    def _verify_resolved_pipeline(self, nlp: Any) -> None:
-        if self.resolved_spacy_version is None or self.resolved_model_hash is None:
-            if self.is_frozen:
-                raise OperatorError(
-                    "Frozen SpacyTranslator snapshot is missing exact spaCy resource "
-                    "identity and cannot be reused under strict freeze semantics."
-                )
+    def save_assets(self, assets_dir: Path) -> Mapping[str, Any]:
+        nlp = _load_spacy_pipeline(self.model, self.disable)
+        model_dir = assets_dir / "spacy_model"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            nlp.to_disk(model_dir)
+        except Exception as exc:
+            raise OperatorError(
+                "SpacyTranslator could not persist the configured spaCy pipeline "
+                "as an operator-local frozen asset."
+            ) from exc
+        self._frozen_model_path = str(model_dir)
+        return {
+            "spacy_model_dir": model_dir.name,
+            "spacy_version": self.resolved_spacy_version,
+        }
+
+    def load_assets(self, assets_dir: Path, manifest: Mapping[str, Any]) -> None:
+        filename = manifest.get("spacy_model_dir") if manifest else None
+        if not isinstance(filename, str) or not filename:
+            self._frozen_model_path = None
             return
-        current_version = _spacy_runtime_version()
-        if current_version != self.resolved_spacy_version:
+        model_dir = assets_dir / filename
+        if not model_dir.is_dir():
             raise OperatorError(
-                "SpacyTranslator requires the spaCy runtime version recorded in its "
-                f"frozen snapshot ({self.resolved_spacy_version}); found {current_version}."
+                f"Frozen spaCy model asset is missing: {model_dir}."
             )
-        current_hash = _spacy_pipeline_hash(nlp)
-        if current_hash != self.resolved_model_hash:
-            raise OperatorError(
-                f"spaCy pipeline {self.model!r} does not match the exact pipeline "
-                "recorded in this frozen operator snapshot."
-            )
+        self._frozen_model_path = str(model_dir)
 
     def to_json_state(self) -> dict[str, Any]:
         return {
@@ -405,7 +426,6 @@ class SpacyTranslator(BaseTranslator):
             "spacy_batch_size": self.spacy_batch_size,
             "disable": list(self.disable),
             "resolved_spacy_version": self.resolved_spacy_version,
-            "resolved_model_hash": self.resolved_model_hash,
         }
 
     @classmethod
@@ -419,9 +439,7 @@ class SpacyTranslator(BaseTranslator):
             disable=cast(Sequence[str], state.get("disable", ())),
         )
         raw_version = state.get("resolved_spacy_version")
-        raw_hash = state.get("resolved_model_hash")
         obj.resolved_spacy_version = None if raw_version is None else str(raw_version)
-        obj.resolved_model_hash = None if raw_hash is None else str(raw_hash)
         return obj
 
     def save_intermediate_state(
@@ -572,25 +590,6 @@ def _spacy_runtime_version() -> str:
             "dependencies (for example `uv sync --extra spacy`)."
         ) from exc
     return str(getattr(spacy, "__version__", "unknown"))
-
-
-def _spacy_pipeline_hash(nlp: Any) -> str:
-    to_bytes = getattr(nlp, "to_bytes", None)
-    if not callable(to_bytes):
-        raise OperatorError(
-            "SpacyTranslator cannot freeze this pipeline because it does not expose "
-            "spaCy's serializable Language.to_bytes() state."
-        )
-    try:
-        payload = to_bytes()
-    except Exception as exc:
-        raise OperatorError(
-            "SpacyTranslator could not serialize the configured spaCy pipeline "
-            "while resolving its frozen scientific identity."
-        ) from exc
-    if not isinstance(payload, (bytes, bytearray)):
-        raise OperatorError("spaCy Language.to_bytes() did not return bytes.")
-    return hashlib.sha256(bytes(payload)).hexdigest()
 
 
 @lru_cache(maxsize=8)
