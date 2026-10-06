@@ -558,6 +558,8 @@ def resume_translate(
     plan.reset_running_to_pending()
 
     try:
+        if mode == "translate":
+            _serialize_pending_operator_snapshot(project, translator, runtime)
         _run_plan(
             translator=translator,
             runtime=runtime,
