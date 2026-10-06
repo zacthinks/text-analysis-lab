@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from text_analysis_lab.linguistics.heads import resolve_semantic_head_indices
-
 
 class InvalidBioSequence(ValueError):
     """Raised when a tag sequence cannot represent valid BIO spans."""
@@ -120,6 +118,24 @@ def bio_spans(tags: Sequence[str]) -> tuple[BioSpan, ...]:
     return tuple(spans)
 
 
+_FUNCTION_POS = frozenset({"ADP", "SCONJ", "CCONJ", "DET", "PART"})
+_QUANTIFIERS = frozenset(
+    {
+        "all",
+        "some",
+        "more",
+        "lot",
+        "lots",
+        "enough",
+        "none",
+        "any",
+        "most",
+        "less",
+        "much",
+    }
+)
+
+
 def content_head_indices(
     *,
     start: int,
@@ -131,15 +147,85 @@ def content_head_indices(
     text: Sequence[str],
     role: str,
 ) -> tuple[int, ...]:
-    """Backward-compatible wrapper around configurable semantic-head resolution."""
+    """Return legacy TeAL content-head indices for one SRL span.
 
-    return resolve_semantic_head_indices(
-        start=start,
-        end=end,
-        token_ids=token_ids,
-        head_token_ids=head_token_ids,
-        dependencies=dependencies,
-        pos=pos,
-        text=text,
-        role=role,
-    )
+    This helper intentionally preserves the exact pre-configurable behavior for
+    callers that still depend on it. New BoI-aware code should use the
+    configurable semantic-head resolver directly.
+    """
+
+    if start < 0 or end > len(token_ids) or start >= end:
+        raise ValueError(
+            f"Invalid token span [{start}, {end}) for {len(token_ids)} tokens"
+        )
+
+    global_to_local = {int(token_id): index for index, token_id in enumerate(token_ids)}
+    span_indices = tuple(range(start, end))
+    span_set = set(span_indices)
+
+    roots = [
+        index
+        for index in span_indices
+        if head_token_ids[index] is None
+        or global_to_local.get(int(head_token_ids[index]), -1) not in span_set
+        or global_to_local.get(int(head_token_ids[index]), -1) == index
+    ]
+    non_punct_roots = [index for index in roots if dependencies[index] != "punct"]
+    root = (non_punct_roots or roots or [start])[0]
+
+    children: dict[int, list[int]] = {index: [] for index in span_indices}
+    for child in span_indices:
+        head = head_token_ids[child]
+        if head is None:
+            continue
+        parent = global_to_local.get(int(head))
+        if parent in span_set and parent != child:
+            children[parent].append(child)
+
+    def nearest_content_descendant(index: int) -> int:
+        queue = list(children.get(index, ()))
+        visited: set[int] = set()
+        while queue:
+            candidate = queue.pop(0)
+            if candidate in visited:
+                continue
+            visited.add(candidate)
+            if (
+                dependencies[candidate] != "punct"
+                and pos[candidate] not in _FUNCTION_POS
+            ):
+                return candidate
+            queue.extend(children.get(candidate, ()))
+        return index
+
+    if pos[root] in _FUNCTION_POS:
+        root = nearest_content_descendant(root)
+
+    if text[root].lower() in _QUANTIFIERS:
+        of_children = [
+            child for child in children.get(root, ()) if text[child].lower() == "of"
+        ]
+        if of_children:
+            replacement = nearest_content_descendant(of_children[0])
+            if replacement != of_children[0] or pos[replacement] not in _FUNCTION_POS:
+                root = replacement
+
+    heads = [root]
+    if role != "V":
+        changed = True
+        while changed:
+            changed = False
+            for index in span_indices:
+                if index in heads or dependencies[index] != "conj":
+                    continue
+                parent_global = head_token_ids[index]
+                parent = (
+                    None
+                    if parent_global is None
+                    else global_to_local.get(int(parent_global))
+                )
+                if parent in heads:
+                    heads.append(index)
+                    changed = True
+
+    return tuple(dict.fromkeys(heads))
