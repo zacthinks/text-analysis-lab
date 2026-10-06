@@ -83,6 +83,8 @@ class ContextualTransformer(BaseTranslator):
 
     operation_type = "translate"
 
+    frozen_runtime_fields = frozenset(['_runtime_model','_runtime_tokenizer','_runtime_device','_effective_context_limit','_warned_unpinned'])
+
     def __init__(
         self,
         model: str,
@@ -688,7 +690,12 @@ class ContextualTransformer(BaseTranslator):
             ) from exc
         commit = resolved_commit_hash(model, tokenizer)
         if commit:
-            self.resolved_revision = commit
+            if self.resolved_revision is None:
+                self.resolved_revision = commit
+            elif str(self.resolved_revision) != str(commit):
+                raise TransformerResourceError(
+                    "Loaded contextual model revision does not match the frozen revision."
+                )
         self._warned_unpinned = warn_if_unpinned(
             model_name=self.model,
             requested_revision=self.revision,
