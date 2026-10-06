@@ -393,10 +393,38 @@ def resolve_semantic_head_indices(
             return None
         raise AssertionError(f"Unexpected semantic-head move kind {kind!r}.")
 
-    def apply_rules(initial: int) -> int:
-        current = initial
+    def coordinated_children(index: int) -> tuple[int, ...]:
+        # Predicate spans intentionally retain a single predicate head. For
+        # argument/adjunct/coreference spans, coordination creates independent
+        # semantic-head branches.
+        if _fold(role) == "v":
+            return ()
+        return tuple(
+            candidate
+            for candidate in span_indices
+            if _fold(dependencies[candidate]) == "conj"
+            and head_token_ids[candidate] is not None
+            and global_to_local.get(int(head_token_ids[candidate])) == index
+        )
+
+    pending = [syntactic_root]
+    queued = {syntactic_root}
+    resolved: list[int] = []
+
+    while pending:
+        current = pending.pop(0)
         visited = {current}
+
         while True:
+            # Coordination must branch from every head reached by the rule
+            # engine, not only from the final resolved head. Otherwise a rule
+            # such as PREP -> object can move past a coordinated PREP and lose
+            # the second conjunct entirely.
+            for candidate in coordinated_children(current):
+                if candidate not in queued:
+                    pending.append(candidate)
+                    queued.add(candidate)
+
             moved = False
             for rule in policy.rules:
                 if not matches(current, rule["when"]):
@@ -420,28 +448,12 @@ def resolve_semantic_head_indices(
                 visited.add(current)
                 moved = True
                 break
+
             if not moved:
-                return current
+                resolved.append(current)
+                break
 
-    primary = apply_rules(syntactic_root)
-
-    # The original BoI resolver expands coordination in the engine rather than
-    # requiring users to write coordination rules. Each conjunct is then sent
-    # through the rule engine independently.
-    seeds = [primary]
-    changed = True
-    while changed:
-        changed = False
-        for candidate in span_indices:
-            if candidate in seeds or _fold(dependencies[candidate]) != "conj":
-                continue
-            head = head_token_ids[candidate]
-            parent = None if head is None else global_to_local.get(int(head))
-            if parent in seeds:
-                seeds.append(candidate)
-                changed = True
-
-    return tuple(dict.fromkeys(apply_rules(seed) for seed in seeds))
+    return tuple(dict.fromkeys(resolved))
 
 
 def _validate_rule(raw_rule: Mapping[str, Any], *, index: int) -> dict[str, Any]:
