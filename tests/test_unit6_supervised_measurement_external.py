@@ -199,7 +199,7 @@ def test_unit6_teal_only_vertical_close_reopen(tmp_path: Path, monkeypatch) -> N
         X = feature_frame[["length", "cold", "temperature"]]
         y = ((feature_frame["cold"] + feature_frame["temperature"]) > 0).astype(int)
         model = LogisticRegression(random_state=0).fit(X, y)
-        C = FittedPredictor(model, probability_class=1)
+        C = FittedPredictor(model, probability_class=1, save_model=True)
         L_F = project.translate(C, features, batch_size=5)["output"]
         lf_frame = _query(L_F, ["prediction", "probability"])
         assert len(lf_frame) == 12

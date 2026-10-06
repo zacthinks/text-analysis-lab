@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 import text_analysis_lab as teal
-from text_analysis_lab.core.errors import OperatorError
+from text_analysis_lab.core.errors import FrozenOperatorError, OperatorError
 from text_analysis_lab.core.operator import InputBatch, TranslationRequest
 from text_analysis_lab.translators import (
     ContextualTransformer,
@@ -286,16 +286,32 @@ def test_transformer_operation_params_match_standalone_runtime_contract(monkeypa
 
     sentence = SentenceTransformerEncoder("example/sbert", revision=_COMMIT)
     assert sentence.validate_operation_params(
-        {"task": "query"}, sources={"source": source}, mode="translate"
+        {}, sources={"source": source}, mode="translate"
     ) == {
-        "task": "query",
         "device": "resolved:auto",
         "model_batch_size": 32,
     }
-    with pytest.raises(OperatorError, match="task must be"):
+    with pytest.raises(OperatorError, match="unknown operation parameter"):
         sentence.validate_operation_params(
-            {"task": "invalid"}, sources={"source": source}, mode="translate"
+            {"task": "query"}, sources={"source": source}, mode="translate"
         )
+
+
+
+
+
+def test_frozen_sentence_transformer_blocks_scientific_reassignment() -> None:
+    encoder = SentenceTransformerEncoder(
+        "example/sbert", revision=_COMMIT, task="document"
+    )
+    encoder.is_frozen = True
+
+    with pytest.raises(FrozenOperatorError, match="Cannot modify 'task'"):
+        encoder.task = "query"
+
+    # Explicitly declared runtime caches remain mutable after freeze.
+    encoder._runtime_device = "cpu"
+    assert encoder._runtime_device == "cpu"
 
 
 def test_contextual_transformer_emits_model_tokens_and_aligned_embeddings(monkeypatch):

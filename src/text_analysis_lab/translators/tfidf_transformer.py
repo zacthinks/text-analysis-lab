@@ -168,12 +168,14 @@ class TfidfTransformer(BaseTranslator):
             raise OperatorError(
                 "TfidfTransformer requires a sparse_matrix or dense_matrix source."
             )
-        self.source_features_ = establish_or_validate_features(
+        resolved_features = establish_or_validate_features(
             self.source_features_,
             source.get_data_columns(),
             fitted=self.is_fitted,
             name="TfidfTransformer",
         )
+        if self.source_features_ is None:
+            self.source_features_ = resolved_features
         return SourceRequest(
             artifact_type=("sparse_matrix", "dense_matrix"),
             mode="full_artifact" if mode == "fit_translate" else "batches",

@@ -64,6 +64,8 @@ class SentenceTransformerEncoder(BaseTranslator):
 
     operation_type = "translate"
 
+    frozen_runtime_fields = frozenset(['_runtime_model','_runtime_device','_effective_context_limit','_warned_unpinned'])
+
     def __init__(
         self,
         model: str,
@@ -152,20 +154,15 @@ class SentenceTransformerEncoder(BaseTranslator):
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
         _ = sources, mode
-        unknown = sorted(set(params) - {"task", "device", "model_batch_size"})
+        unknown = sorted(set(params) - {"device", "model_batch_size"})
         if unknown:
             raise OperatorError(
                 f"SentenceTransformerEncoder received unknown operation parameter(s): {unknown}."
             )
-        raw_task = params.get("task")
-        task = None if raw_task is None else str(raw_task).lower()
-        if task is not None and task not in {"document", "query", "generic"}:
-            raise OperatorError("task must be 'document', 'query', or 'generic'.")
         model_batch_size = int(params.get("model_batch_size", 32))
         if model_batch_size <= 0:
             raise OperatorError("model_batch_size must be a positive integer.")
         return {
-            "task": task,
             "device": resolve_device(str(params.get("device", "auto"))),
             "model_batch_size": model_batch_size,
         }
@@ -197,15 +194,13 @@ class SentenceTransformerEncoder(BaseTranslator):
         self,
         texts: str | None | Sequence[str | None] | pd.Series,
         *,
-        task: SentenceTask | str | None = None,
         device: str = "auto",
         model_batch_size: int = 32,
     ) -> dict[str, Any]:
-        """Encode ordinary text using the same matrix schema as artifact execution."""
+        """Encode ordinary text using this translator's fixed scientific recipe."""
 
         values, token_counts, context_limit = self._translate_texts(
             texts,
-            task=task,
             device=device,
             model_batch_size=model_batch_size,
         )
@@ -229,7 +224,6 @@ class SentenceTransformerEncoder(BaseTranslator):
         self,
         texts: str | None | Sequence[str | None] | pd.Series,
         *,
-        task: SentenceTask | str | None,
         device: str,
         model_batch_size: int,
         context_examples: Sequence[str] | None = None,
@@ -240,9 +234,7 @@ class SentenceTransformerEncoder(BaseTranslator):
             values_in = list(texts)
         values_in = ["" if value is None else str(value) for value in values_in]
 
-        effective_task = self.task if task is None else str(task).lower()
-        if effective_task not in {"document", "query", "generic"}:
-            raise ValueError("task must be 'document', 'query', or 'generic'.")
+        effective_task = self.task
         if int(model_batch_size) <= 0:
             raise ValueError("model_batch_size must be a positive integer.")
 
@@ -250,12 +242,11 @@ class SentenceTransformerEncoder(BaseTranslator):
         model = self._runtime_component(device=resolved_device)
         tokenizer = _sentence_tokenizer(model)
         context_limit = self._context_limit(model=model, tokenizer=tokenizer)
-        use_configured_prompt = task is None or effective_task == self.task
         prompt_name, prompt, prompt_prefix = _resolve_prompt(
             model,
-            task=cast(SentenceTask, effective_task),
-            prompt_name=self.prompt_name if use_configured_prompt else None,
-            prompt=self.prompt if use_configured_prompt else None,
+            task=effective_task,
+            prompt_name=self.prompt_name,
+            prompt=self.prompt,
         )
 
         counted_texts = [f"{prompt_prefix}{text}" for text in values_in]
@@ -293,7 +284,6 @@ class SentenceTransformerEncoder(BaseTranslator):
             model_batch_size=int(model_batch_size),
             prompt_name=prompt_name,
             prompt=prompt,
-            task=cast(SentenceTask, effective_task),
         )
         if values.ndim != 2 or values.shape[0] != len(values_in):
             raise TransformerResourceError(
@@ -326,7 +316,6 @@ class SentenceTransformerEncoder(BaseTranslator):
                 f"SentenceTransformerEncoder source batch is missing columns {missing}."
             )
 
-        task = request.params.get("task")
         device = str(request.params.get("device", "auto"))
         model_batch_size = int(request.params.get("model_batch_size", 32))
         texts = frame[self.text_field].fillna("").astype(str).tolist()
@@ -336,7 +325,6 @@ class SentenceTransformerEncoder(BaseTranslator):
         ]
         values, token_counts, context_limit = self._translate_texts(
             texts,
-            task=None if task is None else str(task),
             device=device,
             model_batch_size=model_batch_size,
             context_examples=context_examples,
@@ -370,7 +358,6 @@ class SentenceTransformerEncoder(BaseTranslator):
         model_batch_size: int,
         prompt_name: str | None,
         prompt: str | None,
-        task: SentenceTask | None = None,
     ) -> np.ndarray:
         kwargs = {
             "batch_size": model_batch_size,
@@ -383,12 +370,11 @@ class SentenceTransformerEncoder(BaseTranslator):
             kwargs["prompt_name"] = prompt_name
         if prompt is not None:
             kwargs["prompt"] = prompt
-        effective_task = self.task if task is None else task
-        if effective_task == "document" and callable(
+        if self.task == "document" and callable(
             getattr(model, "encode_document", None)
         ):
             values = model.encode_document(list(texts), **kwargs)
-        elif effective_task == "query" and callable(
+        elif self.task == "query" and callable(
             getattr(model, "encode_query", None)
         ):
             values = model.encode_query(list(texts), **kwargs)
@@ -419,6 +405,15 @@ class SentenceTransformerEncoder(BaseTranslator):
     def download(self) -> str | None:
         self._runtime_component(device="cpu")
         return self.resolved_revision
+
+    def prepare_for_freeze(self) -> None:
+        """Resolve the exact model revision before the durable snapshot is committed."""
+        self._runtime_component(device="cpu")
+        if self.resolved_revision is None and not self.save_model:
+            raise OperatorError(
+                "SentenceTransformerEncoder could not resolve an exact model revision; "
+                "the translator cannot be frozen reproducibly."
+            )
 
     def to_json_state(self) -> dict[str, Any]:
         return {
@@ -581,7 +576,12 @@ class SentenceTransformerEncoder(BaseTranslator):
         backbone = _sentence_backbone(model)
         commit = resolved_commit_hash(backbone, tokenizer)
         if commit:
-            self.resolved_revision = commit
+            if self.resolved_revision is None:
+                self.resolved_revision = commit
+            elif str(self.resolved_revision) != str(commit):
+                raise TransformerResourceError(
+                    "Loaded SentenceTransformers revision does not match the frozen revision."
+                )
         self._warned_unpinned = warn_if_unpinned(
             model_name=self.model,
             requested_revision=self.revision,

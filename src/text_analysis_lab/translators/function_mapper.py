@@ -21,6 +21,7 @@ from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
     ColumnRequest,
+    ExecutionCapabilities,
     InputBatch,
     OutputMap,
     OutputSpec,
@@ -56,16 +57,20 @@ class FunctionMapper(BaseTranslator):
 
     operation_type = "translate"
 
+    frozen_runtime_fields = frozenset(['_source_type','_data_columns','_metadata_columns','_metadata_mode'])
+
     def __init__(
         self,
         function: MapperFunction | None,
         *,
+        save_function: bool = False,
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
         if function is not None and not callable(function):
             raise TypeError("FunctionMapper function must be callable.")
         self.function: MapperFunction | None = function
+        self.save_function = bool(save_function)
         self._source_type: str | None = None
         self._data_columns: tuple[str, ...] | None = None
         self._metadata_columns: tuple[str, ...] | None = None
@@ -113,12 +118,46 @@ class FunctionMapper(BaseTranslator):
             reserved_columns=(),
         )
 
+    def execution_capabilities(
+        self,
+        *,
+        project: Any | None = None,
+    ) -> ExecutionCapabilities:
+        _ = project
+        if not self.save_function:
+            reason = (
+                "FunctionMapper callable persistence/reuse was not opted into. "
+                "Set save_function=True to snapshot and reuse the callable at the "
+                "user's own determinism/reproducibility risk."
+            )
+            return ExecutionCapabilities(
+                reusable=False,
+                artifact=True,
+                native=True,
+                portable=False,
+                reasons=(reason,),
+            )
+        return ExecutionCapabilities(
+            reusable=True,
+            artifact=True,
+            native=True,
+            portable=True,
+            reasons=(
+                "FunctionMapper reuse is user-asserted; TeAL preserves the exact "
+                "serialized callable but cannot certify arbitrary Python code as deterministic.",
+            ),
+        )
+
     @property
     def supports_parallel_translate(self) -> bool:
         return True
 
     def supports_resume(self, *, mode: TranslationMode, route: RunRoute) -> bool:
-        return mode == "translate" and route in {"sequential", "parallel"}
+        return (
+            self.save_function
+            and mode == "translate"
+            and route in {"sequential", "parallel"}
+        )
 
     def output_specs(
         self,
@@ -301,7 +340,8 @@ class FunctionMapper(BaseTranslator):
         if mode != "translate":
             raise OperatorError("FunctionMapper workers support translate mode only.")
         worker = FunctionMapper(
-            cloudpickle.loads(cloudpickle.dumps(self._require_function()))
+            cloudpickle.loads(cloudpickle.dumps(self._require_function())),
+            save_function=self.save_function,
         )
         worker._source_type = self._source_type
         worker._data_columns = self._data_columns
@@ -310,14 +350,15 @@ class FunctionMapper(BaseTranslator):
         return worker
 
     def to_json_state(self) -> dict[str, Any]:
-        return {}
+        return {"save_function": self.save_function}
 
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> FunctionMapper:
-        _ = state
-        return cls(None)
+        return cls(None, save_function=bool(state.get("save_function", False)))
 
     def save_assets(self, assets_dir: Path) -> Mapping[str, Any]:
+        if not self.save_function:
+            return {}
         assets_dir.mkdir(parents=True, exist_ok=True)
         path = assets_dir / _FUNCTION_ASSET
         payload = cloudpickle.dumps(self._require_function())
@@ -334,6 +375,14 @@ class FunctionMapper(BaseTranslator):
         return {"function_file": path.name}
 
     def load_assets(self, assets_dir: Path, manifest: Mapping[str, Any]) -> None:
+        if not self.save_function:
+            if manifest:
+                raise OperatorError(
+                    "FunctionMapper configured with save_function=False must not have "
+                    "a persisted callable asset."
+                )
+            self.function = None
+            return
         filename = manifest.get("function_file")
         if not isinstance(filename, str) or not filename:
             raise OperatorError(
@@ -362,6 +411,7 @@ class FunctionMapper(BaseTranslator):
         assets = dict(self.save_assets(intermediate_dir))
         state = {
             "operator_id": operator_id,
+            "save_function": self.save_function,
             "source_type": self._source_type,
             "data_columns": None
             if self._data_columns is None
@@ -389,7 +439,11 @@ class FunctionMapper(BaseTranslator):
         state = json.loads(
             (intermediate_dir / "state.json").read_text(encoding="utf-8")
         )
-        obj = cls(None, operator_id=operator_id)
+        obj = cls(
+            None,
+            save_function=bool(state.get("save_function", False)),
+            operator_id=operator_id,
+        )
         raw_source_type = state.get("source_type")
         obj._source_type = None if raw_source_type is None else str(raw_source_type)
         raw_columns = state.get("data_columns")

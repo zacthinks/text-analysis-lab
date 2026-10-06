@@ -105,6 +105,7 @@ from text_analysis_lab.core.types import (
     MetadataMode,
     OperationStatus,
     OperationType,
+    OperatorReuseStatus,
     OperatorSnapshotStatus,
     QueryForm,
 )
@@ -479,6 +480,13 @@ class Project:
                     f"Operator {ref.operator_id} is not loadable because "
                     f"snapshot_status={snapshot_status!r}."
                 )
+            reuse_status = str(row.get("reuse_status", "legacy_unknown"))
+            if reuse_status == "legacy_unknown":
+                raise OperatorError(
+                    f"Operator {ref.operator_id} is a pre-strict legacy snapshot. "
+                    "Use legacy_operator_status(...) and migrate_legacy_operator(...) "
+                    "before requesting it as a strict frozen operator."
+                )
             return ref
 
         row = self.catalog.resolve_operator(ref, include_deleted=include_deleted)
@@ -488,6 +496,13 @@ class Project:
             raise OperatorError(
                 f"Operator {operator_id} is not loadable because "
                 f"snapshot_status={snapshot_status!r}."
+            )
+        reuse_status = str(row.get("reuse_status", "legacy_unknown"))
+        if reuse_status == "legacy_unknown":
+            raise OperatorError(
+                f"Operator {operator_id} is a pre-strict legacy snapshot. "
+                "Use legacy_operator_status(...) and migrate_legacy_operator(...) "
+                "before requesting it as a strict frozen operator."
             )
         operator_dir = self.storage.operator_dir(operator_id)
         if not operator_dir.exists():
@@ -500,6 +515,7 @@ class Project:
         include_deleted: bool = False,
         operation_type: OperationType | str | None = None,
         snapshot_status: OperatorSnapshotStatus | str | None = None,
+        reuse_status: OperatorReuseStatus | str | None = None,
         include_aliases: bool = True,
     ) -> list[dict[str, Any]]:
         """Return catalog records for project operators."""
@@ -507,6 +523,7 @@ class Project:
             include_deleted=include_deleted,
             operation_type=operation_type,
             snapshot_status=snapshot_status,
+            reuse_status=reuse_status,
         )
         if not include_aliases:
             return rows
@@ -517,6 +534,28 @@ class Project:
             }
             for row in rows
         ]
+
+    def legacy_operator_status(self, ref: BaseOperator | str) -> str:
+        """Classify a pre-strict operator snapshot for temporary v1 compatibility."""
+        operator_id = self.resolve_operator_id(ref)
+        row = self.catalog.resolve_operator(operator_id, include_deleted=False)
+        reuse_status = str(row.get("reuse_status", "legacy_unknown"))
+        if reuse_status != "legacy_unknown":
+            return reuse_status
+        from text_analysis_lab.core.legacy import classify_v1_operator_snapshot
+
+        return classify_v1_operator_snapshot(self.storage.operator_dir(operator_id))
+
+    def migrate_legacy_operator(self, ref: BaseOperator | str) -> BaseOperator:
+        """Create a new strict v2 operator from an exactly migratable v1 snapshot.
+
+        The legacy operator remains untouched for historical provenance.
+        Ambiguous snapshots raise instead of being silently reinterpreted.
+        """
+        operator_id = self.resolve_operator_id(ref)
+        from text_analysis_lab.core.legacy import migrate_v1_operator_snapshot
+
+        return migrate_v1_operator_snapshot(self, operator_id)
 
     def add_operator_alias(self, ref: BaseOperator | str, alias: str) -> None:
         """Add a project-level alias for a frozen operator."""

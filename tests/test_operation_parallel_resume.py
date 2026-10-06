@@ -1012,7 +1012,7 @@ def test_function_mapper_cloudpickle_freezes_captured_state(tmp_path: Path) -> N
     mapper_fn = lambda packet: {
         "data": pd.DataFrame({"value": packet["data"]["value"] + offset})
     }
-    mapper = FunctionMapper(mapper_fn)
+    mapper = FunctionMapper(mapper_fn, save_function=True)
     operator_dir = tmp_path / "mapper"
     mapper.save_to_dir(operator_dir, operator_id="op_000002")
 

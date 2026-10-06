@@ -69,6 +69,8 @@ class DictionaryTranslator(BaseTranslator):
 
     operation_type = "translate"
 
+    frozen_runtime_fields = frozenset(['_source_features','_projection','_matched_feature_mask','_output_columns'])
+
     def __init__(
         self,
         dictionary: DictionarySpec,

@@ -48,6 +48,8 @@ class CountVectorizer(BaseTranslator):
 
     operation_type = "translate"
 
+    frozen_runtime_fields = frozenset(['_vectorizer'])
+
     def __init__(
         self,
         *,
