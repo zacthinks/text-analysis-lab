@@ -68,8 +68,10 @@ class _PipeOnlyNLP:
         self.docs_by_text = docs_by_text
         self.pipe_calls = []
 
-    def to_bytes(self):
-        return b"fake-spacy-pipeline"
+    def to_disk(self, path):
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "fake_model.txt").write_text("fake-spacy-pipeline", encoding="utf-8")
 
     def __call__(self, text):  # pragma: no cover - should never be reached
         raise AssertionError("SpacyTranslator must use nlp.pipe(), not nlp(text).")
@@ -301,7 +303,7 @@ def test_spacy_translator_rejects_pipeline_without_sentence_boundaries(
         )
 
 
-def test_spacy_strict_freeze_pins_and_verifies_pipeline_identity(
+def test_spacy_strict_freeze_persists_operator_local_pipeline_asset(
     monkeypatch, tmp_path: Path
 ) -> None:
     import text_analysis_lab.translators.spacy_translator as module
@@ -318,21 +320,16 @@ def test_spacy_strict_freeze_pins_and_verifies_pipeline_identity(
 
     assert translator.is_frozen
     assert translator.resolved_spacy_version == "3.test"
-    assert translator.resolved_model_hash == module._spacy_pipeline_hash(fake_nlp)
+    assert (path / "assets" / "spacy_model" / "fake_model.txt").exists()
 
     restored = BaseOperator.load_from_dir(path)
     assert isinstance(restored, SpacyTranslator)
     assert restored.is_frozen
     assert restored.resolved_spacy_version == "3.test"
-    assert restored.resolved_model_hash == translator.resolved_model_hash
+    assert restored._frozen_model_path == str(path / "assets" / "spacy_model")
 
     restored.translate([doc.text])
 
-    changed = _PipeOnlyNLP({doc.text: doc})
-    monkeypatch.setattr(changed, "to_bytes", lambda: b"different-pipeline")
-    monkeypatch.setattr(module, "_load_spacy_pipeline", lambda model, disable: changed)
-    with pytest.raises(Exception, match="exact pipeline"):
-        restored.translate([doc.text])
 
 
 def test_legacy_frozen_spacy_snapshot_without_identity_is_not_reusable(
@@ -346,7 +343,7 @@ def test_legacy_frozen_spacy_snapshot_without_identity_is_not_reusable(
 
     legacy = SpacyTranslator.from_json_state({"model": "fake"})
     legacy.is_frozen = True
-    with pytest.raises(Exception, match="missing exact spaCy resource identity"):
+    with pytest.raises(Exception, match="missing an operator-local spaCy pipeline asset"):
         legacy.translate([doc.text])
 
 
