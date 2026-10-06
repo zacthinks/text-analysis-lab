@@ -662,14 +662,29 @@ def _spacy_resource_identity(model: str, nlp: Any) -> dict[str, str]:
             package_version = importlib.metadata.version(model)
         except importlib.metadata.PackageNotFoundError:
             package_version = str(getattr(nlp, "meta", {}).get("version", "unknown"))
-        return {"kind": "package", "name": model, "package_version": package_version}
+        static_path = _spacy_static_resource_path(model, nlp)
+        if static_path is None:
+            raise OperatorError(
+                f"SpacyTranslator could not locate the static files for installed "
+                f"package {model!r}. Use save_model=True to vendor the exact pipeline."
+            )
+        return {
+            "kind": "package",
+            "name": model,
+            "package_version": package_version,
+            "static_resource_sha256": _directory_sha256(static_path),
+        }
     static_path = _spacy_static_resource_path(model, nlp)
-    if static_path is None:
+    if static_path is not None:
         raise OperatorError(
-            f"SpacyTranslator could not determine a stable static resource identity "
-            f"for model {model!r}. Use save_model=True to vendor the exact pipeline."
+            f"SpacyTranslator model {model!r} is an opaque local-path resource. "
+            "Reference mode requires a reconstructable provider/package identity; "
+            "use save_model=True to vendor the exact local pipeline."
         )
-    return {"kind": "path", "path": str(static_path), "sha256": _directory_sha256(static_path)}
+    raise OperatorError(
+        f"SpacyTranslator could not determine a reconstructable resource identity "
+        f"for model {model!r}. Use save_model=True to vendor the exact pipeline."
+    )
 
 
 def _verify_spacy_resource_identity(model: str, identity: Mapping[str, str]) -> None:
@@ -677,6 +692,7 @@ def _verify_spacy_resource_identity(model: str, identity: Mapping[str, str]) -> 
     if kind == "package":
         name = str(identity.get("name", model))
         expected = str(identity.get("package_version", ""))
+        expected_hash = str(identity.get("static_resource_sha256", ""))
         try:
             observed = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError as exc:
@@ -687,16 +703,21 @@ def _verify_spacy_resource_identity(model: str, identity: Mapping[str, str]) -> 
             raise OperatorError(
                 f"Frozen spaCy package {name!r} requires version {expected!r}; found {observed!r}."
             )
-        return
-    if kind == "path":
-        expected_path = Path(str(identity.get("path", ""))).expanduser()
-        expected_hash = str(identity.get("sha256", ""))
-        if not expected_path.is_dir():
-            raise OperatorError(f"Frozen spaCy model path is unavailable: {expected_path}.")
-        observed_hash = _directory_sha256(expected_path.resolve())
+        try:
+            nlp = _load_spacy_pipeline(name, ())
+        except Exception as exc:
+            raise OperatorError(
+                f"Frozen spaCy package {name!r} could not be loaded for static-resource verification."
+            ) from exc
+        static_path = _spacy_static_resource_path(name, nlp)
+        if static_path is None:
+            raise OperatorError(
+                f"Frozen spaCy package {name!r} no longer exposes a static model resource path."
+            )
+        observed_hash = _directory_sha256(static_path)
         if observed_hash != expected_hash:
             raise OperatorError(
-                f"Frozen spaCy model path {expected_path} no longer matches the recorded static resource fingerprint."
+                f"Frozen spaCy package {name!r} no longer matches the recorded static-resource fingerprint."
             )
         return
     raise OperatorError(f"Unsupported frozen spaCy resource identity kind {kind!r}.")
