@@ -261,7 +261,11 @@ def test_real_dask_spacy_failure_then_parallel_resume_after_model_becomes_availa
         source = _seed_documents(project, rows)
         with pytest.raises(Exception, match="Could not load spaCy pipeline"):
             project.translate(
-                SpacyTranslator(model=str(missing_model_dir), spacy_batch_size=2),
+                SpacyTranslator(
+                    model=str(missing_model_dir),
+                    spacy_batch_size=2,
+                    save_model=True,
+                ),
                 source,
                 workers=2,
                 batch_size=2,
