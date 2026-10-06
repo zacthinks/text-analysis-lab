@@ -29,6 +29,7 @@ from text_analysis_lab.translators.matrix_row_aggregator import MatrixRowAggrega
 from text_analysis_lab.translators.matrix_transpose import MatrixTranspose
 from text_analysis_lab.translators.pdf_text_extractor import PdfTextExtractor
 from text_analysis_lab.translators.regex_cleaner import RegexCleaner, RegexReplaceRule
+from text_analysis_lab.translators.semantic_role_head_resolver import SemanticRoleHeadResolver
 from text_analysis_lab.translators.semantic_role_labeler import SemanticRoleLabeler
 from text_analysis_lab.translators.sentence_transformer_encoder import (
     SentenceTransformerEncoder,
@@ -79,6 +80,7 @@ __all__ = [
     "PdfTextExtractor",
     "RegexCleaner",
     "RegexReplaceRule",
+    "SemanticRoleHeadResolver",
     "SemanticRoleLabeler",
     "SentenceTransformerEncoder",
     "SpacyTranslator",

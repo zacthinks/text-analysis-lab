@@ -147,11 +147,11 @@ def content_head_indices(
     text: Sequence[str],
     role: str,
 ) -> tuple[int, ...]:
-    """Return sentence-relative content-head indices for one SRL span.
+    """Return legacy TeAL content-head indices for one SRL span.
 
-    The root of the span's dependency structure is used first. If that root is a function
-    word, the nearest content-bearing descendant inside the span is selected. Coordinated
-    heads are retained as additional heads for non-predicate roles.
+    This helper intentionally preserves the exact pre-configurable behavior for
+    callers that still depend on it. New BoI-aware code should use the
+    configurable semantic-head resolver directly.
     """
 
     if start < 0 or end > len(token_ids) or start >= end:
@@ -212,8 +212,6 @@ def content_head_indices(
 
     heads = [root]
     if role != "V":
-        # Retain every coordinated item whose dependency ancestry remains inside the span
-        # and ultimately reaches the selected root or another retained conjunction.
         changed = True
         while changed:
             changed = False

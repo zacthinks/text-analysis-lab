@@ -19,7 +19,11 @@ from text_analysis_lab.core.operator import (
 from text_analysis_lab.linguistics.cache import user_cache_paths
 from text_analysis_lab.linguistics.coreference.runtime import FastCorefRuntime
 from text_analysis_lab.linguistics.device import resolve_devices
-from text_analysis_lab.linguistics.srl.structures import content_head_indices
+from text_analysis_lab.linguistics.heads import (
+    SemanticHeadRules,
+    load_semantic_head_rules,
+    resolve_semantic_head_indices,
+)
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -69,6 +73,7 @@ class CoreferenceResolver(BaseTranslator):
         compile_model: bool = False,
         max_tokens_in_batch: int = 2_000,
         show_progress: bool = False,
+        head_rules: SemanticHeadRules | Mapping[str, Any] | str | None = None,
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
@@ -96,6 +101,7 @@ class CoreferenceResolver(BaseTranslator):
         self.compile_model = bool(compile_model)
         self.max_tokens_in_batch = int(max_tokens_in_batch)
         self.show_progress = bool(show_progress)
+        self.head_rules = load_semantic_head_rules(head_rules)
 
 
     def translate(
@@ -297,11 +303,16 @@ class CoreferenceResolver(BaseTranslator):
             "compile_model": self.compile_model,
             "max_tokens_in_batch": self.max_tokens_in_batch,
             "show_progress": self.show_progress,
+            "head_rules": self.head_rules.to_dict(),
         }
 
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> CoreferenceResolver:
-        return cls(**cast(dict[str, Any], dict(state)))
+        values = cast(dict[str, Any], dict(state))
+        rules = values.get("head_rules")
+        if rules is not None:
+            values["head_rules"] = SemanticHeadRules.from_dict(rules)
+        return cls(**values)
 
 
 
@@ -436,6 +447,7 @@ def _translate_frames(
                 end_char=int(mention.end_char),
                 sentence_key=translator.sentence_key,
                 token_key=translator.token_key,
+                head_rules=translator.head_rules,
             )
             mention_keys.append(
                 {
@@ -534,6 +546,7 @@ def _align_mention(
     end_char: int,
     sentence_key: str,
     token_key: str,
+    head_rules: SemanticHeadRules,
 ) -> dict[str, Any]:
     empty = {
         "sentence_id": None,
@@ -567,7 +580,7 @@ def _align_mention(
     span_end = max(span_positions) + 1
     head_index: int | None = None
     try:
-        heads = content_head_indices(
+        heads = resolve_semantic_head_indices(
             start=span_start,
             end=span_end,
             token_ids=[int(v) for v in sentence[token_key]],
@@ -577,7 +590,13 @@ def _align_mention(
             dependencies=[None if pd.isna(v) else str(v) for v in sentence["dep"]],
             pos=[None if pd.isna(v) else str(v) for v in sentence["pos"]],
             text=[str(v) for v in sentence["text"]],
-            role="COREF",
+            lemmas=[None if pd.isna(v) else str(v) for v in sentence["lemma"]],
+            ent_types=[
+                None if pd.isna(v) else str(v) for v in sentence["ent_type"]
+            ],
+            source="coreference",
+            role=None,
+            rules=head_rules,
         )
         head_index = heads[0] if heads else None
     except (ValueError, IndexError, KeyError):

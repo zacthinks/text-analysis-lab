@@ -9,6 +9,7 @@ import pytest
 import text_analysis_lab as teal
 from text_analysis_lab.translators import (
     CoreferenceResolver,
+    SemanticRoleHeadResolver,
     SemanticRoleLabeler,
     WordSenseDisambiguator,
 )
@@ -182,7 +183,12 @@ def test_real_unit10_models_on_one_sentence(tmp_path: Path) -> None:
             {"sentences": sentences, "tokens": tokens},
         )
         assert srl["predicates"].n_rows >= 2
-        assert srl["roles"].n_rows >= 2
+        assert srl["role_spans"].n_rows >= 2
+        role_heads = project.translate(
+            SemanticRoleHeadResolver(),
+            {"role_spans": srl["role_spans"], "tokens": tokens},
+        )
+        assert role_heads["role_heads"].n_rows >= 2
 
         tiny_tokens = project.subset(
             tokens,

@@ -9,6 +9,7 @@ import pytest
 
 from text_analysis_lab.core.operator import InputBatch, TranslationRequest
 from text_analysis_lab.translators.coreference_resolver import CoreferenceResolver
+from text_analysis_lab.translators.semantic_role_head_resolver import SemanticRoleHeadResolver
 from text_analysis_lab.translators.semantic_role_labeler import SemanticRoleLabeler
 from text_analysis_lab.translators.word_sense_disambiguator import (
     WordSenseDisambiguator,
@@ -93,7 +94,7 @@ def test_coreference_resolver_keeps_exact_spans_and_aligns_dependency_head(monke
     assert data["is_first_mention"].tolist() == [True, False]
 
 
-def test_semantic_role_labeler_emits_predicates_roles_and_heads(monkeypatch):
+def test_semantic_role_labeler_preserves_spans_then_resolves_heads(monkeypatch):
     import text_analysis_lab.translators.semantic_role_labeler as module
     from text_analysis_lab.linguistics.srl.runtime import SrlTokenPrediction
     from text_analysis_lab.linguistics.srl.structures import BioSpan
@@ -165,10 +166,35 @@ def test_semantic_role_labeler_emits_predicates_roles_and_heads(monkeypatch):
     assert result.outputs["predicates"]["keys"].to_dict("records") == [
         {"row_id": 2, "sentence_id": 0, "predicate_id": 0}
     ]
-    roles = result.outputs["roles"]["data"]
-    assert roles["role"].tolist() == ["ARG0", "V", "ARGM-MNR"]
-    assert roles["head_text"].tolist() == ["Alice", "runs", "quickly"]
-    assert roles["token_start_id"].tolist() == [0, 1, 2]
+    spans = pd.concat(
+        [
+            result.outputs["role_spans"]["keys"],
+            result.outputs["role_spans"]["data"],
+        ],
+        axis=1,
+    )
+    assert spans["role"].tolist() == ["ARG0", "V", "ARGM-MNR"]
+    assert spans["token_start_id"].tolist() == [0, 1, 2]
+    assert "head_token_id" not in spans.columns
+
+    heads = SemanticRoleHeadResolver().translate_batch(
+        {
+            "role_spans": _packet(
+                "role_spans",
+                ("row_id", "sentence_id", "predicate_id", "role_id"),
+                spans,
+            ),
+            "tokens": _packet(
+                "tokens",
+                ("row_id", "sentence_id", "token_id"),
+                tokens,
+            ),
+        },
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["role_heads"]["data"]
+    assert heads["role"].tolist() == ["ARG0", "V", "ARGM-MNR"]
+    assert heads["head_text"].tolist() == ["Alice", "runs", "quickly"]
 
 
 @dataclass
