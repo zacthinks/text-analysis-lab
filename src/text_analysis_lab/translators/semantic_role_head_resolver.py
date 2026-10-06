@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
+import json
+
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
@@ -19,7 +21,7 @@ from text_analysis_lab.core.operator import (
 from text_analysis_lab.linguistics.heads import (
     SemanticHeadRules,
     load_semantic_head_rules,
-    resolve_semantic_head_indices,
+    resolve_semantic_heads,
 )
 
 if TYPE_CHECKING:
@@ -31,11 +33,15 @@ ROLE_HEADS = "role_heads"
 
 ROLE_HEAD_DATA_COLUMNS = (
     "role",
+    "syntactic_root_token_id",
     "head_token_id",
     "head_text",
     "head_lemma",
     "head_pos",
     "ent_type",
+    "rule",
+    "resolution_path",
+    "rules_fingerprint",
 )
 
 
@@ -200,7 +206,7 @@ class SemanticRoleHeadResolver(BaseTranslator):
                 )
             start = min(span_positions)
             end = max(span_positions) + 1
-            heads = resolve_semantic_head_indices(
+            resolutions = resolve_semantic_heads(
                 start=start,
                 end=end,
                 token_ids=token_ids,
@@ -229,8 +235,25 @@ class SemanticRoleHeadResolver(BaseTranslator):
                 role=str(span["role"]),
                 rules=self.head_rules,
             )
-            for head_id, head_index in enumerate(heads):
-                head = sentence.iloc[int(head_index)]
+            for head_id, resolution in enumerate(resolutions):
+                head = sentence.iloc[int(resolution.semantic_head_index)]
+                syntactic_root = sentence.iloc[int(resolution.syntactic_root_index)]
+                resolution_path = json.dumps(
+                    [
+                        {
+                            "rule": move.rule_id,
+                            "kind": move.kind,
+                            "from_token_id": int(
+                                sentence.iloc[int(move.from_index)][self.token_key]
+                            ),
+                            "to_token_id": int(
+                                sentence.iloc[int(move.to_index)][self.token_key]
+                            ),
+                        }
+                        for move in resolution.resolution_path
+                    ],
+                    separators=(",", ":"),
+                )
                 head_keys.append(
                     {
                         **key_record,
@@ -242,6 +265,9 @@ class SemanticRoleHeadResolver(BaseTranslator):
                 head_data.append(
                     {
                         "role": str(span["role"]),
+                        "syntactic_root_token_id": int(
+                            syntactic_root[self.token_key]
+                        ),
                         "head_token_id": int(head[self.token_key]),
                         "head_text": str(head["text"]),
                         "head_lemma": None
@@ -253,6 +279,9 @@ class SemanticRoleHeadResolver(BaseTranslator):
                         "ent_type": None
                         if pd.isna(head["ent_type"])
                         else str(head["ent_type"]),
+                        "rule": resolution.rule_id,
+                        "resolution_path": resolution_path,
+                        "rules_fingerprint": resolution.rules_fingerprint,
                     }
                 )
 
