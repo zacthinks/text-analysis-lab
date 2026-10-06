@@ -84,13 +84,25 @@ class SemanticRoleHeadResolver(BaseTranslator):
             )
         if sentence_keys is None:
             columns = [str(value) for value in role_spans.columns]
-            if "predicate_id" not in columns:
+            required_key_columns = {self.sentence_key, "predicate_id", "role_id"}
+            missing = sorted(required_key_columns - set(columns))
+            if missing:
                 raise ValueError(
-                    "Cannot infer sentence_keys because role_spans has no "
-                    "'predicate_id' column."
+                    "Cannot infer sentence_keys because role_spans is missing "
+                    f"key column(s) {missing}."
                 )
+            sentence_position = columns.index(self.sentence_key)
             predicate_position = columns.index("predicate_id")
-            keys = columns[:predicate_position]
+            role_position = columns.index("role_id")
+            if not (
+                predicate_position == sentence_position + 1
+                and role_position == predicate_position + 1
+            ):
+                raise ValueError(
+                    "Cannot infer sentence_keys: expected role-span key columns "
+                    "to end with [sentence_key, 'predicate_id', 'role_id']."
+                )
+            keys = columns[: sentence_position + 1]
         else:
             keys = [str(value) for value in sentence_keys]
         if not keys or keys[-1] != self.sentence_key:
