@@ -185,14 +185,14 @@ def test_boi_contract_fixture_round_trips_through_project(tmp_path: Path) -> Non
             coref_failures=_frame(coref_failures),
         )
 
-        assert role_heads.primary_key == (
+        assert role_heads.primary_key == [
             "row_id",
             "sentence_id",
             "predicate_id",
             "role_id",
             "head_id",
-        )
-        assert senses.primary_key == ("row_id", "sentence_id", "token_id")
+        ]
+        assert senses.primary_key == ["row_id", "sentence_id", "token_id"]
         assert role_heads.descriptor["lineage"]["basis_artifact_ids"] == [
             role_spans.artifact_id
         ]
