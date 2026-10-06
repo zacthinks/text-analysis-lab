@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 import text_analysis_lab as teal
-from text_analysis_lab.core.errors import OperatorError
+from text_analysis_lab.core.errors import FrozenOperatorError, OperatorError
 from text_analysis_lab.core.operator import InputBatch, TranslationRequest
 from text_analysis_lab.translators import (
     ContextualTransformer,
@@ -286,16 +286,31 @@ def test_transformer_operation_params_match_standalone_runtime_contract(monkeypa
 
     sentence = SentenceTransformerEncoder("example/sbert", revision=_COMMIT)
     assert sentence.validate_operation_params(
-        {"task": "query"}, sources={"source": source}, mode="translate"
+        {}, sources={"source": source}, mode="translate"
     ) == {
-        "task": "query",
         "device": "resolved:auto",
         "model_batch_size": 32,
     }
-    with pytest.raises(OperatorError, match="task must be"):
+    with pytest.raises(OperatorError, match="unknown operation parameter"):
         sentence.validate_operation_params(
-            {"task": "invalid"}, sources={"source": source}, mode="translate"
+            {"task": "query"}, sources={"source": source}, mode="translate"
         )
+
+
+
+def test_sentence_transformer_frozen_task_cannot_be_mutated() -> None:
+    encoder = SentenceTransformerEncoder(
+        "example/sbert", revision=_COMMIT, task="document"
+    )
+    encoder.freeze(operator_id="op_sentence")
+
+    with pytest.raises(FrozenOperatorError, match="scientific field 'task'"):
+        encoder.task = "query"
+
+    # Even a low-level bypass must be caught by snapshot-integrity validation.
+    object.__setattr__(encoder, "task", "query")
+    with pytest.raises(FrozenOperatorError, match="durable scientific-state snapshot"):
+        encoder.assert_frozen_scientific_state()
 
 
 def test_contextual_transformer_emits_model_tokens_and_aligned_embeddings(monkeypatch):
