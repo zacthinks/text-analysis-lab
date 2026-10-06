@@ -11,6 +11,7 @@ from text_analysis_lab.core.operator import InputBatch, TranslationRequest
 from text_analysis_lab.translators.coreference_resolver import CoreferenceResolver
 from text_analysis_lab.translators.semantic_role_head_resolver import SemanticRoleHeadResolver
 from text_analysis_lab.translators.semantic_role_labeler import SemanticRoleLabeler
+from text_analysis_lab.translators.sense_selector import SenseSelector
 from text_analysis_lab.translators.word_sense_disambiguator import (
     WordSenseDisambiguator,
 )
@@ -288,8 +289,40 @@ def test_word_sense_disambiguator_targets_all_wordnet_eligible_tokens(
     senses = result.outputs["senses"]["data"]
     assert senses["surface_form"].tolist() == ["Dogs", "run"]
     assert senses["normalized_score"].tolist() == pytest.approx([0.8, 0.8])
-    candidates = result.outputs["candidates"]["keys"]
-    assert candidates.shape[0] == 4
+    candidate_frame = pd.concat(
+        [
+            result.outputs["candidates"]["keys"],
+            result.outputs["candidates"]["data"],
+        ],
+        axis=1,
+    )
+    assert candidate_frame.shape[0] == 4
+
+    reselected = SenseSelector().translate_batch(
+        {
+            "candidates": _packet(
+                "candidates",
+                ("row_id", "sentence_id", "token_id", "candidate_id"),
+                candidate_frame,
+            )
+        },
+        mode="translate",
+        request=TranslationRequest(),
+    ).outputs["senses"]
+    reselected_frame = pd.concat(
+        [reselected["keys"], reselected["data"]],
+        axis=1,
+    )
+    original_senses = pd.concat(
+        [result.outputs["senses"]["keys"], result.outputs["senses"]["data"]],
+        axis=1,
+    )
+    pd.testing.assert_frame_equal(
+        reselected_frame[original_senses.columns].reset_index(drop=True),
+        original_senses.reset_index(drop=True),
+        check_dtype=False,
+    )
+
     assert "unresolved" in result.outputs
     assert result.outputs["unresolved"]["keys"].empty
     assert result.outputs["unresolved"]["data"].empty
