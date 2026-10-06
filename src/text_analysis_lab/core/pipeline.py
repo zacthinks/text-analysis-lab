@@ -876,7 +876,18 @@ class Pipeline:
         if len(source_labels) <= len(parameter_names):
             for chosen in permutations(parameter_names, len(source_labels)):
                 candidate = dict(zip(source_labels, chosen, strict=True))
-                if all(
+                assigned = set(keyword_bound) | set(chosen)
+                required_satisfied = all(
+                    name in assigned
+                    or parameter.default is not inspect.Parameter.empty
+                    or parameter.kind
+                    in {
+                        inspect.Parameter.VAR_POSITIONAL,
+                        inspect.Parameter.VAR_KEYWORD,
+                    }
+                    for name, parameter in params.items()
+                )
+                if required_satisfied and all(
                     Pipeline._value_matches_annotation(
                         unmatched[label],
                         hints.get(parameter_name, available[parameter_name].annotation),
@@ -907,13 +918,27 @@ class Pipeline:
         }
         args: list[Any] = []
         kwargs = dict(keyword_bound)
-        for name, parameter in params.items():
-            if name not in by_parameter:
-                continue
-            value = by_parameter[name]
-            if parameter.kind == inspect.Parameter.POSITIONAL_ONLY:
-                args.append(value)
+        positional_only = [
+            (name, parameter)
+            for name, parameter in params.items()
+            if parameter.kind == inspect.Parameter.POSITIONAL_ONLY
+        ]
+        last_positional = max(
+            (
+                index
+                for index, (name, _) in enumerate(positional_only)
+                if name in by_parameter
+            ),
+            default=-1,
+        )
+        for name, parameter in positional_only[: last_positional + 1]:
+            if name in by_parameter:
+                args.append(by_parameter[name])
             else:
+                args.append(parameter.default)
+
+        for name, value in by_parameter.items():
+            if params[name].kind != inspect.Parameter.POSITIONAL_ONLY:
                 kwargs[name] = value
         return translator.translate(*args, **kwargs)
 
