@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 import text_analysis_lab as teal
-from text_analysis_lab.core.errors import OperatorError
+from text_analysis_lab.core.errors import FrozenOperatorError, OperatorError
 from text_analysis_lab.core.operator import InputBatch, TranslationRequest
 from text_analysis_lab.translators import (
     ContextualTransformer,
@@ -297,6 +297,23 @@ def test_transformer_operation_params_match_standalone_runtime_contract(monkeypa
         )
 
 
+
+
+
+def test_frozen_sentence_transformer_blocks_scientific_reassignment() -> None:
+    encoder = SentenceTransformerEncoder(
+        "example/sbert", revision=_COMMIT, task="document"
+    )
+    encoder.is_frozen = True
+
+    with pytest.raises(FrozenOperatorError, match="Cannot modify 'task'"):
+        encoder.task = "query"
+
+    # Explicitly declared runtime caches remain mutable after freeze.
+    encoder._runtime_device = "cpu"
+    assert encoder._runtime_device == "cpu"
+
+
 def test_contextual_transformer_emits_model_tokens_and_aligned_embeddings(monkeypatch):
     _install_fake_transformers(monkeypatch)
     translator = ContextualTransformer("example/model", revision=_COMMIT)
@@ -362,25 +379,6 @@ def test_contextual_transformer_output_lineage_uses_token_basis(monkeypatch):
     assert specs["tokens"].basis_labels == ("source",)
     assert specs["contextual_embeddings"].lineage_mode == "preserved_key"
     assert specs["contextual_embeddings"].basis_labels == ("tokens",)
-
-
-def test_sentence_transformer_task_variant_is_explicit_frozen_state():
-    document = SentenceTransformerEncoder("example/sbert", revision=_COMMIT, task="document")
-    query = document.for_task("query")
-
-    assert document.task == "document"
-    assert query.task == "query"
-    assert query.operator_id is None
-    assert query.to_json_state()["task"] == "query"
-
-    explicit_prompt = SentenceTransformerEncoder(
-        "example/sbert",
-        revision=_COMMIT,
-        task="document",
-        prompt="doc: ",
-    )
-    with pytest.raises(OperatorError, match="explicit prompt_name/prompt"):
-        explicit_prompt.for_task("query")
 
 
 def test_sentence_transformer_uses_document_recipe_and_counts_prompt(monkeypatch):

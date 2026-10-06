@@ -81,7 +81,7 @@ def test_spacy_tokens_subset_to_artifact_count_dtm_with_sentence_bounded_ngrams(
     try:
         source = _seed_documents(project, rows)
         tokens = project.translate(
-            SpacyTranslator(model=str(model_dir), spacy_batch_size=2),
+            SpacyTranslator(model=str(model_dir), spacy_batch_size=2, save_model=True),
             source,
             workers=1,
             batch_size=2,
@@ -195,7 +195,7 @@ def test_artifact_count_vectorizer_fit_translate_resume_freezes_vocabulary(
     try:
         source = _seed_documents(project, rows)
         tokens = project.translate(
-            SpacyTranslator(model=str(model_dir)),
+            SpacyTranslator(model=str(model_dir), save_model=True),
             source,
             workers=1,
             batch_size=2,

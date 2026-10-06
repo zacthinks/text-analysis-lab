@@ -140,6 +140,12 @@ class CoreferenceResolver(BaseTranslator):
         spacy_disable: Sequence[str] = (),
     ) -> dict[str, pd.DataFrame]:
         """Parse ordinary text with spaCy, then resolve document coreference."""
+        if self.is_frozen:
+            raise OperatorError(
+                f"{self.__class__.__name__}.translate_from_text(...) composes an "
+                "additional spaCy scientific transformation and is unavailable on a "
+                "frozen translator. Freeze/apply the spaCy translator separately."
+            )
         from text_analysis_lab.translators.spacy_translator import SpacyTranslator
 
         if isinstance(texts, pd.Series):

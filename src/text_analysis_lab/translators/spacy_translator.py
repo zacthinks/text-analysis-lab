@@ -18,7 +18,10 @@ requires lightweight Python iteration over the already-processed objects.
 
 from __future__ import annotations
 
+import hashlib
+import importlib.metadata
 import json
+import shutil
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -112,6 +115,10 @@ class SpacyTranslator(BaseTranslator):
     disable:
         Optional spaCy pipeline components to disable while loading the model.
         The resulting pipeline must still provide sentence boundaries.
+    save_model:
+        If True, vendor the exact spaCy pipeline under the operator assets.
+        The default is False: freeze an exact resource reference without copying
+        the heavyweight model bytes into the TeAL project.
 
     Notes
     -----
@@ -121,6 +128,7 @@ class SpacyTranslator(BaseTranslator):
     """
 
     operation_type = "translate"
+    frozen_runtime_fields = frozenset({"_resource_verified"})
 
     def __init__(
         self,
@@ -131,6 +139,7 @@ class SpacyTranslator(BaseTranslator):
         token_key: str = "token_id",
         spacy_batch_size: int = 128,
         disable: Sequence[str] = (),
+        save_model: bool = False,
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
@@ -162,6 +171,11 @@ class SpacyTranslator(BaseTranslator):
         self.token_key = token_key
         self.spacy_batch_size = int(spacy_batch_size)
         self.disable = normalized_disable
+        self.save_model = bool(save_model)
+        self.resolved_spacy_version: str | None = None
+        self.resource_identity: dict[str, str] | None = None
+        self._frozen_model_path: str | None = None
+        self._resource_verified = False
 
     def translate(
         self,
@@ -180,7 +194,11 @@ class SpacyTranslator(BaseTranslator):
                 "or pandas Series."
             )
 
-        nlp = _load_spacy_pipeline(self.model, self.disable)
+        model_source = self._frozen_model_path or self.model
+        if self.is_frozen and not self._resource_verified:
+            self._verify_frozen_resource()
+            self._resource_verified = True
+        nlp = _load_spacy_pipeline(model_source, self.disable)
         docs = nlp.pipe(values, batch_size=self.spacy_batch_size, n_process=1)
         sentence_rows: list[dict[str, Any]] = []
         token_rows: list[dict[str, Any]] = []
@@ -363,7 +381,80 @@ class SpacyTranslator(BaseTranslator):
         request: TranslationRequest,
     ) -> SpacyTranslator:
         _ = mode, request
-        return self.from_json_state(self.to_json_state())
+        worker = self.from_json_state(self.to_json_state())
+        worker._frozen_model_path = self._frozen_model_path
+        worker._resource_verified = False
+        worker.is_frozen = self.is_frozen
+        return worker
+
+    def prepare_for_freeze(self) -> None:
+        """Resolve exact spaCy resource identity before durable snapshot commit."""
+        nlp = _load_spacy_pipeline(self.model, self.disable)
+        self.resolved_spacy_version = _spacy_runtime_version()
+        try:
+            self.resource_identity = _spacy_resource_identity(self.model, nlp)
+        except OperatorError:
+            if not self.save_model:
+                raise
+            self.resource_identity = {"kind": "vendor"}
+
+    def _verify_frozen_resource(self) -> None:
+        if self.resolved_spacy_version is None or self.resource_identity is None:
+            raise OperatorError(
+                "Frozen SpacyTranslator snapshot is missing exact spaCy resource "
+                "identity and cannot be reused under strict freeze semantics."
+            )
+        current_version = _spacy_runtime_version()
+        if current_version != self.resolved_spacy_version:
+            raise OperatorError(
+                "SpacyTranslator requires the spaCy runtime version recorded in its "
+                f"frozen snapshot ({self.resolved_spacy_version}); found {current_version}."
+            )
+        if self._frozen_model_path is not None:
+            if not Path(self._frozen_model_path).is_dir():
+                raise OperatorError(
+                    f"Vendored spaCy model asset is missing: {self._frozen_model_path}."
+                )
+            return
+        _verify_spacy_resource_identity(self.model, self.resource_identity)
+
+    def save_assets(self, assets_dir: Path) -> Mapping[str, Any]:
+        if not self.save_model:
+            return {}
+        nlp = _load_spacy_pipeline(self.model, self.disable)
+        model_dir = assets_dir / "spacy_model"
+        if model_dir.exists():
+            shutil.rmtree(model_dir)
+        source_path = _spacy_static_resource_path(self.model, nlp)
+        try:
+            if source_path is not None:
+                shutil.copytree(source_path, model_dir)
+            else:
+                model_dir.mkdir(parents=True, exist_ok=True)
+                nlp.to_disk(model_dir)
+        except Exception as exc:
+            raise OperatorError(
+                "SpacyTranslator could not vendor the configured spaCy pipeline "
+                "as an operator-local frozen asset."
+            ) from exc
+        self._frozen_model_path = str(model_dir)
+        return {
+            "spacy_model_dir": model_dir.name,
+            "spacy_version": self.resolved_spacy_version,
+            "storage_mode": "vendor",
+        }
+
+    def load_assets(self, assets_dir: Path, manifest: Mapping[str, Any]) -> None:
+        filename = manifest.get("spacy_model_dir") if manifest else None
+        if filename is None:
+            self._frozen_model_path = None
+            return
+        if not isinstance(filename, str) or not filename:
+            raise OperatorError("SpacyTranslator asset manifest has invalid spacy_model_dir.")
+        model_dir = assets_dir / filename
+        if not model_dir.is_dir():
+            raise OperatorError(f"Vendored spaCy model asset is missing: {model_dir}.")
+        self._frozen_model_path = str(model_dir)
 
     def to_json_state(self) -> dict[str, Any]:
         return {
@@ -373,18 +464,30 @@ class SpacyTranslator(BaseTranslator):
             "token_key": self.token_key,
             "spacy_batch_size": self.spacy_batch_size,
             "disable": list(self.disable),
+            "save_model": self.save_model,
+            "resolved_spacy_version": self.resolved_spacy_version,
+            "resource_identity": self.resource_identity,
         }
 
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> SpacyTranslator:
-        return cls(
+        obj = cls(
             model=str(state.get("model", "en_core_web_sm")),
             text_field=str(state.get("text_field", "text")),
             sentence_key=str(state.get("sentence_key", "sentence_id")),
             token_key=str(state.get("token_key", "token_id")),
             spacy_batch_size=int(state.get("spacy_batch_size", 128)),
             disable=cast(Sequence[str], state.get("disable", ())),
+            save_model=bool(state.get("save_model", False)),
         )
+        raw_version = state.get("resolved_spacy_version")
+        raw_identity = state.get("resource_identity")
+        obj.resolved_spacy_version = None if raw_version is None else str(raw_version)
+        if raw_identity is not None:
+            if not isinstance(raw_identity, Mapping):
+                raise OperatorError("SpacyTranslator resource_identity must be a mapping.")
+            obj.resource_identity = {str(key): str(value) for key, value in raw_identity.items()}
+        return obj
 
     def save_intermediate_state(
         self,
@@ -523,6 +626,111 @@ def _table_payload(
         "keys": pd.DataFrame.from_records(keys, columns=list(key_columns)),
         "data": pd.DataFrame.from_records(data, columns=list(data_columns)),
     }
+
+
+def _directory_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    for file_path in sorted(p for p in path.rglob("*") if p.is_file()):
+        relative = file_path.relative_to(path).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        with file_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _spacy_static_resource_path(model: str, nlp: Any) -> Path | None:
+    raw_path = getattr(nlp, "path", None)
+    if raw_path is not None:
+        path = Path(raw_path).expanduser().resolve()
+        if path.is_dir():
+            return path
+    candidate = Path(model).expanduser()
+    if candidate.exists() and candidate.is_dir():
+        return candidate.resolve()
+    return None
+
+
+def _spacy_resource_identity(model: str, nlp: Any) -> dict[str, str]:
+    try:
+        import spacy
+    except ImportError as exc:
+        raise OperatorError("SpacyTranslator requires spaCy.") from exc
+    if spacy.util.is_package(model):
+        try:
+            package_version = importlib.metadata.version(model)
+        except importlib.metadata.PackageNotFoundError:
+            package_version = str(getattr(nlp, "meta", {}).get("version", "unknown"))
+        static_path = _spacy_static_resource_path(model, nlp)
+        if static_path is None:
+            raise OperatorError(
+                f"SpacyTranslator could not locate the static files for installed "
+                f"package {model!r}. Use save_model=True to vendor the exact pipeline."
+            )
+        return {
+            "kind": "package",
+            "name": model,
+            "package_version": package_version,
+            "static_resource_sha256": _directory_sha256(static_path),
+        }
+    static_path = _spacy_static_resource_path(model, nlp)
+    if static_path is not None:
+        raise OperatorError(
+            f"SpacyTranslator model {model!r} is an opaque local-path resource. "
+            "Reference mode requires a reconstructable provider/package identity; "
+            "use save_model=True to vendor the exact local pipeline."
+        )
+    raise OperatorError(
+        f"SpacyTranslator could not determine a reconstructable resource identity "
+        f"for model {model!r}. Use save_model=True to vendor the exact pipeline."
+    )
+
+
+def _verify_spacy_resource_identity(model: str, identity: Mapping[str, str]) -> None:
+    kind = str(identity.get("kind", ""))
+    if kind == "package":
+        name = str(identity.get("name", model))
+        expected = str(identity.get("package_version", ""))
+        expected_hash = str(identity.get("static_resource_sha256", ""))
+        try:
+            observed = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError as exc:
+            raise OperatorError(
+                f"Frozen spaCy package {name!r} at version {expected!r} is not installed."
+            ) from exc
+        if observed != expected:
+            raise OperatorError(
+                f"Frozen spaCy package {name!r} requires version {expected!r}; found {observed!r}."
+            )
+        try:
+            nlp = _load_spacy_pipeline(name, ())
+        except Exception as exc:
+            raise OperatorError(
+                f"Frozen spaCy package {name!r} could not be loaded for static-resource verification."
+            ) from exc
+        static_path = _spacy_static_resource_path(name, nlp)
+        if static_path is None:
+            raise OperatorError(
+                f"Frozen spaCy package {name!r} no longer exposes a static model resource path."
+            )
+        observed_hash = _directory_sha256(static_path)
+        if observed_hash != expected_hash:
+            raise OperatorError(
+                f"Frozen spaCy package {name!r} no longer matches the recorded static-resource fingerprint."
+            )
+        return
+    raise OperatorError(f"Unsupported frozen spaCy resource identity kind {kind!r}.")
+
+def _spacy_runtime_version() -> str:
+    try:
+        import spacy
+    except ImportError as exc:  # pragma: no cover - optional dependency boundary
+        raise OperatorError(
+            "SpacyTranslator requires spaCy. Install TeAL with the spaCy optional "
+            "dependencies (for example `uv sync --extra spacy`)."
+        ) from exc
+    return str(getattr(spacy, "__version__", "unknown"))
 
 
 @lru_cache(maxsize=8)

@@ -406,12 +406,13 @@ class FunctionSubsetTranslator(BaseTranslator):
         # Once the operator snapshot is written, use the serialized callable as
         # the live execution copy too. This detaches closures/globals from any
         # later mutation in the caller's Python session.
-        function = cloudpickle.loads(payload)
-        if not callable(function):  # pragma: no cover - cloudpickle contract guard
-            raise OperatorError(
-                "Frozen subset callable did not deserialize to a callable."
-            )
-        self.function = cast(SubsetFunction, function)
+        if not self.is_frozen:
+            function = cloudpickle.loads(payload)
+            if not callable(function):  # pragma: no cover - cloudpickle contract guard
+                raise OperatorError(
+                    "Frozen subset callable did not deserialize to a callable."
+                )
+            self.function = cast(SubsetFunction, function)
         return {"function_file": path.name}
 
     def load_assets(self, assets_dir: Path, manifest: Mapping[str, Any]) -> None:

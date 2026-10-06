@@ -53,6 +53,8 @@ class MatrixTranspose(BaseTranslator):
 
     operation_type = "translate"
 
+    frozen_runtime_fields = frozenset(['_source_type','_source_features','_source_feature_metadata','_promoted_feature_columns'])
+
     def __init__(
         self,
         *,

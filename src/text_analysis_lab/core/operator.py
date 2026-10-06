@@ -460,9 +460,30 @@ def _resolve_qualname(module_name: str, qualname: str) -> type[Any]:
 
 
 class BaseOperator(ABC):
-    """Base class for reusable TeAL operator specifications."""
+    """Base class for reusable TeAL operator specifications.
+
+    Concrete operators own the representation of their durable scientific
+    transformation through to_json_state()/from_json_state() and
+    save_assets()/load_assets(). The base class owns the lifecycle: an
+    operator becomes frozen only after that translator-owned snapshot has been
+    successfully committed.
+    """
 
     operation_type: ClassVar[OperationType]
+    frozen_runtime_fields: ClassVar[frozenset[str]] = frozenset()
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "is_frozen", False):
+            if name == "is_frozen":
+                if value is not True:
+                    raise FrozenOperatorError("Frozen operators cannot be unfrozen in place.")
+            elif name not in type(self).frozen_runtime_fields:
+                raise FrozenOperatorError(
+                    f"Cannot modify {name!r} on frozen "
+                    f"{self.operator_id or self.__class__.__name__}. "
+                    "Create a new operator for a different scientific state."
+                )
+        object.__setattr__(self, name, value)
 
     def __init__(self, *, operator_id: str | None = None) -> None:
         self.operator_id = None if operator_id is None else str(operator_id)
@@ -522,11 +543,30 @@ class BaseOperator(ABC):
             )
         self.operator_id = value
 
+    def prepare_for_freeze(self) -> None:
+        """Finalize translator-owned scientific state before durable serialization.
+
+        Concrete operators should override this when some scientific dependency
+        is resolved lazily, such as an exact external model revision. This hook
+        runs while the operator is still mutable and before JSON state or assets
+        are committed.
+        """
+        return None
+
     def freeze(self, *, operator_id: str | None = None) -> None:
-        """Freeze this operator specification."""
-        if operator_id is not None:
-            self.assign_operator_id(operator_id)
-        self.is_frozen = True
+        """Reject non-durable freezing.
+
+        TeAL reusable frozen state is a durable serialized snapshot. Use
+        save_to_dir(...) directly or a Project operation that persists the
+        operator; merely toggling an in-memory flag is not a valid freeze.
+        """
+        _ = operator_id
+        raise OperatorError(
+            "BaseOperator.freeze() cannot create a reusable frozen operator "
+            "without durable serialization. Use save_to_dir(...) or execute the "
+            "operator through a Project so TeAL can finalize and persist its "
+            "translator-owned snapshot."
+        )
 
     def ensure_ready(self, **context: Any) -> None:
         """Validate execution readiness for a specific execution context.
@@ -584,7 +624,7 @@ class BaseOperator(ABC):
             self.to_json_state(), name="operator json_state"
         )
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "operator_id": self.operator_id,
             "operation_type": operation_type,
             "class": {
@@ -600,14 +640,15 @@ class BaseOperator(ABC):
         *,
         operator_id: str,
     ) -> Path:
-        """Save this operator snapshot to an operator directory."""
-        if not self.is_frozen:
-            self.assign_operator_id(operator_id)
-        elif self.operator_id != str(operator_id):
+        """Finalize and durably freeze this operator snapshot."""
+        if self.is_frozen:
             raise FrozenOperatorError(
-                f"Frozen operator has operator_id={self.operator_id!r}; "
-                f"cannot save as {operator_id!r}."
+                f"Frozen operator {self.operator_id or self.__class__.__name__} "
+                "cannot be re-serialized in place. Create a new operator instead."
             )
+
+        self.assign_operator_id(operator_id)
+        self.prepare_for_freeze()
 
         path = Path(operator_dir)
         path.mkdir(parents=True, exist_ok=True)
@@ -631,6 +672,26 @@ class BaseOperator(ABC):
         descriptor = json.loads((path / "operator.json").read_text(encoding="utf-8"))
         if not isinstance(descriptor, dict):
             raise OperatorError("operator.json must contain a JSON object.")
+
+        raw_schema_version = descriptor.get("schema_version", 1)
+        try:
+            schema_version = int(raw_schema_version)
+        except (TypeError, ValueError) as exc:
+            raise OperatorError(
+                f"operator.json has invalid schema_version={raw_schema_version!r}."
+            ) from exc
+        if schema_version != 2:
+            if schema_version == 1:
+                raise OperatorError(
+                    "Operator snapshot schema v1 is pre-strict legacy state and cannot "
+                    "be loaded as a frozen reusable operator. Use "
+                    "Project.legacy_operator_status(...) and "
+                    "Project.migrate_legacy_operator(...) instead."
+                )
+            raise OperatorError(
+                f"Unsupported operator snapshot schema_version={schema_version}; "
+                "this TeAL version requires schema v2."
+            )
 
         class_info = descriptor.get("class")
         if not isinstance(class_info, Mapping):

@@ -458,6 +458,9 @@ def test_umap_reuse_storage_contract_validation() -> None:
     assert recompute.reuse == "recompute"
     assert recompute.storage is None
 
+    with pytest.raises(ValueError, match="requires a fixed random_state"):
+        UMAP(reuse="recompute", random_state=None)
+
     stored = UMAP(reuse="stored")
     assert stored.reuse == "stored"
     assert stored.storage == "compact"

@@ -24,6 +24,7 @@ from text_analysis_lab.core.types import (
     MemoTargetType,
     OperationStatus,
     OperationType,
+    OperatorReuseStatus,
     OperatorSnapshotStatus,
 )
 from text_analysis_lab.core.utils import utc_now_iso
@@ -36,6 +37,9 @@ ARTIFACT_STATUS_VALUES: tuple[ArtifactStatus, ...] = get_args(ArtifactStatus)
 OPERATION_STATUS_VALUES: tuple[OperationStatus, ...] = get_args(OperationStatus)
 OPERATOR_SNAPSHOT_STATUS_VALUES: tuple[OperatorSnapshotStatus, ...] = get_args(
     OperatorSnapshotStatus
+)
+OPERATOR_REUSE_STATUS_VALUES: tuple[OperatorReuseStatus, ...] = get_args(
+    OperatorReuseStatus
 )
 OPERATION_TYPE_VALUES: tuple[OperationType, ...] = get_args(OperationType)
 MEMO_TARGET_TYPE_VALUES: tuple[MemoTargetType, ...] = get_args(MemoTargetType)
@@ -82,6 +86,7 @@ class ProjectCatalog:
                     operator_id TEXT PRIMARY KEY,
                     operation_type TEXT NOT NULL,
                     snapshot_status TEXT NOT NULL DEFAULT 'serialized',
+                    reuse_status TEXT NOT NULL DEFAULT 'legacy_unknown',
                     deleted INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
                 );
 
@@ -212,6 +217,12 @@ class ProjectCatalog:
                 column="snapshot_status",
                 definition="TEXT NOT NULL DEFAULT 'serialized'",
             )
+            self._ensure_column(
+                con,
+                table="operators",
+                column="reuse_status",
+                definition="TEXT NOT NULL DEFAULT 'legacy_unknown'",
+            )
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -314,6 +325,17 @@ class ProjectCatalog:
         return cast(OperationType, operation_type)
 
     @staticmethod
+    def _validate_operator_reuse_status(
+        reuse_status: str,
+    ) -> OperatorReuseStatus:
+        reuse_status = str(reuse_status)
+        if reuse_status not in OPERATOR_REUSE_STATUS_VALUES:
+            raise ValueError(
+                f"reuse_status must be one of {OPERATOR_REUSE_STATUS_VALUES}."
+            )
+        return cast(OperatorReuseStatus, reuse_status)
+
+    @staticmethod
     def _validate_memo_target_type(target_type: str | None) -> MemoTargetType | None:
         if target_type is None:
             return None
@@ -334,6 +356,7 @@ class ProjectCatalog:
         operator_id: str,
         operation_type: OperationType | str,
         snapshot_status: OperatorSnapshotStatus | str = "serialized",
+        reuse_status: OperatorReuseStatus | str = "reusable",
     ) -> None:
         """Register one project-owned operator snapshot in the catalog.
 
@@ -346,13 +369,21 @@ class ProjectCatalog:
         snapshot_status_value = self._validate_operator_snapshot_status(
             str(snapshot_status)
         )
+        reuse_status_value = self._validate_operator_reuse_status(str(reuse_status))
         with self.con as con:
             con.execute(
                 """
-                INSERT INTO operators(operator_id, operation_type, snapshot_status, deleted)
-                VALUES (?, ?, ?, 0)
+                INSERT INTO operators(
+                    operator_id, operation_type, snapshot_status, reuse_status, deleted
+                )
+                VALUES (?, ?, ?, ?, 0)
                 """,
-                (str(operator_id), operation_type_value, snapshot_status_value),
+                (
+                    str(operator_id),
+                    operation_type_value,
+                    snapshot_status_value,
+                    reuse_status_value,
+                ),
             )
 
     def resolve_operator(
@@ -390,6 +421,7 @@ class ProjectCatalog:
         include_deleted: bool = False,
         operation_type: OperationType | str | None = None,
         snapshot_status: OperatorSnapshotStatus | str | None = None,
+        reuse_status: OperatorReuseStatus | str | None = None,
     ) -> list[dict[str, Any]]:
         where: list[str] = []
         params: list[Any] = []
@@ -402,6 +434,9 @@ class ProjectCatalog:
         if snapshot_status is not None:
             where.append("snapshot_status = ?")
             params.append(self._validate_operator_snapshot_status(str(snapshot_status)))
+        if reuse_status is not None:
+            where.append("reuse_status = ?")
+            params.append(self._validate_operator_reuse_status(str(reuse_status)))
 
         sql = "SELECT * FROM operators"
         if where:
@@ -430,6 +465,30 @@ class ProjectCatalog:
         """Return whether an operator snapshot is pending, serialized, or failed."""
         row = self.resolve_operator(str(operator_id), include_deleted=True)
         return self._validate_operator_snapshot_status(str(row["snapshot_status"]))
+
+    def operator_reuse_status(self, operator_id: str) -> OperatorReuseStatus:
+        row = self.resolve_operator(str(operator_id), include_deleted=True)
+        return self._validate_operator_reuse_status(str(row["reuse_status"]))
+
+    def _set_operator_reuse_status(
+        self,
+        operator_id: str,
+        reuse_status: OperatorReuseStatus | str,
+    ) -> None:
+        status_value = self._validate_operator_reuse_status(str(reuse_status))
+        with self.con as con:
+            cur = con.execute(
+                "UPDATE operators SET reuse_status = ? WHERE operator_id = ?",
+                (status_value, str(operator_id)),
+            )
+            if cur.rowcount == 0:
+                raise OperatorNotFoundError(str(operator_id))
+
+    def mark_operator_reusable(self, operator_id: str) -> None:
+        self._set_operator_reuse_status(operator_id, "reusable")
+
+    def mark_operator_provenance_only(self, operator_id: str) -> None:
+        self._set_operator_reuse_status(operator_id, "provenance_only")
 
     def mark_operator_snapshot_pending(self, operator_id: str) -> None:
         self._set_operator_snapshot_status(operator_id, "pending")

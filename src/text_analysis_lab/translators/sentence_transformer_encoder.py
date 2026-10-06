@@ -64,6 +64,8 @@ class SentenceTransformerEncoder(BaseTranslator):
 
     operation_type = "translate"
 
+    frozen_runtime_fields = frozenset(['_runtime_model','_runtime_device','_effective_context_limit','_warned_unpinned'])
+
     def __init__(
         self,
         model: str,
@@ -128,36 +130,6 @@ class SentenceTransformerEncoder(BaseTranslator):
 
     def supports_resume(self, *, mode: TranslationMode, route: RunRoute) -> bool:
         return mode == "translate" and route == "sequential"
-
-    def for_task(self, task: SentenceTask | str) -> SentenceTransformerEncoder:
-        """Return a distinct encoder with task baked into frozen state.
-
-        Query/document routing can change prompts, Router paths, or native
-        encode_query/encode_document behavior, so it is scientific state rather
-        than an execution option. This method never mutates the current translator
-        and deliberately returns an unfrozen variant with no operator_id.
-
-        A configured explicit prompt is task-specific by construction. TeAL
-        therefore refuses to guess how that prompt should change when switching
-        tasks; create an explicit encoder with the desired prompt instead.
-        """
-
-        task_value = str(task).lower()
-        if task_value not in {"document", "query", "generic"}:
-            raise ValueError("task must be 'document', 'query', or 'generic'.")
-        if task_value != self.task and (
-            self.prompt_name is not None or self.prompt is not None
-        ):
-            raise OperatorError(
-                "Cannot derive a different SentenceTransformer task from an encoder "
-                "with an explicit prompt_name/prompt. Create a separate "
-                "SentenceTransformerEncoder with the intended task and prompt."
-            )
-        state = dict(self.to_json_state())
-        state["task"] = task_value
-        variant = self.from_json_state(state)
-        variant._local_model_dir = self._local_model_dir
-        return variant
 
     def output_specs(
         self,
@@ -312,7 +284,6 @@ class SentenceTransformerEncoder(BaseTranslator):
             model_batch_size=int(model_batch_size),
             prompt_name=prompt_name,
             prompt=prompt,
-            task=effective_task,
         )
         if values.ndim != 2 or values.shape[0] != len(values_in):
             raise TransformerResourceError(
@@ -387,7 +358,6 @@ class SentenceTransformerEncoder(BaseTranslator):
         model_batch_size: int,
         prompt_name: str | None,
         prompt: str | None,
-        task: SentenceTask | None = None,
     ) -> np.ndarray:
         kwargs = {
             "batch_size": model_batch_size,
@@ -400,12 +370,11 @@ class SentenceTransformerEncoder(BaseTranslator):
             kwargs["prompt_name"] = prompt_name
         if prompt is not None:
             kwargs["prompt"] = prompt
-        effective_task = self.task if task is None else task
-        if effective_task == "document" and callable(
+        if self.task == "document" and callable(
             getattr(model, "encode_document", None)
         ):
             values = model.encode_document(list(texts), **kwargs)
-        elif effective_task == "query" and callable(
+        elif self.task == "query" and callable(
             getattr(model, "encode_query", None)
         ):
             values = model.encode_query(list(texts), **kwargs)
@@ -436,6 +405,15 @@ class SentenceTransformerEncoder(BaseTranslator):
     def download(self) -> str | None:
         self._runtime_component(device="cpu")
         return self.resolved_revision
+
+    def prepare_for_freeze(self) -> None:
+        """Resolve the exact model revision before the durable snapshot is committed."""
+        self._runtime_component(device="cpu")
+        if self.resolved_revision is None and not self.save_model:
+            raise OperatorError(
+                "SentenceTransformerEncoder could not resolve an exact model revision; "
+                "the translator cannot be frozen reproducibly."
+            )
 
     def to_json_state(self) -> dict[str, Any]:
         return {
@@ -598,7 +576,12 @@ class SentenceTransformerEncoder(BaseTranslator):
         backbone = _sentence_backbone(model)
         commit = resolved_commit_hash(backbone, tokenizer)
         if commit:
-            self.resolved_revision = commit
+            if self.resolved_revision is None:
+                self.resolved_revision = commit
+            elif str(self.resolved_revision) != str(commit):
+                raise TransformerResourceError(
+                    "Loaded SentenceTransformers revision does not match the frozen revision."
+                )
         self._warned_unpinned = warn_if_unpinned(
             model_name=self.model,
             requested_revision=self.revision,

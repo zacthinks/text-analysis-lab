@@ -139,12 +139,15 @@ def _build_replay_plan(
             raise _RepresentationReplayError(
                 f"Frozen operator {operator.__class__.__name__} cannot transform new raw text."
             )
-        if query and operator.__class__.__name__ == "SentenceTransformerEncoder":
-            # Query routing is a distinct scientific recipe. Validate that a
-            # task-specific variant can be derived before advertising replay
-            # support; explicit document-only prompts must fail here rather than
-            # later during GeCo execution.
-            operator.for_task("query")
+        if (
+            query
+            and operator.__class__.__name__ == "SentenceTransformerEncoder"
+            and getattr(operator, "task", None) not in {"query", "generic"}
+        ):
+            raise _RepresentationReplayError(
+                "Query replay cannot reinterpret a frozen SentenceTransformerEncoder "
+                "with a different task. Configure and freeze a separate query encoder."
+            )
         return [{"kind": "texts", "operator": operator, "params": params}]
 
     if source.artifact_type in _MATRIX_TYPES:
@@ -175,8 +178,7 @@ def _replay_stage(
     """Execute one frozen replay stage through the ordinary translation contract."""
     if kind == "texts":
         if operator.__class__.__name__ == "SentenceTransformerEncoder":
-            encoder = operator.for_task("query") if query else operator
-            return encoder.translate(
+            return operator.translate(
                 values,
                 device="auto",
                 model_batch_size=int(params.get("model_batch_size", 32)),

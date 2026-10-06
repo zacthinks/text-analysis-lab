@@ -72,6 +72,8 @@ class UMAP(BaseTranslator):
 
     operation_type = "translate"
 
+    frozen_runtime_fields = frozenset(['_estimator'])
+
     def __init__(
         self,
         n_components: int = 2,
@@ -121,6 +123,12 @@ class UMAP(BaseTranslator):
             raise ValueError(
                 f"reuse must be one of {sorted(_VALID_REUSE)}; got {reuse!r}."
             )
+        if reuse == "recompute" and random_state is None:
+            raise ValueError(
+                "UMAP reuse='recompute' requires a fixed random_state so the frozen "
+                "reconstruction recipe can reproduce the same fitted transformation."
+            )
+
         if reuse == "stored":
             storage = "compact" if storage is None else str(storage)
             if storage not in _VALID_STORAGE:
@@ -356,12 +364,14 @@ class UMAP(BaseTranslator):
                     "UMAP fitting requires a source artifact with a stable artifact_id."
                 )
             self.fit_source_artifact_id_ = source_id
-        self.source_features_ = establish_or_validate_features(
+        resolved_features = establish_or_validate_features(
             self.source_features_,
             source.get_data_columns(),
             fitted=self.is_fitted,
             name="UMAP",
         )
+        if self.source_features_ is None:
+            self.source_features_ = resolved_features
         return SourceRequest(
             artifact_type=("sparse_matrix", "dense_matrix"),
             mode="full_artifact" if mode == "fit_translate" else "batches",
