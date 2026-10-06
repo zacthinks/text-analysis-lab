@@ -139,6 +139,15 @@ def _build_replay_plan(
             raise _RepresentationReplayError(
                 f"Frozen operator {operator.__class__.__name__} cannot transform new raw text."
             )
+        if (
+            query
+            and operator.__class__.__name__ == "SentenceTransformerEncoder"
+            and getattr(operator, "task", None) not in {"query", "generic"}
+        ):
+            raise _RepresentationReplayError(
+                "Query replay cannot reinterpret a frozen SentenceTransformerEncoder "
+                "with a different task. Configure and freeze a separate query encoder."
+            )
         return [{"kind": "texts", "operator": operator, "params": params}]
 
     if source.artifact_type in _MATRIX_TYPES:
@@ -171,7 +180,6 @@ def _replay_stage(
         if operator.__class__.__name__ == "SentenceTransformerEncoder":
             return operator.translate(
                 values,
-                task="query" if query else None,
                 device="auto",
                 model_batch_size=int(params.get("model_batch_size", 32)),
             )
