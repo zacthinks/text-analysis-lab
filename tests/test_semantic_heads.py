@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from text_analysis_lab.core.operator import BaseOperator
+from text_analysis_lab.core.pipeline import Pipeline
 from text_analysis_lab.linguistics.heads import (
     SemanticHeadRules,
     export_default_semantic_head_rules,
@@ -384,6 +385,138 @@ def test_coordination_preserves_each_content_head() -> None:
     assert subject == (0, 2)
     assert object_ == (4, 6)
 
+
+
+def test_coordination_branches_before_rule_moves_can_skip_intermediate_heads() -> None:
+    rules = {
+        "schema_version": 1,
+        "name": "preposition-coordination",
+        "description": "",
+        "rules": [
+            {
+                "id": "preposition_object",
+                "when": {"pos": ["ADP"]},
+                "move": [{"child": {"dep": ["pobj"]}}],
+            }
+        ],
+    }
+
+    heads = _resolve(
+        text=["from", "Boston", "and", "from", "New York"],
+        lemmas=["from", "Boston", "and", "from", "New York"],
+        pos=["ADP", "PROPN", "CCONJ", "ADP", "PROPN"],
+        dep=["ROOT", "pobj", "cc", "conj", "pobj"],
+        heads=[0, 0, 3, 0, 3],
+        role="ARGM-LOC",
+        rules=rules,
+    )
+
+    assert heads == (1, 4)
+
+
+def test_predicate_role_does_not_expand_coordinated_heads() -> None:
+    assert _resolve(
+        text=["eat", "drink"],
+        lemmas=["eat", "drink"],
+        pos=["VERB", "VERB"],
+        dep=["ROOT", "conj"],
+        heads=[0, 0],
+        role="V",
+        rules={
+            "schema_version": 1,
+            "name": "no-moves",
+            "description": "",
+            "rules": [],
+        },
+    ) == (0,)
+
+
+def test_legacy_content_head_wrapper_preserves_function_word_fallback() -> None:
+    assert content_head_indices(
+        start=0,
+        end=2,
+        token_ids=[0, 1],
+        head_token_ids=[0, 0],
+        dependencies=["ROOT", "det"],
+        pos=["DET", "NOUN"],
+        text=["the", "dog"],
+        role="ARG1",
+    ) == (1,)
+
+
+def test_legacy_content_head_wrapper_preserves_predicate_coordination_rule() -> None:
+    common = {
+        "start": 0,
+        "end": 2,
+        "token_ids": [0, 1],
+        "head_token_ids": [0, 0],
+        "dependencies": ["ROOT", "conj"],
+        "pos": ["VERB", "VERB"],
+        "text": ["eat", "drink"],
+    }
+
+    assert content_head_indices(**common, role="V") == (0,)
+    assert content_head_indices(**common, role="ARG1") == (0, 1)
+
+
+def test_standalone_resolver_infers_sentence_keys() -> None:
+    resolved = SemanticRoleHeadResolver().translate(
+        _quantifier_span(),
+        _quantifier_tokens(),
+    )["role_heads"]
+
+    assert resolved[
+        ["row_id", "sentence_id", "predicate_id", "role_id", "head_id"]
+    ].to_dict("records") == [
+        {
+            "row_id": 0,
+            "sentence_id": 0,
+            "predicate_id": 0,
+            "role_id": 0,
+            "head_id": 0,
+        }
+    ]
+    assert resolved["head_text"].tolist() == ["apples"]
+
+
+def test_standalone_resolver_rejects_ambiguous_key_layout() -> None:
+    spans = _quantifier_span()[
+        [
+            "row_id",
+            "sentence_id",
+            "role",
+            "predicate_id",
+            "role_id",
+            "token_start_id",
+            "token_end_id",
+        ]
+    ]
+
+    with pytest.raises(ValueError, match="expected role-span key columns"):
+        SemanticRoleHeadResolver().translate(spans, _quantifier_tokens())
+
+
+def test_semantic_head_resolver_executes_inside_native_pipeline() -> None:
+    pipeline = Pipeline(inputs=("role_spans", "tokens"))
+    inputs = pipeline.input
+    stage = pipeline.add(
+        "heads",
+        SemanticRoleHeadResolver(),
+        sources={
+            "role_spans": inputs["role_spans"],
+            "tokens": inputs["tokens"],
+        },
+    )
+    pipeline.output("role_heads", stage["role_heads"])
+
+    result = pipeline.translate(
+        inputs={
+            "role_spans": _quantifier_span(),
+            "tokens": _quantifier_tokens(),
+        }
+    )
+
+    assert result["role_heads"]["head_text"].tolist() == ["apples"]
 
 def test_default_export_and_rule_fingerprint_are_stable(tmp_path) -> None:
     first = SemanticHeadRules()
