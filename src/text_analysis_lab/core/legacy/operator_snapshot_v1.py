@@ -20,14 +20,20 @@ LegacyMigrationStatus = Literal[
     "invalid",
 ]
 
-_EXACT_CLASS_NAMES = frozenset(
+_EXACT_CLASSES = frozenset(
     {
-        "RegexCleaner",
-        "DelimiterDecomposer",
-        "TextLength",
-        "CountVectorizer",
-        "ArtifactCountVectorizer",
-        "DictionaryTranslator",
+        ("text_analysis_lab.translators.regex_cleaner", "RegexCleaner"),
+        ("text_analysis_lab.translators.delimiter_decomposer", "DelimiterDecomposer"),
+        ("text_analysis_lab.translators.text_length", "TextLength"),
+        ("text_analysis_lab.translators.count_vectorizer", "CountVectorizer"),
+        (
+            "text_analysis_lab.translators.artifact_count_vectorizer",
+            "ArtifactCountVectorizer",
+        ),
+        (
+            "text_analysis_lab.translators.dictionary_translator",
+            "DictionaryTranslator",
+        ),
     }
 )
 
@@ -53,11 +59,17 @@ def classify_v1_operator_snapshot(
     class_info = descriptor.get("class")
     if not isinstance(class_info, Mapping):
         return "invalid"
+    module_name = class_info.get("module")
     qualname = class_info.get("qualname")
-    if not isinstance(qualname, str) or not qualname:
+    if (
+        not isinstance(module_name, str)
+        or not module_name
+        or not isinstance(qualname, str)
+        or not qualname
+    ):
         return "invalid"
     class_name = qualname.rsplit(".", 1)[-1]
-    if class_name not in _EXACT_CLASS_NAMES:
+    if (module_name, qualname) not in _EXACT_CLASSES:
         return "historical_only"
 
     state = descriptor.get("json_state", {})
