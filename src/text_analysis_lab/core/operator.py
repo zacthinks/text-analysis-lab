@@ -462,36 +462,18 @@ def _resolve_qualname(module_name: str, qualname: str) -> type[Any]:
 class BaseOperator(ABC):
     """Base class for reusable TeAL operator specifications.
 
-    to_json_state() defines durable scientific state. Once frozen, fields
-    represented in that state may not be reassigned. Private runtime/cache
-    attributes remain mutable so execution can lazily load resources without
-    changing the scientific transformation.
+    Concrete operators own the representation of their durable scientific
+    transformation through to_json_state()/from_json_state() and
+    save_assets()/load_assets(). The base class owns the lifecycle: an
+    operator becomes frozen only after that translator-owned snapshot has been
+    successfully committed.
     """
 
     operation_type: ClassVar[OperationType]
 
     def __init__(self, *, operator_id: str | None = None) -> None:
-        object.__setattr__(self, "operator_id", None if operator_id is None else str(operator_id))
-        object.__setattr__(self, "is_frozen", False)
-        object.__setattr__(self, "_frozen_json_state", None)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if (
-            name not in {"operator_id", "is_frozen"}
-            and not name.startswith("_")
-            and getattr(self, "is_frozen", False)
-        ):
-            try:
-                scientific_fields = set(self.to_json_state())
-            except Exception:
-                scientific_fields = set()
-            if name in scientific_fields:
-                raise FrozenOperatorError(
-                    f"Cannot modify scientific field {name!r} on frozen operator "
-                    f"{self.operator_id or self.__class__.__name__}. "
-                    "Create a new operator instead."
-                )
-        object.__setattr__(self, name, value)
+        self.operator_id = None if operator_id is None else str(operator_id)
+        self.is_frozen = False
 
     @property
     def requires_source(self) -> bool:
@@ -547,53 +529,30 @@ class BaseOperator(ABC):
             )
         self.operator_id = value
 
-    @staticmethod
-    def _canonical_json_state(state: Mapping[str, Any]) -> str:
-        normalized = _require_json_mapping(state, name="operator json_state")
-        return json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+    def prepare_for_freeze(self) -> None:
+        """Finalize translator-owned scientific state before durable serialization.
 
-    def _capture_frozen_scientific_state(
-        self, state: Mapping[str, Any] | None = None
-    ) -> None:
-        snapshot = self.to_json_state() if state is None else state
-        object.__setattr__(
-            self,
-            "_frozen_json_state",
-            self._canonical_json_state(snapshot),
-        )
-
-    def assert_frozen_scientific_state(
-        self, *, expected_state: Mapping[str, Any] | None = None
-    ) -> None:
-        """Verify that current scientific state still matches the frozen snapshot."""
-        if not self.is_frozen:
-            raise FrozenOperatorError(
-                f"Operator {self.operator_id or self.__class__.__name__} is not frozen."
-            )
-        expected = (
-            self._canonical_json_state(expected_state)
-            if expected_state is not None
-            else self._frozen_json_state
-        )
-        if expected is None:
-            raise FrozenOperatorError(
-                f"Frozen operator {self.operator_id or self.__class__.__name__} "
-                "has no captured scientific-state snapshot."
-            )
-        current = self._canonical_json_state(self.to_json_state())
-        if current != expected:
-            raise FrozenOperatorError(
-                f"Frozen operator {self.operator_id or self.__class__.__name__} "
-                "no longer matches its durable scientific-state snapshot. "
-                "Create a new operator instead of mutating frozen scientific state."
-            )
+        Concrete operators should override this when some scientific dependency
+        is resolved lazily, such as an exact external model revision. This hook
+        runs while the operator is still mutable and before JSON state or assets
+        are committed.
+        """
+        return None
 
     def freeze(self, *, operator_id: str | None = None) -> None:
-        """Freeze this operator's current scientific state."""
-        if operator_id is not None:
-            self.assign_operator_id(operator_id)
-        self._capture_frozen_scientific_state()
-        object.__setattr__(self, "is_frozen", True)
+        """Reject non-durable freezing.
+
+        TeAL reusable frozen state is a durable serialized snapshot. Use
+        save_to_dir(...) directly or a Project operation that persists the
+        operator; merely toggling an in-memory flag is not a valid freeze.
+        """
+        _ = operator_id
+        raise OperatorError(
+            "BaseOperator.freeze() cannot create a reusable frozen operator "
+            "without durable serialization. Use save_to_dir(...) or execute the "
+            "operator through a Project so TeAL can finalize and persist its "
+            "translator-owned snapshot."
+        )
 
     def ensure_ready(self, **context: Any) -> None:
         """Validate execution readiness for a specific execution context.
@@ -667,16 +626,15 @@ class BaseOperator(ABC):
         *,
         operator_id: str,
     ) -> Path:
-        """Save this operator snapshot to an operator directory."""
-        if not self.is_frozen:
-            self.assign_operator_id(operator_id)
-        else:
-            if self.operator_id != str(operator_id):
-                raise FrozenOperatorError(
-                    f"Frozen operator has operator_id={self.operator_id!r}; "
-                    f"cannot save as {operator_id!r}."
-                )
-            self.assert_frozen_scientific_state()
+        """Finalize and durably freeze this operator snapshot."""
+        if self.is_frozen:
+            raise FrozenOperatorError(
+                f"Frozen operator {self.operator_id or self.__class__.__name__} "
+                "cannot be re-serialized in place. Create a new operator instead."
+            )
+
+        self.assign_operator_id(operator_id)
+        self.prepare_for_freeze()
 
         path = Path(operator_dir)
         path.mkdir(parents=True, exist_ok=True)
@@ -690,8 +648,7 @@ class BaseOperator(ABC):
         descriptor = self.to_descriptor()
         descriptor["assets"] = manifest
         _write_json(path / "operator.json", descriptor)
-        self._capture_frozen_scientific_state(descriptor["json_state"])
-        object.__setattr__(self, "is_frozen", True)
+        self.is_frozen = True
         return path
 
     @classmethod
@@ -749,9 +706,7 @@ class BaseOperator(ABC):
         if not isinstance(assets, Mapping):
             raise OperatorError("operator assets manifest must be a mapping.")
         obj.load_assets(path / "assets", assets)
-        obj._capture_frozen_scientific_state(state)
-        object.__setattr__(obj, "is_frozen", True)
-        obj.assert_frozen_scientific_state(expected_state=state)
+        obj.is_frozen = True
         return obj
 
 
