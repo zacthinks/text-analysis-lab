@@ -305,6 +305,44 @@ def test_spacy_translator_rejects_pipeline_without_sentence_boundaries(
 
 
 
+
+def test_spacy_package_reference_verifies_static_resource_fingerprint(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import spacy
+    import text_analysis_lab.translators.spacy_translator as module
+
+    doc = _annotated_doc()
+    package_dir = tmp_path / "package_model"
+    package_dir.mkdir()
+    resource_file = package_dir / "weights.bin"
+    resource_file.write_bytes(b"version-one")
+
+    fake_nlp = _PipeOnlyNLP({doc.text: doc})
+    fake_nlp.path = package_dir
+
+    monkeypatch.setattr(spacy.util, "is_package", lambda name: name == "fake_package")
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda name: "1.2.3")
+    monkeypatch.setattr(module, "_load_spacy_pipeline", lambda model, disable: fake_nlp)
+    monkeypatch.setattr(module, "_spacy_runtime_version", lambda: "3.test")
+
+    translator = SpacyTranslator(model="fake_package")
+    translator.prepare_for_freeze()
+
+    assert translator.resource_identity is not None
+    assert translator.resource_identity["kind"] == "package"
+    assert translator.resource_identity["package_version"] == "1.2.3"
+    assert translator.resource_identity["static_resource_sha256"]
+
+    translator.is_frozen = True
+    translator.translate([doc.text])
+
+    translator._resource_verified = False
+    resource_file.write_bytes(b"modified-with-same-package-version")
+    with pytest.raises(Exception, match="static-resource fingerprint"):
+        translator.translate([doc.text])
+
+
 def test_spacy_local_path_requires_vendor_mode(monkeypatch, tmp_path: Path) -> None:
     import text_analysis_lab.translators.spacy_translator as module
 
