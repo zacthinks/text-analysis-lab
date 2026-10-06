@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -16,6 +18,7 @@ from text_analysis_lab.translators import (
     RegexCleaner,
     SVD,
     TfidfTransformer,
+    UMAP,
     Word2Vec,
 )
 
@@ -62,6 +65,24 @@ class _KeywordOnlyTranslator(teal.BaseTranslator):
     def finalize_translation(self, *, mode, request):
         _ = mode, request
         raise NotImplementedError
+
+
+class _DistinctTypedInputs(teal.BaseTranslator):
+    def translate(
+        self,
+        table: pd.DataFrame,
+        payload: dict[str, object],
+    ) -> tuple[int, str]:
+        return len(table), str(payload["name"])
+
+
+class _AmbiguousTypedInputs(teal.BaseTranslator):
+    def translate(
+        self,
+        left: pd.DataFrame,
+        right: pd.DataFrame,
+    ) -> tuple[int, int]:
+        return len(left), len(right)
 
 
 class _StandaloneMultiOutput(teal.BaseTranslator):
@@ -172,6 +193,49 @@ def test_pipeline_native_multi_input_preserves_structured_default_output() -> No
     vectors = result["vectors"]
     np.testing.assert_allclose(vectors["values"], [[3.0, 4.0], [1.0, 2.0]])
     assert vectors["feature_metadata"]["column"].tolist() == ["x", "y"]
+
+
+def test_pipeline_multi_source_uses_unique_runtime_type_binding() -> None:
+    pipeline = teal.Pipeline(inputs=["payload_input", "table_input"])
+    combined = pipeline.add(
+        "combined",
+        _DistinctTypedInputs(),
+        sources={
+            "recorded_payload": pipeline.input["payload_input"],
+            "recorded_table": pipeline.input["table_input"],
+        },
+    )
+    pipeline.output("output", combined["output"])
+
+    result = pipeline.translate(
+        inputs={
+            "payload_input": {"name": "matched"},
+            "table_input": pd.DataFrame({"x": [1, 2, 3]}),
+        }
+    )
+
+    assert result["output"] == (3, "matched")
+
+
+def test_pipeline_multi_source_rejects_ambiguous_runtime_type_binding() -> None:
+    pipeline = teal.Pipeline(inputs=["first", "second"])
+    combined = pipeline.add(
+        "combined",
+        _AmbiguousTypedInputs(),
+        sources={
+            "recorded_first": pipeline.input["first"],
+            "recorded_second": pipeline.input["second"],
+        },
+    )
+    pipeline.output("output", combined["output"])
+
+    with pytest.raises(PipelineError, match="multiple type-compatible bindings"):
+        pipeline.translate(
+            inputs={
+                "first": pd.DataFrame({"x": [1]}),
+                "second": pd.DataFrame({"x": [2]}),
+            }
+        )
 
 
 def test_pipeline_native_multi_output_routes_only_referenced_labels() -> None:
@@ -370,6 +434,63 @@ def test_project_pipeline_reconstructs_recorded_representation_chain(
             replayed["feature_metadata"],
             manual["feature_metadata"],
         )
+    finally:
+        project.close()
+
+
+def test_project_pipeline_reconstructs_recomputable_umap(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeUMAP:
+        def __init__(self, *, n_components=2, **kwargs):
+            self.n_components = n_components
+
+        def fit_transform(self, matrix):
+            dense = matrix.toarray() if hasattr(matrix, "toarray") else np.asarray(matrix)
+            return dense[:, : self.n_components]
+
+        def fit(self, matrix):
+            self._seen = matrix.shape
+            return self
+
+        def transform(self, matrix):
+            dense = matrix.toarray() if hasattr(matrix, "toarray") else np.asarray(matrix)
+            return dense[:, : self.n_components]
+
+    monkeypatch.setitem(sys.modules, "umap", SimpleNamespace(UMAP=FakeUMAP))
+    project = teal.Project.create(
+        tmp_path / "project-reconstruct-umap",
+        name="pipeline_reconstruct_umap",
+        delete_existing=True,
+    )
+    try:
+        source = _source(project, tmp_path)
+        count = CountVectorizer(text_field="text", min_df=1)
+        counts = project.translate(count, source)["output"]
+        reducer = UMAP(
+            n_components=1,
+            n_neighbors=2,
+            random_state=7,
+            reuse="recompute",
+        )
+        reduced = project.translate(reducer, counts)["output"]
+
+        assert reducer.is_fitted
+        assert reducer._estimator is None
+
+        recovered = project.pipeline(start=source, end=reduced)
+        recovered_umap = recovered.stages[-1].translator
+        assert recovered_umap.is_fitted
+        assert recovered_umap._estimator is None
+
+        replayed = recovered.translate(
+            pd.Series(["alpha gamma", "beta alpha"]),
+            project=project,
+        )["output"]
+
+        assert replayed["values"].shape == (2, 1)
+        assert recovered_umap._estimator is not None
     finally:
         project.close()
 
