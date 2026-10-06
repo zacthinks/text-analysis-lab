@@ -139,6 +139,12 @@ def _build_replay_plan(
             raise _RepresentationReplayError(
                 f"Frozen operator {operator.__class__.__name__} cannot transform new raw text."
             )
+        if query and operator.__class__.__name__ == "SentenceTransformerEncoder":
+            # Query routing is a distinct scientific recipe. Validate that a
+            # task-specific variant can be derived before advertising replay
+            # support; explicit document-only prompts must fail here rather than
+            # later during GeCo execution.
+            operator.for_task("query")
         return [{"kind": "texts", "operator": operator, "params": params}]
 
     if source.artifact_type in _MATRIX_TYPES:
