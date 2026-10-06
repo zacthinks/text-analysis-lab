@@ -21,6 +21,7 @@ from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
     ColumnRequest,
+    ExecutionCapabilities,
     InputBatch,
     OutputMap,
     OutputSpec,
@@ -62,6 +63,7 @@ class FittedPredictor(BaseTranslator):
         model: Any | None,
         *,
         probability_class: Any | None = None,
+        save_model: bool = False,
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
@@ -71,7 +73,39 @@ class FittedPredictor(BaseTranslator):
             )
         self.model = model
         self.probability_class = _json_scalar(probability_class)
+        self.save_model = bool(save_model)
         self._source_type: str | None = None
+
+    def execution_capabilities(
+        self,
+        *,
+        project: Any | None = None,
+    ) -> ExecutionCapabilities:
+        _ = project
+        if not self.save_model:
+            reason = (
+                "FittedPredictor model persistence/reuse was not opted into. "
+                "Set save_model=True to snapshot and reuse the fitted object at "
+                "the user's own determinism/reproducibility risk."
+            )
+            return ExecutionCapabilities(
+                reusable=False,
+                artifact=True,
+                native=True,
+                portable=False,
+                reasons=(reason,),
+            )
+        return ExecutionCapabilities(
+            reusable=True,
+            artifact=True,
+            native=True,
+            portable=True,
+            reasons=(
+                "FittedPredictor reuse is user-asserted; TeAL preserves the exact "
+                "serialized fitted object but cannot certify arbitrary predict() "
+                "implementations as deterministic.",
+            ),
+        )
 
     @property
     def supports_parallel_translate(self) -> bool:
@@ -256,24 +290,42 @@ class FittedPredictor(BaseTranslator):
         worker = FittedPredictor(
             clone_estimator(self._require_model()),
             probability_class=self.probability_class,
+            save_model=self.save_model,
         )
         worker._source_type = self._source_type
         return worker
 
     def to_json_state(self) -> dict[str, Any]:
-        return {"probability_class": self.probability_class}
+        return {
+            "probability_class": self.probability_class,
+            "save_model": self.save_model,
+        }
 
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> FittedPredictor:
-        return cls(None, probability_class=state.get("probability_class"))
+        return cls(
+            None,
+            probability_class=state.get("probability_class"),
+            save_model=bool(state.get("save_model", False)),
+        )
 
     def save_assets(self, assets_dir: Path) -> Mapping[str, Any]:
+        if not self.save_model:
+            return {}
         assets_dir.mkdir(parents=True, exist_ok=True)
         path = assets_dir / _MODEL_ASSET
         dump_estimator(path, self._require_model())
         return {"estimator_file": path.name}
 
     def load_assets(self, assets_dir: Path, manifest: Mapping[str, Any]) -> None:
+        if not self.save_model:
+            if manifest:
+                raise OperatorError(
+                    "FittedPredictor configured with save_model=False must not have "
+                    "a persisted model asset."
+                )
+            self.model = None
+            return
         filename = manifest.get("estimator_file")
         if not isinstance(filename, str) or not filename:
             raise OperatorError(
