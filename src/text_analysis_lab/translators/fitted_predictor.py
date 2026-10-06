@@ -55,6 +55,8 @@ class FittedPredictor(BaseTranslator):
 
     operation_type = "translate"
 
+    frozen_runtime_fields = frozenset(['_source_type'])
+
     def __init__(
         self,
         model: Any | None,
