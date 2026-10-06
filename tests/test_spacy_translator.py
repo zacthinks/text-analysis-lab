@@ -304,11 +304,9 @@ def test_spacy_translator_rejects_pipeline_without_sentence_boundaries(
 
 
 
-def test_spacy_strict_freeze_references_static_resource_by_default(
-    monkeypatch, tmp_path: Path
-) -> None:
+
+def test_spacy_local_path_requires_vendor_mode(monkeypatch, tmp_path: Path) -> None:
     import text_analysis_lab.translators.spacy_translator as module
-    from text_analysis_lab.core.operator import BaseOperator
 
     doc = _annotated_doc()
     model_dir = tmp_path / "model"
@@ -321,20 +319,9 @@ def test_spacy_strict_freeze_references_static_resource_by_default(
     monkeypatch.setattr(module, "_spacy_runtime_version", lambda: "3.test")
 
     translator = SpacyTranslator(model=str(model_dir))
-    path = tmp_path / "spacy"
-    translator.save_to_dir(path, operator_id="op_spacy")
+    with pytest.raises(Exception, match="opaque local-path resource"):
+        translator.save_to_dir(tmp_path / "spacy", operator_id="op_spacy")
 
-    assert translator.is_frozen
-    assert translator.resolved_spacy_version == "3.test"
-    assert translator.resource_identity is not None
-    assert translator.resource_identity["kind"] == "path"
-    assert not (path / "assets" / "spacy_model").exists()
-
-    restored = BaseOperator.load_from_dir(path)
-    assert isinstance(restored, SpacyTranslator)
-    assert restored.is_frozen
-    assert restored._frozen_model_path is None
-    restored.translate([doc.text])
 
 
 def test_spacy_vendor_mode_persists_operator_local_pipeline_asset(
@@ -472,7 +459,7 @@ def test_real_saved_spacy_pipeline_loads_and_processes_batch(tmp_path: Path) -> 
             "text": ["First sentence. Second sentence.", "Another document."],
         }
     )
-    output = SpacyTranslator(model=str(model_dir), spacy_batch_size=2).translate_batch(
+    output = SpacyTranslator(model=str(model_dir), spacy_batch_size=2, save_model=True).translate_batch(
         {"source": _packet(frame)},
         mode="translate",
         request=TranslationRequest(),
