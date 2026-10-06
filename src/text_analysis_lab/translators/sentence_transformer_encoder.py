@@ -409,7 +409,7 @@ class SentenceTransformerEncoder(BaseTranslator):
     def prepare_for_freeze(self) -> None:
         """Resolve the exact model revision before the durable snapshot is committed."""
         self._runtime_component(device="cpu")
-        if self.resolved_revision is None:
+        if self.resolved_revision is None and not self.save_model:
             raise OperatorError(
                 "SentenceTransformerEncoder could not resolve an exact model revision; "
                 "the translator cannot be frozen reproducibly."
