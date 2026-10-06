@@ -25,6 +25,8 @@ def validate_linguistic_contracts(
     senses: pd.DataFrame | None = None,
     wsd_unresolved: pd.DataFrame | None = None,
     mentions: pd.DataFrame | None = None,
+    srl_failures: pd.DataFrame | None = None,
+    coref_failures: pd.DataFrame | None = None,
     sentence_keys: Sequence[str] = ("row_id", "sentence_id"),
     token_key: str = "token_id",
 ) -> None:
@@ -255,6 +257,42 @@ def validate_linguistic_contracts(
                     "A token cannot be both WSD-resolved and WSD-unresolved in the "
                     f"same contract view: {sorted(overlap)!r}."
                 )
+
+    if srl_failures is not None:
+        _require_columns(
+            srl_failures,
+            (*sentence_keys, "reason", "detail"),
+            label="srl_failures",
+        )
+        _require_unique(srl_failures, sentence_keys, label="srl_failures")
+        for identity in _identity_set(srl_failures, sentence_keys):
+            if identity not in sentence_identity:
+                raise ArtifactError(
+                    f"srl_failures references missing sentence identity {identity}."
+                )
+        if srl_failures["reason"].isna().any():
+            raise ArtifactError("srl_failures cannot use null reason values.")
+
+    if coref_failures is not None:
+        coref_keys = document_keys
+        if not coref_keys:
+            raise ArtifactError(
+                "coref_failures requires sentence_keys to include document-key columns."
+            )
+        _require_columns(
+            coref_failures,
+            (*coref_keys, "reason", "detail"),
+            label="coref_failures",
+        )
+        _require_unique(coref_failures, coref_keys, label="coref_failures")
+        document_identity = _identity_set(sentences, document_keys)
+        for identity in _identity_set(coref_failures, coref_keys):
+            if identity not in document_identity:
+                raise ArtifactError(
+                    f"coref_failures references missing document identity {identity}."
+                )
+        if coref_failures["reason"].isna().any():
+            raise ArtifactError("coref_failures cannot use null reason values.")
 
     if mentions is not None:
         mention_keys = (*document_keys, "cluster_id", "mention_id")
