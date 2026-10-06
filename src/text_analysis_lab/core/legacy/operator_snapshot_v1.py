@@ -6,6 +6,7 @@ pilot cohort no longer needs compatibility with v1 operator snapshots.
 
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 from typing import Any, Literal, Mapping
@@ -135,13 +136,35 @@ def migrate_v1_operator_snapshot(
     descriptor = json.loads(
         (old_dir / "operator.json").read_text(encoding="utf-8")
     )
-    loaded = BaseOperator.load_from_dir(old_dir)
     state = descriptor.get("json_state", {})
     assets = descriptor.get("assets", {})
-    if not isinstance(state, Mapping) or not isinstance(assets, Mapping):
+    class_info = descriptor.get("class")
+    if (
+        not isinstance(state, Mapping)
+        or not isinstance(assets, Mapping)
+        or not isinstance(class_info, Mapping)
+    ):
         raise OperatorError(f"Legacy operator {old_id} has malformed snapshot state.")
 
-    migrated = loaded.__class__.from_json_state(state)
+    module_name = class_info.get("module")
+    qualname = class_info.get("qualname")
+    if not isinstance(module_name, str) or not isinstance(qualname, str):
+        raise OperatorError(f"Legacy operator {old_id} has malformed class metadata.")
+
+    try:
+        target: Any = importlib.import_module(module_name)
+        for part in qualname.split("."):
+            target = getattr(target, part)
+    except (ImportError, AttributeError) as exc:
+        raise OperatorError(
+            f"Legacy operator {old_id} class {module_name}:{qualname} is unavailable."
+        ) from exc
+    if not isinstance(target, type) or not issubclass(target, BaseOperator):
+        raise OperatorError(
+            f"Legacy operator {old_id} class is not a BaseOperator subclass."
+        )
+
+    migrated = target.from_json_state(state)
     if not isinstance(migrated, BaseOperator):
         raise OperatorError(
             f"Legacy operator {old_id} did not reconstruct to a BaseOperator."
