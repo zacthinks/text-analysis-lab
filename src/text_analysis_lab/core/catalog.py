@@ -356,7 +356,7 @@ class ProjectCatalog:
         operator_id: str,
         operation_type: OperationType | str,
         snapshot_status: OperatorSnapshotStatus | str = "serialized",
-        reuse_status: OperatorReuseStatus | str = "legacy_unknown",
+        reuse_status: OperatorReuseStatus | str = "reusable",
     ) -> None:
         """Register one project-owned operator snapshot in the catalog.
 
