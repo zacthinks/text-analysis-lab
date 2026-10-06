@@ -66,9 +66,14 @@ class SemanticRoleHeadResolver(BaseTranslator):
         role_spans: pd.DataFrame,
         tokens: pd.DataFrame,
         *,
-        sentence_keys: Sequence[str],
+        sentence_keys: Sequence[str] | None = None,
     ) -> dict[str, pd.DataFrame]:
-        """Resolve heads from ordinary role-span and token tables."""
+        """Resolve heads from ordinary role-span and token tables.
+
+        sentence_keys may be supplied explicitly for unusual table layouts.
+        Otherwise it is inferred from the role-span key prefix ending immediately
+        before predicate_id and validated against the token table.
+        """
 
         if not isinstance(role_spans, pd.DataFrame) or not isinstance(
             tokens, pd.DataFrame
@@ -77,10 +82,29 @@ class SemanticRoleHeadResolver(BaseTranslator):
                 "SemanticRoleHeadResolver.translate(...) requires pandas DataFrames "
                 "for role_spans and tokens."
             )
-        keys = [str(value) for value in sentence_keys]
+        if sentence_keys is None:
+            columns = [str(value) for value in role_spans.columns]
+            if "predicate_id" not in columns:
+                raise ValueError(
+                    "Cannot infer sentence_keys because role_spans has no "
+                    "'predicate_id' column."
+                )
+            predicate_position = columns.index("predicate_id")
+            keys = columns[:predicate_position]
+        else:
+            keys = [str(value) for value in sentence_keys]
         if not keys or keys[-1] != self.sentence_key:
             raise ValueError(
                 f"sentence_keys must end in {self.sentence_key!r}; got {keys}."
+            )
+        expected_token_keys = [*keys, self.token_key]
+        missing_token_keys = [
+            name for name in expected_token_keys if name not in tokens.columns
+        ]
+        if missing_token_keys:
+            raise ValueError(
+                "SemanticRoleHeadResolver inferred sentence keys that are not "
+                f"present on tokens: {missing_token_keys}."
             )
         payload = self._translate_frames(
             role_spans.reset_index(drop=True),
