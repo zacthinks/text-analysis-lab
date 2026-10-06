@@ -19,6 +19,7 @@ import pandas as pd
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
 from text_analysis_lab.core.operator import (
     BaseTranslator,
+    ExecutionCapabilities,
     BatchResult,
     ColumnRequest,
     InputBatch,
@@ -126,6 +127,26 @@ class OpenAIResponsesTranslator(BaseTranslator):
                 [_response_metadata(response, requested_model=self.model)]
             ),
         }
+
+    def execution_capabilities(
+        self,
+        *,
+        project: Any | None = None,
+    ) -> ExecutionCapabilities:
+        """Responses API calls are provenance-bearing executions, not reusable transforms."""
+        _ = project
+        reason = (
+            "OpenAIResponsesTranslator depends on an external generative service whose "
+            "response is not a deterministic frozen function of TeAL input. Historical "
+            "outputs remain valid, but the operator is not reusable as a frozen transform."
+        )
+        return ExecutionCapabilities(
+            reusable=False,
+            artifact=False,
+            native=False,
+            portable=False,
+            reasons=(reason,),
+        )
 
     @property
     def supports_parallel_translate(self) -> bool:
