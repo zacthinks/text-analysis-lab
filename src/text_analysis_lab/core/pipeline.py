@@ -7,9 +7,11 @@ introduces pipeline-specific scientific data representations.
 from __future__ import annotations
 
 import inspect
+import types
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from itertools import permutations
+from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin, get_type_hints
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
 from text_analysis_lab.core.errors import PipelineError
@@ -148,6 +150,175 @@ class Pipeline:
         self._stages: dict[str, PipelineStage] = {}
         self._outputs: dict[str, PipelinePort] = {}
         self._input_accessor = PipelineInputRef(self)
+
+    @classmethod
+    def from_artifacts(
+        cls,
+        project: Project,
+        *,
+        start: BaseArtifact | str,
+        end: BaseArtifact | str,
+    ) -> Pipeline:
+        """Reconstruct a transform-only Pipeline from recorded artifact provenance.
+
+        ``start`` is the sole public Pipeline input and traversal stops exactly at
+        that artifact. Every source required to produce ``end`` must be derivable
+        from ``start`` through recorded operations. The exact frozen translator
+        snapshots are reused; scientific intent is never guessed from configuration
+        or operation-time parameters.
+        """
+        start_artifact = project.get_artifact(start)
+        end_artifact = project.get_artifact(end)
+        pipeline = cls()
+        input_port = pipeline.input
+        if not isinstance(input_port, PipelinePort):
+            raise PipelineError(
+                "Artifact-derived Pipelines require exactly one public input."
+            )
+
+        start_id = str(start_artifact.artifact_id)
+        artifact_ports: dict[str, PipelinePort] = {start_id: input_port}
+        operation_stages: dict[str, PipelineStageRef] = {}
+        visiting: list[str] = []
+
+        def resolve_artifact(artifact_id: str) -> PipelinePort:
+            artifact_id = str(artifact_id)
+            existing = artifact_ports.get(artifact_id)
+            if existing is not None:
+                return existing
+            if artifact_id in visiting:
+                cycle = " -> ".join([*visiting, artifact_id])
+                raise PipelineError(
+                    "Artifact provenance contains a cycle while reconstructing "
+                    f"Pipeline: {cycle}."
+                )
+
+            visiting.append(artifact_id)
+            try:
+                artifact = project.get_artifact(artifact_id)
+                operation = project.operation_for_artifact(artifact)
+                if operation is None:
+                    raise PipelineError(
+                        f"Artifact {artifact_id!r} is not reachable from declared "
+                        f"start {start_id!r}: it has no recorded producing operation."
+                    )
+                operation_id = str(operation.get("operation_id", ""))
+                if not operation_id:
+                    raise PipelineError(
+                        f"Artifact {artifact_id!r} has malformed producing-operation "
+                        "provenance."
+                    )
+                status = str(operation.get("status", "complete"))
+                if status != "complete":
+                    raise PipelineError(
+                        f"Operation {operation_id!r} is not complete "
+                        f"(status={status!r}) and cannot be reconstructed into a "
+                        "reusable Pipeline."
+                    )
+
+                output_rows = project.operation_outputs(operation_id)
+                requested_output = next(
+                    (
+                        row
+                        for row in output_rows
+                        if str(row.get("artifact_id", "")) == artifact_id
+                    ),
+                    None,
+                )
+                if requested_output is None:
+                    raise PipelineError(
+                        f"Operation {operation_id!r} does not record artifact "
+                        f"{artifact_id!r} as an output."
+                    )
+
+                stage = operation_stages.get(operation_id)
+                if stage is None:
+                    source_rows = project.operation_sources(operation_id)
+                    if not source_rows:
+                        raise PipelineError(
+                            f"Artifact {artifact_id!r} is not reachable from declared "
+                            f"start {start_id!r}: operation {operation_id!r} reaches "
+                            "an upstream root before the declared start artifact."
+                        )
+
+                    bindings: dict[str, PipelinePort] = {}
+                    for row in source_rows:
+                        source_label = str(row.get("source_label", ""))
+                        source_artifact_id = str(row.get("source_artifact_id", ""))
+                        if not source_label or not source_artifact_id:
+                            raise PipelineError(
+                                f"Operation {operation_id!r} has malformed source "
+                                "provenance."
+                            )
+                        if source_label in bindings:
+                            raise PipelineError(
+                                f"Operation {operation_id!r} records duplicate source "
+                                f"label {source_label!r}."
+                            )
+                        bindings[source_label] = resolve_artifact(source_artifact_id)
+
+                    operator_id = operation.get("operator_id")
+                    if not isinstance(operator_id, str) or not operator_id:
+                        raise PipelineError(
+                            f"Operation {operation_id!r} has no frozen operator snapshot."
+                        )
+                    translator = project.get_operator(operator_id)
+                    if not isinstance(translator, BaseTranslator):
+                        raise PipelineError(
+                            f"Operation {operation_id!r} used "
+                            f"{translator.__class__.__name__}, not a reusable translator; "
+                            "artifact-derived Pipelines are transform-only."
+                        )
+                    caps = translator.execution_capabilities(project=project)
+                    if not caps.reusable or not caps.native:
+                        blocked: list[str] = []
+                        if not caps.reusable:
+                            blocked.append("reusable")
+                        if not caps.native:
+                            blocked.append("native")
+                        reasons = (
+                            "; ".join(caps.reasons)
+                            or "translator reports capability unavailable"
+                        )
+                        raise PipelineError(
+                            f"Operation {operation_id!r} cannot be reconstructed as a "
+                            "transform-only native Pipeline stage "
+                            f"({', '.join(blocked)}): {reasons}."
+                        )
+
+                    stage = pipeline.add(operation_id, translator, sources=bindings)
+                    operation_stages[operation_id] = stage
+                    seen_labels: set[str] = set()
+                    for row in output_rows:
+                        output_label = str(row.get("output_label", ""))
+                        output_artifact_id = str(row.get("artifact_id", ""))
+                        if not output_label or not output_artifact_id:
+                            raise PipelineError(
+                                f"Operation {operation_id!r} has malformed output "
+                                "provenance."
+                            )
+                        if output_label in seen_labels:
+                            raise PipelineError(
+                                f"Operation {operation_id!r} records duplicate output "
+                                f"label {output_label!r}."
+                            )
+                        seen_labels.add(output_label)
+                        artifact_ports[output_artifact_id] = stage[output_label]
+
+                resolved = artifact_ports.get(artifact_id)
+                if resolved is None:
+                    raise PipelineError(
+                        f"Operation {operation_id!r} did not expose requested artifact "
+                        f"{artifact_id!r} after reconstruction."
+                    )
+                return resolved
+            finally:
+                visiting.pop()
+
+        end_port = resolve_artifact(str(end_artifact.artifact_id))
+        pipeline.output(DEFAULT_OUTPUT_LABEL, end_port)
+        pipeline.validate(mode="native", project=project)
+        return pipeline
 
     @property
     def input_names(self) -> tuple[str, ...]:
@@ -661,21 +832,142 @@ class Pipeline:
         translator: BaseTranslator,
         bound: Mapping[str, Any],
     ) -> Any:
-        values = tuple(bound.values())
         signature = inspect.signature(translator.translate)
         params = signature.parameters
-        can_use_keywords = all(
-            label in params
+
+        keyword_bound = {
+            label: value
+            for label, value in bound.items()
+            if label in params
             and params[label].kind
             in {
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,
                 inspect.Parameter.KEYWORD_ONLY,
             }
-            for label in bound
+        }
+        if len(keyword_bound) == len(bound):
+            return translator.translate(**keyword_bound)
+
+        if len(bound) == 1:
+            return translator.translate(next(iter(bound.values())))
+
+        unmatched = {
+            label: value for label, value in bound.items() if label not in keyword_bound
+        }
+        available = {
+            name: parameter
+            for name, parameter in params.items()
+            if name not in keyword_bound
+            and parameter.kind
+            in {
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            }
+        }
+        try:
+            hints = get_type_hints(translator.translate)
+        except (NameError, TypeError):
+            hints = {}
+
+        source_labels = tuple(unmatched)
+        parameter_names = tuple(available)
+        matches: list[dict[str, str]] = []
+        if len(source_labels) <= len(parameter_names):
+            for chosen in permutations(parameter_names, len(source_labels)):
+                candidate = dict(zip(source_labels, chosen, strict=True))
+                assigned = set(keyword_bound) | set(chosen)
+                required_satisfied = all(
+                    name in assigned
+                    or parameter.default is not inspect.Parameter.empty
+                    or parameter.kind
+                    in {
+                        inspect.Parameter.VAR_POSITIONAL,
+                        inspect.Parameter.VAR_KEYWORD,
+                    }
+                    for name, parameter in params.items()
+                )
+                if required_satisfied and all(
+                    Pipeline._value_matches_annotation(
+                        unmatched[label],
+                        hints.get(parameter_name, available[parameter_name].annotation),
+                    )
+                    for label, parameter_name in candidate.items()
+                ):
+                    matches.append(candidate)
+                    if len(matches) > 1:
+                        break
+
+        if len(matches) != 1:
+            detail = (
+                "no complete type match"
+                if not matches
+                else "multiple type-compatible bindings"
+            )
+            raise PipelineError(
+                f"{translator.__class__.__name__}.translate(...) cannot bind recorded "
+                f"multi-source labels {list(bound)!r} unambiguously: {detail}. "
+                "Use source labels that match keyword-capable parameters or distinct "
+                "runtime input annotations."
+            )
+
+        matched = matches[0]
+        by_parameter = {
+            parameter_name: unmatched[label]
+            for label, parameter_name in matched.items()
+        }
+        args: list[Any] = []
+        kwargs = dict(keyword_bound)
+        positional_only = [
+            (name, parameter)
+            for name, parameter in params.items()
+            if parameter.kind == inspect.Parameter.POSITIONAL_ONLY
+        ]
+        last_positional = max(
+            (
+                index
+                for index, (name, _) in enumerate(positional_only)
+                if name in by_parameter
+            ),
+            default=-1,
         )
-        if can_use_keywords:
-            return translator.translate(**bound)
-        return translator.translate(*values)
+        for name, parameter in positional_only[: last_positional + 1]:
+            if name in by_parameter:
+                args.append(by_parameter[name])
+            else:
+                args.append(parameter.default)
+
+        for name, value in by_parameter.items():
+            if params[name].kind != inspect.Parameter.POSITIONAL_ONLY:
+                kwargs[name] = value
+        return translator.translate(*args, **kwargs)
+
+    @staticmethod
+    def _value_matches_annotation(value: Any, annotation: Any) -> bool:
+        if annotation is inspect.Parameter.empty or annotation is Any:
+            return False
+        origin = get_origin(annotation)
+        if origin in {types.UnionType, Union}:
+            return any(
+                Pipeline._value_matches_annotation(value, item)
+                for item in get_args(annotation)
+            )
+        if origin is not None:
+            if origin is Literal:
+                return value in get_args(annotation)
+            try:
+                return isinstance(value, origin)
+            except TypeError:
+                return False
+        if isinstance(annotation, types.UnionType):
+            return any(
+                Pipeline._value_matches_annotation(value, item)
+                for item in get_args(annotation)
+            )
+        try:
+            return isinstance(value, annotation)
+        except TypeError:
+            return False
 
     @staticmethod
     def _format_port(port: PipelinePort) -> str:

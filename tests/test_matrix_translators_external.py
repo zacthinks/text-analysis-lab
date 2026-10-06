@@ -253,7 +253,8 @@ def test_real_umap_recompute_round_trip_if_installed(tmp_path: Path) -> None:
     try:
         recomputable = reopened.get_operator(operator_id)
         assert recomputable.reuse == "recompute"
-        assert not recomputable.is_fitted
+        assert recomputable.is_fitted
+        assert recomputable._estimator is None
         reused = reopened.translate(
             recomputable, reopened.get_artifact("art_counts_round14"), batch_size=3
         )["output"]
@@ -263,7 +264,8 @@ def test_real_umap_recompute_round_trip_if_installed(tmp_path: Path) -> None:
         # Refit state is transient; reopening the frozen Operator still begins
         # from the recipe-only form.
         again = reopened.get_operator(operator_id)
-        assert not again.is_fitted
+        assert again.is_fitted
+        assert again._estimator is None
     finally:
         reopened.close()
 
