@@ -209,7 +209,7 @@ def test_spacy_two_output_resume_after_mid_operation_failure(
         source = _seed_documents(project, rows)
         with pytest.raises(RuntimeError, match="intentional spaCy translator"):
             project.translate(
-                SpacyTranslator(model="fake"),
+                SpacyTranslator(model="fake", save_model=True),
                 source,
                 workers=1,
                 batch_size=2,
