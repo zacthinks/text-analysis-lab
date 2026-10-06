@@ -1,5 +1,6 @@
 """Linguistic model and lexical support for TeAL."""
 
+from text_analysis_lab.linguistics.contracts import validate_linguistic_contracts
 from text_analysis_lab.linguistics.heads import (
     SemanticHeadMove,
     SemanticHeadResolution,
@@ -12,6 +13,7 @@ from text_analysis_lab.linguistics.heads import (
 )
 
 __all__ = [
+    "validate_linguistic_contracts",
     "SemanticHeadMove",
     "SemanticHeadResolution",
     "SemanticHeadRules",
