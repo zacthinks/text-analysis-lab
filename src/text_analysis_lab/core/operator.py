@@ -470,6 +470,20 @@ class BaseOperator(ABC):
     """
 
     operation_type: ClassVar[OperationType]
+    frozen_runtime_fields: ClassVar[frozenset[str]] = frozenset()
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "is_frozen", False):
+            if name == "is_frozen":
+                if value is not True:
+                    raise FrozenOperatorError("Frozen operators cannot be unfrozen in place.")
+            elif name not in type(self).frozen_runtime_fields:
+                raise FrozenOperatorError(
+                    f"Cannot modify {name!r} on frozen "
+                    f"{self.operator_id or self.__class__.__name__}. "
+                    "Create a new operator for a different scientific state."
+                )
+        object.__setattr__(self, name, value)
 
     def __init__(self, *, operator_id: str | None = None) -> None:
         self.operator_id = None if operator_id is None else str(operator_id)
