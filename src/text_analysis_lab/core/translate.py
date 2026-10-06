@@ -1339,6 +1339,24 @@ def _prepare_operator_snapshot(
             f"operator descriptor at {descriptor_path}."
         )
 
+    try:
+        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise OperatorError(
+            f"Operator {operator_id} has an unreadable durable descriptor at "
+            f"{descriptor_path}."
+        ) from exc
+    if not isinstance(descriptor, Mapping):
+        raise OperatorError(
+            f"Operator {operator_id} durable descriptor must contain a JSON object."
+        )
+    durable_state = descriptor.get("json_state", {})
+    if not isinstance(durable_state, Mapping):
+        raise OperatorError(
+            f"Operator {operator_id} durable descriptor has invalid json_state."
+        )
+    translator.assert_frozen_scientific_state(expected_state=durable_state)
+
     return _PreparedOperator(operator_id=operator_id, snapshot_pending=False)
 
 
