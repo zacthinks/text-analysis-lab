@@ -1014,6 +1014,17 @@ class Project:
             **params,
         )
 
+    def pipeline(
+        self,
+        *,
+        start: BaseArtifact | str,
+        end: BaseArtifact | str,
+    ) -> Pipeline:
+        """Reconstruct a transform-only Pipeline between explicit artifact endpoints."""
+        from text_analysis_lab.core.pipeline import Pipeline
+
+        return Pipeline.from_artifacts(self, start=start, end=end)
+
     def run_pipeline(
         self,
         pipeline: Pipeline,

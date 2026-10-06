@@ -12,7 +12,10 @@ from text_analysis_lab.core.operator import ExecutionCapabilities
 from text_analysis_lab.translators import (
     CountVectorizer,
     EmbeddingLookup,
+    FeatureTrimmer,
     RegexCleaner,
+    SVD,
+    TfidfTransformer,
     Word2Vec,
 )
 
@@ -319,5 +322,82 @@ def test_project_pipeline_executes_each_stage_as_normal_translation(
             form="table",
         )
         assert frame["clean_text"].tolist() == ["A beta", "gamma A"]
+    finally:
+        project.close()
+
+
+def test_project_pipeline_reconstructs_recorded_representation_chain(
+    tmp_path: Path,
+) -> None:
+    project = teal.Project.create(
+        tmp_path / "project-reconstruct",
+        name="pipeline_reconstruct",
+        delete_existing=True,
+    )
+    try:
+        source = _source(project, tmp_path)
+        count = CountVectorizer(text_field="text", min_df=1)
+        counts = project.translate(count, source)["output"]
+        trimmer = FeatureTrimmer(min_df=1)
+        trimmed = project.translate(trimmer, counts)["output"]
+        tfidf = TfidfTransformer(norm=None)
+        weighted = project.translate(tfidf, trimmed)["output"]
+        svd = SVD(n_components=1, random_state=7)
+        reduced = project.translate(svd, weighted)["output"]
+
+        recovered = project.pipeline(start=source, end=reduced)
+        assert [stage.translator.operator_id for stage in recovered.stages] == [
+            count.operator_id,
+            trimmer.operator_id,
+            tfidf.operator_id,
+            svd.operator_id,
+        ]
+
+        held_out = pd.Series(["alpha gamma", "beta alpha"])
+        manual = svd.translate(
+            tfidf.translate(
+                trimmer.translate(
+                    count.translate(held_out)
+                )
+            )
+        )
+        before = len(project.list_operations())
+        replayed = recovered.translate(held_out, project=project)["output"]
+        assert len(project.list_operations()) == before
+
+        np.testing.assert_allclose(replayed["values"], manual["values"])
+        pd.testing.assert_frame_equal(
+            replayed["feature_metadata"],
+            manual["feature_metadata"],
+        )
+    finally:
+        project.close()
+
+
+def test_project_pipeline_rejects_target_outside_declared_start_provenance(
+    tmp_path: Path,
+) -> None:
+    project = teal.Project.create(
+        tmp_path / "project-unreachable",
+        name="pipeline_unreachable",
+        delete_existing=True,
+    )
+    try:
+        source = _source(project, tmp_path)
+        target = project.translate(
+            RegexCleaner(text_field="text"),
+            source,
+        )["output"]
+
+        other_path = tmp_path / "other-documents.csv"
+        pd.DataFrame({"text": ["unrelated text"]}).to_csv(other_path, index=False)
+        other = project.read_csv(
+            other_path,
+            text_fields="text",
+            metadata_fields=None,
+        )
+
+        with pytest.raises(PipelineError, match="not reachable from declared start"):
+            project.pipeline(start=other, end=target)
     finally:
         project.close()

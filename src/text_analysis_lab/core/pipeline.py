@@ -149,6 +149,181 @@ class Pipeline:
         self._outputs: dict[str, PipelinePort] = {}
         self._input_accessor = PipelineInputRef(self)
 
+    @classmethod
+    def from_artifacts(
+        cls,
+        project: Project,
+        *,
+        start: BaseArtifact | str,
+        end: BaseArtifact | str,
+    ) -> Pipeline:
+        """Reconstruct a transform-only Pipeline from recorded artifact provenance.
+
+        ``start`` is the sole public Pipeline input and traversal stops exactly at
+        that artifact. Every source required to produce ``end`` must be derivable
+        from ``start`` through recorded operations. The exact frozen translator
+        snapshots are reused; scientific intent is never guessed from configuration
+        or operation-time parameters.
+        """
+        start_artifact = project.get_artifact(start)
+        end_artifact = project.get_artifact(end)
+        pipeline = cls()
+        input_port = pipeline.input
+        if not isinstance(input_port, PipelinePort):
+            raise PipelineError(
+                "Artifact-derived Pipelines require exactly one public input."
+            )
+
+        start_id = str(start_artifact.artifact_id)
+        artifact_ports: dict[str, PipelinePort] = {start_id: input_port}
+        operation_stages: dict[str, PipelineStageRef] = {}
+        visiting: list[str] = []
+
+        def resolve_artifact(artifact_id: str) -> PipelinePort:
+            artifact_id = str(artifact_id)
+            existing = artifact_ports.get(artifact_id)
+            if existing is not None:
+                return existing
+            if artifact_id in visiting:
+                cycle = " -> ".join([*visiting, artifact_id])
+                raise PipelineError(
+                    "Artifact provenance contains a cycle while reconstructing "
+                    f"Pipeline: {cycle}."
+                )
+
+            visiting.append(artifact_id)
+            try:
+                artifact = project.get_artifact(artifact_id)
+                operation = project.operation_for_artifact(artifact)
+                if operation is None:
+                    raise PipelineError(
+                        f"Artifact {artifact_id!r} is not reachable from declared "
+                        f"start {start_id!r}: it has no recorded producing operation."
+                    )
+                operation_id = str(operation.get("operation_id", ""))
+                if not operation_id:
+                    raise PipelineError(
+                        f"Artifact {artifact_id!r} has malformed producing-operation "
+                        "provenance."
+                    )
+                status = str(operation.get("status", "complete"))
+                if status != "complete":
+                    raise PipelineError(
+                        f"Operation {operation_id!r} is not complete "
+                        f"(status={status!r}) and cannot be reconstructed into a "
+                        "reusable Pipeline."
+                    )
+
+                output_rows = project.operation_outputs(operation_id)
+                requested_output = next(
+                    (
+                        row
+                        for row in output_rows
+                        if str(row.get("artifact_id", "")) == artifact_id
+                    ),
+                    None,
+                )
+                if requested_output is None:
+                    raise PipelineError(
+                        f"Operation {operation_id!r} does not record artifact "
+                        f"{artifact_id!r} as an output."
+                    )
+
+                stage = operation_stages.get(operation_id)
+                if stage is None:
+                    source_rows = project.operation_sources(operation_id)
+                    if not source_rows:
+                        raise PipelineError(
+                            f"Artifact {artifact_id!r} is not reachable from declared "
+                            f"start {start_id!r}: operation {operation_id!r} reaches "
+                            "an upstream root before the declared start artifact."
+                        )
+
+                    bindings: dict[str, PipelinePort] = {}
+                    for row in source_rows:
+                        source_label = str(row.get("source_label", ""))
+                        source_artifact_id = str(row.get("source_artifact_id", ""))
+                        if not source_label or not source_artifact_id:
+                            raise PipelineError(
+                                f"Operation {operation_id!r} has malformed source "
+                                "provenance."
+                            )
+                        if source_label in bindings:
+                            raise PipelineError(
+                                f"Operation {operation_id!r} records duplicate source "
+                                f"label {source_label!r}."
+                            )
+                        bindings[source_label] = resolve_artifact(source_artifact_id)
+
+                    operator_id = operation.get("operator_id")
+                    if not isinstance(operator_id, str) or not operator_id:
+                        raise PipelineError(
+                            f"Operation {operation_id!r} has no frozen operator snapshot."
+                        )
+                    translator = project.get_operator(operator_id)
+                    if not isinstance(translator, BaseTranslator):
+                        raise PipelineError(
+                            f"Operation {operation_id!r} used "
+                            f"{translator.__class__.__name__}, not a reusable translator; "
+                            "artifact-derived Pipelines are transform-only."
+                        )
+                    if translator.requires_fit and not translator.is_fitted:
+                        raise PipelineError(
+                            f"Operation {operation_id!r} uses unfitted "
+                            f"{translator.__class__.__name__}; artifact-derived Pipelines "
+                            "cannot refit recorded stages."
+                        )
+                    caps = translator.execution_capabilities(project=project)
+                    if not caps.reusable or not caps.native:
+                        blocked: list[str] = []
+                        if not caps.reusable:
+                            blocked.append("reusable")
+                        if not caps.native:
+                            blocked.append("native")
+                        reasons = (
+                            "; ".join(caps.reasons)
+                            or "translator reports capability unavailable"
+                        )
+                        raise PipelineError(
+                            f"Operation {operation_id!r} cannot be reconstructed as a "
+                            "transform-only native Pipeline stage "
+                            f"({', '.join(blocked)}): {reasons}."
+                        )
+
+                    stage = pipeline.add(operation_id, translator, sources=bindings)
+                    operation_stages[operation_id] = stage
+                    seen_labels: set[str] = set()
+                    for row in output_rows:
+                        output_label = str(row.get("output_label", ""))
+                        output_artifact_id = str(row.get("artifact_id", ""))
+                        if not output_label or not output_artifact_id:
+                            raise PipelineError(
+                                f"Operation {operation_id!r} has malformed output "
+                                "provenance."
+                            )
+                        if output_label in seen_labels:
+                            raise PipelineError(
+                                f"Operation {operation_id!r} records duplicate output "
+                                f"label {output_label!r}."
+                            )
+                        seen_labels.add(output_label)
+                        artifact_ports[output_artifact_id] = stage[output_label]
+
+                resolved = artifact_ports.get(artifact_id)
+                if resolved is None:
+                    raise PipelineError(
+                        f"Operation {operation_id!r} did not expose requested artifact "
+                        f"{artifact_id!r} after reconstruction."
+                    )
+                return resolved
+            finally:
+                visiting.pop()
+
+        end_port = resolve_artifact(str(end_artifact.artifact_id))
+        pipeline.output(DEFAULT_OUTPUT_LABEL, end_port)
+        pipeline.validate(mode="native", project=project)
+        return pipeline
+
     @property
     def input_names(self) -> tuple[str, ...]:
         return self._input_names
