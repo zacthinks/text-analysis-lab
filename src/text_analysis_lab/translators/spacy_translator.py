@@ -391,7 +391,12 @@ class SpacyTranslator(BaseTranslator):
         """Resolve exact spaCy resource identity before durable snapshot commit."""
         nlp = _load_spacy_pipeline(self.model, self.disable)
         self.resolved_spacy_version = _spacy_runtime_version()
-        self.resource_identity = _spacy_resource_identity(self.model, nlp)
+        try:
+            self.resource_identity = _spacy_resource_identity(self.model, nlp)
+        except OperatorError:
+            if not self.save_model:
+                raise
+            self.resource_identity = {"kind": "vendor"}
 
     def _verify_frozen_resource(self) -> None:
         if self.resolved_spacy_version is None or self.resource_identity is None:
