@@ -40,6 +40,8 @@ def test_shared_boi_fixture_satisfies_cross_artifact_contract() -> None:
         senses=senses,
         wsd_unresolved=fixture.wsd_unresolved,
         mentions=fixture.mentions,
+        srl_failures=fixture.srl_failures,
+        coref_failures=fixture.coref_failures,
     )
 
 
