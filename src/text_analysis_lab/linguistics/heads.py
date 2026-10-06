@@ -8,6 +8,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 
@@ -129,6 +130,45 @@ _CONDITION_FIELDS = frozenset(
 _MOVE_KINDS = frozenset({"child", "parent", "within"})
 
 
+@dataclass(frozen=True, slots=True)
+class SemanticHeadMove:
+    """One atomic movement in a semantic-head resolution trace."""
+
+    rule_id: str | None
+    kind: str
+    from_index: int
+    to_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticHeadResolution:
+    """One resolved semantic head with row-level scientific provenance."""
+
+    syntactic_root_index: int
+    semantic_head_index: int
+    rule_id: str | None
+    resolution_path: tuple[SemanticHeadMove, ...]
+    rules_fingerprint: str
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _freeze_json(item) for key, item in value.items()}
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _thaw_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
+
+
 def get_default_semantic_head_rules() -> dict[str, Any]:
     """Return an editable copy of the built-in Bag of Ideas rule document."""
 
@@ -185,7 +225,7 @@ class SemanticHeadRules:
                 raise ValueError(f"Duplicate semantic-head rule id {rule_id!r}.")
             seen_ids.add(rule_id)
             normalized.append(rule)
-        object.__setattr__(self, "rules", tuple(normalized))
+        object.__setattr__(self, "rules", tuple(_freeze_json(rule) for rule in normalized))
 
     @property
     def fingerprint(self) -> str:
@@ -206,7 +246,7 @@ class SemanticHeadRules:
             "schema_version": self.schema_version,
             "name": self.name,
             "description": self.description,
-            "rules": copy.deepcopy(list(self.rules)),
+            "rules": [_thaw_json(rule) for rule in self.rules],
         }
 
     @classmethod
@@ -260,7 +300,7 @@ def load_semantic_head_rules(
     )
 
 
-def resolve_semantic_head_indices(
+def resolve_semantic_heads(
     *,
     start: int,
     end: int,
@@ -274,8 +314,8 @@ def resolve_semantic_head_indices(
     ent_types: Sequence[str | None] | None = None,
     source: str | None = None,
     rules: SemanticHeadRules | Mapping[str, Any] | str | Path | None = None,
-) -> tuple[int, ...]:
-    """Return sentence-relative semantic-head indices for one token span.
+) -> tuple[SemanticHeadResolution, ...]:
+    """Resolve semantic heads with movement provenance for one token span.
 
     This implements the original Bag of Ideas rule semantics: start at the
     syntactic head, evaluate ordered rules, require a complete move path, and
@@ -407,22 +447,30 @@ def resolve_semantic_head_indices(
             and global_to_local.get(int(head_token_ids[candidate])) == index
         )
 
-    pending = [syntactic_root]
+    pending: list[tuple[int, tuple[SemanticHeadMove, ...]]] = [
+        (syntactic_root, ())
+    ]
     queued = {syntactic_root}
-    resolved: list[int] = []
+    resolved: list[SemanticHeadResolution] = []
 
     while pending:
-        current = pending.pop(0)
+        current, path = pending.pop(0)
         visited = {current}
 
         while True:
             # Coordination must branch from every head reached by the rule
-            # engine, not only from the final resolved head. Otherwise a rule
-            # such as PREP -> object can move past a coordinated PREP and lose
-            # the second conjunct entirely.
+            # engine, not only from the final resolved head. Record the branch
+            # explicitly so a later artifact can explain why a second head
+            # exists even when both branches later move under ordinary rules.
             for candidate in coordinated_children(current):
                 if candidate not in queued:
-                    pending.append(candidate)
+                    branch_move = SemanticHeadMove(
+                        rule_id=None,
+                        kind="coordination",
+                        from_index=current,
+                        to_index=candidate,
+                    )
+                    pending.append((candidate, (*path, branch_move)))
                     queued.add(candidate)
 
             moved = False
@@ -431,11 +479,21 @@ def resolve_semantic_head_indices(
                     continue
                 candidate = current
                 complete = True
+                rule_moves: list[SemanticHeadMove] = []
                 for step in rule["move"]:
+                    kind = str(next(iter(step)))
                     next_candidate = follow_step(candidate, step)
                     if next_candidate is None:
                         complete = False
                         break
+                    rule_moves.append(
+                        SemanticHeadMove(
+                            rule_id=str(rule["id"]),
+                            kind=kind,
+                            from_index=candidate,
+                            to_index=next_candidate,
+                        )
+                    )
                     candidate = next_candidate
                 if not complete or candidate == current:
                     continue
@@ -445,15 +503,71 @@ def resolve_semantic_head_indices(
                         f"rule {rule['id']!r}."
                     )
                 current = candidate
+                path = (*path, *rule_moves)
                 visited.add(current)
                 moved = True
                 break
 
             if not moved:
-                resolved.append(current)
+                last_rule = next(
+                    (
+                        move.rule_id
+                        for move in reversed(path)
+                        if move.rule_id is not None
+                    ),
+                    None,
+                )
+                resolved.append(
+                    SemanticHeadResolution(
+                        syntactic_root_index=syntactic_root,
+                        semantic_head_index=current,
+                        rule_id=last_rule,
+                        resolution_path=path,
+                        rules_fingerprint=policy.fingerprint,
+                    )
+                )
                 break
 
-    return tuple(dict.fromkeys(resolved))
+    by_head: dict[int, SemanticHeadResolution] = {}
+    for result in resolved:
+        by_head.setdefault(result.semantic_head_index, result)
+    return tuple(by_head.values())
+
+
+def resolve_semantic_head_indices(
+    *,
+    start: int,
+    end: int,
+    token_ids: Sequence[int],
+    head_token_ids: Sequence[int | None],
+    dependencies: Sequence[str | None],
+    pos: Sequence[str | None],
+    text: Sequence[str],
+    role: str | None,
+    lemmas: Sequence[str | None] | None = None,
+    ent_types: Sequence[str | None] | None = None,
+    source: str | None = None,
+    rules: SemanticHeadRules | Mapping[str, Any] | str | Path | None = None,
+) -> tuple[int, ...]:
+    """Project rich semantic-head resolutions to sentence-relative indices."""
+
+    return tuple(
+        result.semantic_head_index
+        for result in resolve_semantic_heads(
+            start=start,
+            end=end,
+            token_ids=token_ids,
+            head_token_ids=head_token_ids,
+            dependencies=dependencies,
+            pos=pos,
+            text=text,
+            role=role,
+            lemmas=lemmas,
+            ent_types=ent_types,
+            source=source,
+            rules=rules,
+        )
+    )
 
 
 def _validate_rule(raw_rule: Mapping[str, Any], *, index: int) -> dict[str, Any]:
