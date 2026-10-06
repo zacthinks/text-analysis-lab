@@ -100,7 +100,7 @@ def test_token_id_is_sentence_local_not_globally_unique() -> None:
     )
 
 
-def test_contract_rejects_cross_sentence_candidate_identity_drift() -> None:
+def test_contract_rejects_candidate_rebound_to_different_existing_token() -> None:
     fixture = build_boi_linguistic_fixture()
     broken = fixture.candidates.copy()
     target = (
@@ -110,7 +110,7 @@ def test_contract_rejects_cross_sentence_candidate_identity_drift() -> None:
     )
     broken.loc[target, "sentence_id"] = 0
 
-    with pytest.raises(ArtifactError, match="missing token identity"):
+    with pytest.raises(ArtifactError, match="disagrees with token"):
         validate_linguistic_contracts(
             sentences=fixture.sentences,
             tokens=fixture.tokens,
