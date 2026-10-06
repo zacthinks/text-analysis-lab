@@ -164,7 +164,13 @@ class UMAP(BaseTranslator):
 
     @property
     def is_fitted(self) -> bool:
-        return self._estimator is not None
+        """Return whether the frozen scientific transformation has been fitted.
+
+        A recomputable UMAP remains fitted even when its runtime estimator is not
+        currently materialized. prepare_for_translation(...) may rebuild that
+        execution state from the recorded immutable fitting artifact.
+        """
+        return self._fit_completed
 
     @property
     def supports_fit_translate(self) -> bool:
@@ -176,7 +182,7 @@ class UMAP(BaseTranslator):
         project: Project | None = None,
     ) -> ExecutionCapabilities:
         """Report whether this fitted/reconstructable UMAP can be reused."""
-        if not self._fit_completed:
+        if not self.is_fitted:
             return ExecutionCapabilities(
                 reusable=False,
                 artifact=False,
@@ -184,7 +190,7 @@ class UMAP(BaseTranslator):
                 portable=False,
                 reasons=("UMAP must be fitted before it can be used in a pipeline.",),
             )
-        if self.is_fitted:
+        if self._estimator is not None:
             return ExecutionCapabilities(
                 reusable=True,
                 artifact=True,
@@ -279,7 +285,7 @@ class UMAP(BaseTranslator):
         sources: Mapping[str, BaseArtifact],
     ) -> None:
         _ = sources
-        if not self._fit_completed or self.is_fitted:
+        if not self.is_fitted or self._estimator is not None:
             return
         if self.reuse == "none":
             raise OperatorError(
