@@ -68,6 +68,9 @@ class _PipeOnlyNLP:
         self.docs_by_text = docs_by_text
         self.pipe_calls = []
 
+    def to_bytes(self):
+        return b"fake-spacy-pipeline"
+
     def __call__(self, text):  # pragma: no cover - should never be reached
         raise AssertionError("SpacyTranslator must use nlp.pipe(), not nlp(text).")
 
@@ -296,6 +299,55 @@ def test_spacy_translator_rejects_pipeline_without_sentence_boundaries(
             mode="translate",
             request=TranslationRequest(),
         )
+
+
+def test_spacy_strict_freeze_pins_and_verifies_pipeline_identity(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import text_analysis_lab.translators.spacy_translator as module
+    from text_analysis_lab.core.operator import BaseOperator
+
+    doc = _annotated_doc()
+    fake_nlp = _PipeOnlyNLP({doc.text: doc})
+    monkeypatch.setattr(module, "_load_spacy_pipeline", lambda model, disable: fake_nlp)
+    monkeypatch.setattr(module, "_spacy_runtime_version", lambda: "3.test")
+
+    translator = SpacyTranslator(model="fake")
+    path = tmp_path / "spacy"
+    translator.save_to_dir(path, operator_id="op_spacy")
+
+    assert translator.is_frozen
+    assert translator.resolved_spacy_version == "3.test"
+    assert translator.resolved_model_hash == module._spacy_pipeline_hash(fake_nlp)
+
+    restored = BaseOperator.load_from_dir(path)
+    assert isinstance(restored, SpacyTranslator)
+    assert restored.is_frozen
+    assert restored.resolved_spacy_version == "3.test"
+    assert restored.resolved_model_hash == translator.resolved_model_hash
+
+    restored.translate([doc.text])
+
+    changed = _PipeOnlyNLP({doc.text: doc})
+    monkeypatch.setattr(changed, "to_bytes", lambda: b"different-pipeline")
+    monkeypatch.setattr(module, "_load_spacy_pipeline", lambda model, disable: changed)
+    with pytest.raises(Exception, match="exact pipeline"):
+        restored.translate([doc.text])
+
+
+def test_legacy_frozen_spacy_snapshot_without_identity_is_not_reusable(
+    monkeypatch,
+) -> None:
+    import text_analysis_lab.translators.spacy_translator as module
+
+    doc = _annotated_doc()
+    fake_nlp = _PipeOnlyNLP({doc.text: doc})
+    monkeypatch.setattr(module, "_load_spacy_pipeline", lambda model, disable: fake_nlp)
+
+    legacy = SpacyTranslator.from_json_state({"model": "fake"})
+    legacy.is_frozen = True
+    with pytest.raises(Exception, match="missing exact spaCy resource identity"):
+        legacy.translate([doc.text])
 
 
 def test_spacy_translator_state_worker_and_resume_round_trip(tmp_path: Path) -> None:
