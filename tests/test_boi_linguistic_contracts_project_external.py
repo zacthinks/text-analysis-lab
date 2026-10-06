@@ -143,6 +143,24 @@ def test_boi_contract_fixture_round_trips_through_project(tmp_path: Path) -> Non
             lineage_mode="extended_key",
             basis=(documents.artifact_id,),
         )
+        srl_failures = _write_table(
+            project,
+            "art_srl_failures",
+            "srl_failures",
+            fixture.srl_failures,
+            ("row_id", "sentence_id"),
+            lineage_mode="preserved_key",
+            basis=(sentences.artifact_id,),
+        )
+        coref_failures = _write_table(
+            project,
+            "art_coref_failures",
+            "coref_failures",
+            fixture.coref_failures,
+            ("row_id",),
+            lineage_mode="preserved_key",
+            basis=(documents.artifact_id,),
+        )
 
         role_heads = project.translate(
             SemanticRoleHeadResolver(),
@@ -163,6 +181,8 @@ def test_boi_contract_fixture_round_trips_through_project(tmp_path: Path) -> Non
             senses=_frame(senses),
             wsd_unresolved=_frame(unresolved),
             mentions=_frame(mentions),
+            srl_failures=_frame(srl_failures),
+            coref_failures=_frame(coref_failures),
         )
 
         assert role_heads.primary_key == (
@@ -197,6 +217,8 @@ def test_boi_contract_fixture_round_trips_through_project(tmp_path: Path) -> Non
             senses=_frame(reopened.get_artifact(sense_id)),
             wsd_unresolved=_frame(reopened.get_artifact(unresolved.artifact_id)),
             mentions=_frame(reopened.get_artifact(mentions.artifact_id)),
+            srl_failures=_frame(reopened.get_artifact(srl_failures.artifact_id)),
+            coref_failures=_frame(reopened.get_artifact(coref_failures.artifact_id)),
         )
     finally:
         reopened.close()
