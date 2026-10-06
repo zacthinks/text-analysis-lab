@@ -206,7 +206,8 @@ def test_function_mapper_sparse_matrix_dataframe_packet_and_snapshot(tmp_path) -
                     ).astype(int)
                 }
             )
-        }
+        },
+        save_function=True,
     )
     source = _source("sparse_matrix", ("a", "b"))
     params = mapper.validate_operation_params(
@@ -287,7 +288,7 @@ def test_fitted_predictor_sparse_prediction_probability_and_snapshot(tmp_path) -
     )
     y = np.array([0, 0, 0, 1, 1, 1])
     model = LogisticRegression(random_state=0).fit(X, y)
-    predictor = FittedPredictor(model, probability_class=1)
+    predictor = FittedPredictor(model, probability_class=1, save_model=True)
     source = _source("sparse_matrix", ("a", "b"))
     predictor.input_request(
         sources={"source": source}, mode="translate", request=TranslationRequest()
