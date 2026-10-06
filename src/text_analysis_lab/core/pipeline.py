@@ -11,7 +11,7 @@ import types
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import permutations
-from typing import TYPE_CHECKING, Any, Literal, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin, get_type_hints
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
 from text_analysis_lab.core.errors import PipelineError
@@ -919,10 +919,10 @@ class Pipeline:
 
     @staticmethod
     def _value_matches_annotation(value: Any, annotation: Any) -> bool:
-        if annotation in {inspect.Parameter.empty, Any}:
+        if annotation is inspect.Parameter.empty or annotation is Any:
             return False
         origin = get_origin(annotation)
-        if origin in {types.UnionType}:
+        if origin in {types.UnionType, Union}:
             return any(
                 Pipeline._value_matches_annotation(value, item)
                 for item in get_args(annotation)
