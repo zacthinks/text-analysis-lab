@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from text_analysis_lab.core.errors import ArtifactError
-from text_analysis_lab.linguistics.contracts import validate_linguistic_contracts
+from _boi_linguistic_contracts import validate_linguistic_contracts
 from text_analysis_lab.translators import SemanticRoleHeadResolver, SenseSelector
 from _boi_linguistic_fixture import (
     CANDIDATE_KEYS,
