@@ -192,7 +192,7 @@ class TeALGeCoProvider:
             except Exception as exc:
                 raise GeCoIntegrationError(
                     f"Could not transform new text through TeAL geometry "
-                    f"{artifact.artifact_id!r} from representation start {start_id!r}."
+                    f"{artifact.artifact_id!r} from text start {start_id!r}."
                 ) from exc
             return values.copy() if hasattr(values, "copy") else values
 
@@ -1824,7 +1824,7 @@ def _text_artifact_id_from_external_ref(external_ref: Any) -> str:
     if not isinstance(artifact_id, str) or not artifact_id:
         raise GeCoIntegrationError(
             "TeAL-backed GeCo geometry ref is missing text_artifact_id. "
-            "Recreate the linked workspace with the current representation contract."
+            "Recreate the linked workspace with the current text/display-text contract."
         )
     return artifact_id
 
