@@ -653,7 +653,9 @@ def _resolve_prompt(
                 f"Available prompts: {sorted(str(key) for key in prompts)}."
             )
         return prompt_name, None, str(prompts[prompt_name])
-    return None, None, ""
+    # SentenceTransformers may otherwise apply model.default_prompt_name.
+    # An explicit empty prompt guarantees TeAL's default is genuinely unprompted.
+    return None, "", ""
 
 
 def _finite_int(value: Any) -> int | None:
