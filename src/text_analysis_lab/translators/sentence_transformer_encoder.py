@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
 
 TruncationPolicy = Literal["error", "truncate"]
+_LegacySentenceTask = Literal["document", "query", "generic"]
 
 
 class SentenceTransformerEncoder(BaseTranslator):
@@ -108,6 +109,9 @@ class SentenceTransformerEncoder(BaseTranslator):
         self.save_model = bool(save_model)
         self.trust_remote_code = bool(trust_remote_code)
 
+        # Compatibility state for pre-1.0 frozen snapshots only. New encoders never
+        # expose or populate a task role.
+        self._legacy_task: _LegacySentenceTask | None = None
         self._local_model_dir: Path | None = None
         self._runtime_model: Any = None
         self._runtime_device: str | None = None
@@ -237,6 +241,7 @@ class SentenceTransformerEncoder(BaseTranslator):
             model,
             prompt_name=self.prompt_name,
             prompt=self.prompt,
+            legacy_task=self._legacy_task,
         )
 
         counted_texts = [f"{prompt_prefix}{text}" for text in values_in]
@@ -360,7 +365,16 @@ class SentenceTransformerEncoder(BaseTranslator):
             kwargs["prompt_name"] = prompt_name
         if prompt is not None:
             kwargs["prompt"] = prompt
-        values = model.encode(list(texts), **kwargs)
+        if self._legacy_task == "document" and callable(
+            getattr(model, "encode_document", None)
+        ):
+            values = model.encode_document(list(texts), **kwargs)
+        elif self._legacy_task == "query" and callable(
+            getattr(model, "encode_query", None)
+        ):
+            values = model.encode_query(list(texts), **kwargs)
+        else:
+            values = model.encode(list(texts), **kwargs)
         return np.asarray(values)
 
     def handle_batch_result(
@@ -397,7 +411,7 @@ class SentenceTransformerEncoder(BaseTranslator):
             )
 
     def to_json_state(self) -> dict[str, Any]:
-        return {
+        state: dict[str, Any] = {
             "model": self.model,
             "text_field": self.text_field,
             "revision": self.revision,
@@ -410,10 +424,15 @@ class SentenceTransformerEncoder(BaseTranslator):
             "save_model": self.save_model,
             "trust_remote_code": self.trust_remote_code,
         }
+        if self._legacy_task is not None:
+            # Preserve the scientific meaning of an already-frozen pre-1.0 snapshot
+            # if it is serialized again during the compatibility window.
+            state["task"] = self._legacy_task
+        return state
 
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> SentenceTransformerEncoder:
-        return cls(
+        encoder = cls(
             model=str(state.get("model", "")),
             text_field=str(state.get("text_field", "text")),
             revision=cast(str | None, state.get("revision")),
@@ -426,6 +445,23 @@ class SentenceTransformerEncoder(BaseTranslator):
             save_model=bool(state.get("save_model", False)),
             trust_remote_code=bool(state.get("trust_remote_code", False)),
         )
+        if "task" in state:
+            legacy_task = str(state["task"]).lower()
+            if legacy_task not in {"document", "query", "generic"}:
+                raise ValueError(
+                    "Legacy SentenceTransformerEncoder task must be "
+                    "'document', 'query', or 'generic'."
+                )
+            warnings.warn(
+                "Loading a frozen SentenceTransformerEncoder that uses legacy "
+                f"task={legacy_task!r}. Legacy task replay is deprecated and will "
+                "be removed in TeAL 1.0; recreate the representation with explicit "
+                "prompt configuration or ordinary generic encode semantics.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            encoder._legacy_task = cast(_LegacySentenceTask, legacy_task)
+        return encoder
 
     def save_assets(self, assets_dir: Path) -> Mapping[str, Any]:
         if not self.save_model:
@@ -640,6 +676,7 @@ def _resolve_prompt(
     *,
     prompt_name: str | None,
     prompt: str | None,
+    legacy_task: _LegacySentenceTask | None = None,
 ) -> tuple[str | None, str | None, str]:
     prompts = getattr(model, "prompts", {})
     if not isinstance(prompts, Mapping):
@@ -653,9 +690,31 @@ def _resolve_prompt(
                 f"Available prompts: {sorted(str(key) for key in prompts)}."
             )
         return prompt_name, None, str(prompts[prompt_name])
-    # SentenceTransformers may otherwise apply model.default_prompt_name.
-    # An explicit empty prompt guarantees TeAL's default is genuinely unprompted.
-    return None, "", ""
+
+    if legacy_task is not None:
+        selected: str | None = None
+        if legacy_task == "document":
+            for candidate in ("document", "passage", "corpus"):
+                if candidate in prompts:
+                    selected = candidate
+                    break
+        elif legacy_task == "query" and "query" in prompts:
+            selected = "query"
+        elif legacy_task == "generic":
+            default_name = getattr(model, "default_prompt_name", None)
+            if isinstance(default_name, str) and default_name in prompts:
+                selected = default_name
+        if selected is None:
+            return None, None, ""
+        return selected, None, str(prompts[selected])
+
+    # New encoders leave SentenceTransformers' ordinary encode() semantics intact.
+    # If the model defines a default prompt, account for it in TeAL's context-window
+    # bookkeeping without overriding it through prompt= or prompt_name=.
+    default_name = getattr(model, "default_prompt_name", None)
+    if isinstance(default_name, str) and default_name in prompts:
+        return None, None, str(prompts[default_name])
+    return None, None, ""
 
 
 def _finite_int(value: Any) -> int | None:
