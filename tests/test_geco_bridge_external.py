@@ -812,7 +812,7 @@ def test_old_link_descriptor_is_rejected_without_migration(tmp_path: Path) -> No
         project.close()
 
 
-def test_linked_geco_rejects_query_support_for_nonreplayable_geometry(
+def test_linked_geco_rejects_nonreplayable_geometry(
     tmp_path: Path, monkeypatch
 ):
     import text_analysis_lab.integrations.geco as bridge
@@ -837,13 +837,12 @@ def test_linked_geco_rejects_query_support_for_nonreplayable_geometry(
                 documents=F,
                 text_field="text",
                 geometry=geometry,
-                supports_query=True,
             )
     finally:
         project.close()
 
 
-def test_linked_geco_replayable_geometry_supports_query_and_text_transform(
+def test_linked_geco_replayable_geometry_supports_symmetric_query_and_text_transform(
     tmp_path: Path, monkeypatch
 ):
     import text_analysis_lab.integrations.geco as bridge
@@ -862,7 +861,6 @@ def test_linked_geco_replayable_geometry_supports_query_and_text_transform(
             text_field="text",
             geometry=tfidf,
             geometry_name="tfidf",
-            supports_query=True,
         )
         assert isinstance(linked.external_provider, TeALGeCoProvider)
         geometry_record = linked.coder.geometries()[0]
@@ -872,10 +870,17 @@ def test_linked_geco_replayable_geometry_supports_query_and_text_transform(
         query = linked.external_provider.transform_query(
             external_ref, "linked document"
         )
+        query_as_text = linked.external_provider.transform_texts(
+            external_ref, ["linked document"]
+        )
         texts = linked.external_provider.transform_texts(
             external_ref, ["linked document 1", "unseen words"]
         )
         assert query.shape == (1, len(tfidf.get_data_columns()))
         assert texts.shape == (2, len(tfidf.get_data_columns()))
+        np.testing.assert_allclose(
+            query.toarray() if sparse.issparse(query) else query,
+            query_as_text.toarray() if sparse.issparse(query_as_text) else query_as_text,
+        )
     finally:
         project.close()
