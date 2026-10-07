@@ -293,6 +293,39 @@ def _seed_table(project: teal.Project):
     return project.get_artifact("art_docs")
 
 
+def _seed_display_table(project: teal.Project):
+    rows = pd.DataFrame(
+        {
+            "row_id": list(range(10)),
+            "text": [f"display document {i}" for i in range(10)],
+        }
+    )
+    writer = create_artifact_writer(
+        artifact_type="table",
+        artifact_dir=project.storage.artifact_dir("art_display"),
+        artifact_id="art_display",
+        label="display_text",
+        lineage_mode="new_key",
+        basis_artifact_ids=(),
+    )
+    writer.write(
+        {
+            "keys": rows[["row_id"]],
+            "data": rows[["text"]],
+        }
+    )
+    writer.finalize()
+    project.catalog.register_artifact(
+        artifact_id="art_display",
+        artifact_type="table",
+        label="display_text",
+        lineage_mode="new_key",
+        status="complete",
+        basis_artifact_ids=(),
+    )
+    return project.get_artifact("art_display")
+
+
 def _seed_matrix(
     project: teal.Project, artifact_id: str, label: str, values, *, columns
 ):
@@ -451,6 +484,61 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
         assert "geometries" not in listing
         assert "projections" not in listing
 
+    finally:
+        project.close()
+
+
+def test_linked_geco_display_text_does_not_become_metadata_source(
+    tmp_path: Path, monkeypatch
+):
+    import text_analysis_lab.integrations.geco as bridge
+
+    _FakeGeometricCoder._registry.clear()
+    monkeypatch.setattr(bridge, "_load_geometric_coder", lambda: _FakeGeometricCoder)
+    monkeypatch.setattr(bridge, "_installed_geco_version", lambda: "0.next-test")
+
+    project = teal.Project.create(tmp_path / "project", name="geco_display_metadata")
+    try:
+        text = _seed_table(project)
+        display_text = _seed_display_table(project)
+        geometry = project.translate(
+            CountVectorizer(
+                text_field="text",
+                vocabulary={"document": 0, "alpha": 1, "beta": 2},
+            ),
+            text,
+        )["output"]
+        split = project.probability_split(
+            text,
+            n=3,
+            sample_label="audit",
+            remainder_label="train",
+            random_state=7,
+        )
+        documents = split["train"]
+        document_keys = _frame(documents)["row_id"].astype(int).tolist()
+
+        linked = project.geco.create(
+            "separate_sources",
+            documents=documents,
+            text=text,
+            display_text=display_text,
+            text_field="text",
+            metadata_fields=["year"],
+            geometry=geometry,
+            geometry_name="counts",
+        )
+
+        assert linked.coder.data["row_id"].astype(int).tolist() == document_keys
+        assert linked.coder.data["text"].tolist() == [
+            f"display document {key}" for key in document_keys
+        ]
+        assert linked.coder.data["year"].astype(int).tolist() == [
+            2020 + (key % 3) for key in document_keys
+        ]
+        assert linked.manifest["documents_artifact_id"] == documents.artifact_id
+        assert linked.manifest["text_artifact_id"] == text.artifact_id
+        assert linked.manifest["display_text_artifact_id"] == display_text.artifact_id
     finally:
         project.close()
 
