@@ -2,7 +2,7 @@
 
 This is intentionally narrower than ordinary translation.  It exists for
 runtime consumers such as externally backed GeCo geometries that need to embed
-one newly composed texts in the *same fitted representation* as
+newly composed texts in the *same fitted representation* as
 an existing TeAL matrix artifact.
 """
 
@@ -79,7 +79,6 @@ def _replay_texts_like(
 def _build_replay_plan(
     project: Project,
     artifact: BaseArtifact,
-    *
 ) -> list[dict[str, Any]]:
     if artifact.artifact_type not in _MATRIX_TYPES:
         raise _RepresentationReplayError(
@@ -156,7 +155,7 @@ def _replay_stage(
     operator: Any,
     values: Any,
     *,
-    kind: str
+    kind: str,
     params: Mapping[str, Any],
 ) -> Any:
     """Execute one frozen replay stage through the ordinary translation contract."""
