@@ -9,7 +9,7 @@ pyarrow = pytest.importorskip("pyarrow")
 duckdb = pytest.importorskip("duckdb")
 
 import text_analysis_lab as teal
-from text_analysis_lab.linguistics.contracts import validate_linguistic_contracts
+from _boi_linguistic_contracts import validate_linguistic_contracts
 from text_analysis_lab.translators import SemanticRoleHeadResolver, SenseSelector
 from _boi_linguistic_fixture import build_boi_linguistic_fixture
 
