@@ -181,7 +181,7 @@ class TeALGeCoProvider:
         """Run a registered geometry's recovered TeAL Pipeline on new text."""
         with self._project_session() as project:
             artifact = self._matrix_artifact(project, external_ref, purpose="geometry")
-            start_id = _representation_artifact_id_from_external_ref(external_ref)
+            start_id = _text_artifact_id_from_external_ref(external_ref)
             try:
                 pipeline = project.pipeline(start=start_id, end=artifact)
                 result = pipeline.translate(
@@ -672,15 +672,15 @@ class LinkedGeCoWorkspace:
             )
         keys = self._manager._document_keys(self.documents)
         self._provider.geometry_matrix(_external_ref(geometry), keys)
-        representation = self._project.get_artifact(
-            str(self._manifest["representation_text_artifact_id"])
+        text_source = self._project.get_artifact(
+            str(self._manifest["text_artifact_id"])
         )
         try:
-            self._project.pipeline(start=representation, end=geometry)
+            self._project.pipeline(start=text_source, end=geometry)
         except PipelineError as exc:
             raise GeCoIntegrationError(
                 f"TeAL geometry {geometry.artifact_id!r} is not replayable from "
-                f"declared representation_text {representation.artifact_id!r}."
+                f"declared text {text_source.artifact_id!r}."
             ) from exc
         text_replay = True
         query_replay = _can_replay_texts_like(
@@ -699,7 +699,7 @@ class LinkedGeCoWorkspace:
                 name=geometry_name,
                 external_ref=_external_ref(
                     geometry,
-                    representation_text=representation,
+                    text=text_source,
                 ),
                 supports_query=resolved_supports_query,
                 supports_text_transform=text_replay,
@@ -801,7 +801,7 @@ class GeCoManager:
         documents: BaseArtifact | str,
         text_field: str,
         geometry: BaseArtifact | str,
-        representation_text: BaseArtifact | str | None = None,
+        text: BaseArtifact | str | None = None,
         display_text: BaseArtifact | str | None = None,
         projections: Mapping[str, BaseArtifact | str] | None = None,
         metadata_fields: Sequence[str] | None = None,
@@ -822,14 +822,14 @@ class GeCoManager:
             raise GeCoIntegrationError(
                 "GeCo documents artifact must contain at least one row."
             )
-        representation_artifact = self.project.get_artifact(
-            documents_artifact if representation_text is None else representation_text
+        text_artifact = self.project.get_artifact(
+            documents_artifact if text is None else text
         )
         display_artifact = self.project.get_artifact(
-            representation_artifact if display_text is None else display_text
+            text_artifact if display_text is None else display_text
         )
         for label, artifact in (
-            ("representation_text", representation_artifact),
+            ("text", text_artifact),
             ("display_text", display_artifact),
         ):
             if artifact.primary_key != documents_artifact.primary_key:
@@ -877,14 +877,14 @@ class GeCoManager:
         ordered_keys = _key_records(document_frame, documents_artifact.primary_key)
         try:
             self.project.pipeline(
-                start=representation_artifact,
+                start=text_artifact,
                 end=geometry_artifact,
             )
         except PipelineError as exc:
             raise GeCoIntegrationError(
                 f"TeAL geometry {geometry_artifact.artifact_id!r} is not replayable "
-                f"from declared representation_text "
-                f"{representation_artifact.artifact_id!r}."
+                f"from declared text "
+                f"{text_artifact.artifact_id!r}."
             ) from exc
         text_replay = True
         query_replay = _can_replay_texts_like(
@@ -904,7 +904,7 @@ class GeCoManager:
         matrix = provider.geometry_matrix(
             _external_ref(
                 geometry_artifact,
-                representation_text=representation_artifact,
+                text=text_artifact,
             ),
             ordered_keys
         )
@@ -936,7 +936,7 @@ class GeCoManager:
                     name=external_geometry_name,
                     external_ref=_external_ref(
                         geometry_artifact,
-                        representation_text=representation_artifact,
+                        text=text_artifact,
                     ),
                     supports_query=resolved_supports_query,
                     supports_text_transform=text_replay,
@@ -955,7 +955,7 @@ class GeCoManager:
                 "mode": "explore",
                 "workspace_path": str(workspace_path.relative_to(self.root)),
                 "documents_artifact_id": documents_artifact.artifact_id,
-                "representation_text_artifact_id": representation_artifact.artifact_id,
+                "text_artifact_id": text_artifact.artifact_id,
                 "display_text_artifact_id": display_artifact.artifact_id,
                 "text_field": text_field,
                 "metadata_fields": list(metadata),
@@ -1129,7 +1129,7 @@ class GeCoManager:
         manifest = self._read_manifest(workspace_name)
         self.project.get_artifact(str(manifest["documents_artifact_id"]))
         if str(manifest.get("mode", "explore")) == "explore":
-            self.project.get_artifact(str(manifest["representation_text_artifact_id"]))
+            self.project.get_artifact(str(manifest["text_artifact_id"]))
             self.project.get_artifact(str(manifest["display_text_artifact_id"]))
         mode = str(manifest.get("mode", "explore"))
         provider = TeALGeCoProvider(self.project) if mode == "explore" else None
@@ -1161,8 +1161,8 @@ class GeCoManager:
                     "name": manifest["name"],
                     "mode": manifest.get("mode", "explore"),
                     "documents_artifact_id": manifest["documents_artifact_id"],
-                    "representation_text_artifact_id": manifest.get(
-                        "representation_text_artifact_id"
+                    "text_artifact_id": manifest.get(
+                        "text_artifact_id"
                     ),
                     "display_text_artifact_id": manifest.get(
                         "display_text_artifact_id"
@@ -1815,15 +1815,15 @@ def _artifact_id_from_external_ref(external_ref: Any) -> str:
     return artifact_id
 
 
-def _representation_artifact_id_from_external_ref(external_ref: Any) -> str:
+def _text_artifact_id_from_external_ref(external_ref: Any) -> str:
     if not isinstance(external_ref, Mapping):
         raise GeCoIntegrationError(
             "TeAL-backed GeCo external_ref must be a mapping."
         )
-    artifact_id = external_ref.get("representation_artifact_id")
+    artifact_id = external_ref.get("text_artifact_id")
     if not isinstance(artifact_id, str) or not artifact_id:
         raise GeCoIntegrationError(
-            "TeAL-backed GeCo geometry ref is missing representation_artifact_id. "
+            "TeAL-backed GeCo geometry ref is missing text_artifact_id. "
             "Recreate the linked workspace with the current representation contract."
         )
     return artifact_id
@@ -1832,11 +1832,11 @@ def _representation_artifact_id_from_external_ref(external_ref: Any) -> str:
 def _external_ref(
     artifact: BaseArtifact,
     *,
-    representation_text: BaseArtifact | None = None,
+    text: BaseArtifact | None = None,
 ) -> dict[str, str]:
     ref = {"artifact_id": artifact.artifact_id}
-    if representation_text is not None:
-        ref["representation_artifact_id"] = representation_text.artifact_id
+    if text is not None:
+        ref["text_artifact_id"] = text.artifact_id
     return ref
 
 
