@@ -118,8 +118,7 @@ def test_real_geco_external_create_register_and_reopen(tmp_path: Path):
                 vocabulary={"linked": 0, "document": 1, "missing": 2},
             ),
             F,
-            output_label="tfidf",
-        )["tfidf"]
+        )["output"]
         geometry_values = geometry.get_matrix()
         view_values = np.array([[float(i), float(i * i)] for i in range(8)])
         view = _seed_matrix(project, "live_view", "umap", view_values, ["x", "y"])
