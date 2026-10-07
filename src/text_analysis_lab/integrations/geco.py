@@ -643,7 +643,6 @@ class LinkedGeCoWorkspace:
         self,
         name: str,
         artifact: BaseArtifact | str,
-        *,
     ) -> int:
         """Register another TeAL-backed geometry in GeCo's authoritative registry."""
         geometry_name = _validate_resource_name(name, kind="geometry")
