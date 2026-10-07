@@ -1267,51 +1267,70 @@ class GeCoManager:
         text_field: str,
         metadata_fields: Sequence[str],
     ) -> pd.DataFrame:
-        """Resolve display text/metadata onto the fixed GeCo key universe."""
+        """Resolve display text onto the fixed GeCo document/metadata universe."""
         key_columns = list(documents.primary_key)
         overlap = sorted(set(metadata_fields).intersection([*key_columns, text_field]))
         if text_field in key_columns or overlap:
             raise GeCoIntegrationError(
                 "GeCo display text/metadata fields may not collide with primary-key columns."
             )
-        target = documents.query(
-            key_columns=True,
-            data_columns=False,
-            metadata_columns=False,
-            order_by="_position",
-            include_position=True,
-            form="table",
-        ).sort_values("_position", kind="stable")
-        target = target.loc[:, [*key_columns, "_position"]].rename(
+        try:
+            target = documents.query(
+                key_columns=True,
+                data_columns=False,
+                metadata_columns=list(metadata_fields) if metadata_fields else False,
+                metadata_mode="full" if metadata_fields else "none",
+                order_by="_position",
+                include_position=True,
+                form="table",
+            ).sort_values("_position", kind="stable")
+        except Exception as exc:
+            raise GeCoIntegrationError(
+                f"Could not resolve requested metadata from documents artifact "
+                f"{documents.artifact_id!r}."
+            ) from exc
+        expected_document_columns = [*key_columns, *metadata_fields, "_position"]
+        missing_document_columns = [
+            column for column in expected_document_columns if column not in target.columns
+        ]
+        if missing_document_columns:
+            raise GeCoIntegrationError(
+                "GeCo documents source is missing requested metadata column(s) "
+                f"{missing_document_columns!r}."
+            )
+        target = target.loc[:, expected_document_columns].rename(
             columns={"_position": "_geco_position"}
         )
         try:
             source_frame = source.query(
                 key_columns=True,
                 data_columns=[text_field],
-                metadata_columns=list(metadata_fields) if metadata_fields else False,
-                metadata_mode="full" if metadata_fields else "none",
+                metadata_columns=False,
+                metadata_mode="none",
                 order_by="_position",
                 include_position=False,
                 form="table",
             )
         except Exception as exc:
             raise GeCoIntegrationError(
-                f"Could not resolve text_field={text_field!r} and requested metadata "
-                f"from display_text artifact {source.artifact_id!r}."
+                f"Could not resolve text_field={text_field!r} from display_text "
+                f"artifact {source.artifact_id!r}."
             ) from exc
-        expected = [*key_columns, text_field, *metadata_fields]
-        missing = [column for column in expected if column not in source_frame.columns]
-        if missing:
+        expected_source_columns = [*key_columns, text_field]
+        missing_source_columns = [
+            column for column in expected_source_columns if column not in source_frame.columns
+        ]
+        if missing_source_columns:
             raise GeCoIntegrationError(
-                f"GeCo display_text source is missing requested column(s) {missing!r}."
+                "GeCo display_text source is missing requested column(s) "
+                f"{missing_source_columns!r}."
             )
         if source_frame.duplicated(subset=key_columns).any():
             raise GeCoIntegrationError(
                 "GeCo display_text source contains duplicate stable keys."
             )
         merged = target.merge(
-            source_frame.loc[:, expected],
+            source_frame.loc[:, expected_source_columns],
             on=key_columns,
             how="left",
             validate="one_to_one",
@@ -1322,6 +1341,7 @@ class GeCoManager:
                 f"GeCo display_text does not cover {missing_keys} document key(s)."
             )
         merged[text_field] = merged[text_field].astype(str)
+        expected = [*key_columns, text_field, *metadata_fields]
         return (
             merged.drop(columns=["_geco_position"])
             .loc[:, expected]
