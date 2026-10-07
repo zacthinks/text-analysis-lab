@@ -399,7 +399,62 @@ def test_sentence_transformer_uses_generic_encode_without_implicit_prompt(monkey
     model = encoder._runtime_model
     assert model.encode_calls[0][0] == "generic"
     assert "prompt_name" not in model.encode_calls[0][1]
-    assert model.encode_calls[0][1]["prompt"] == ""
+    assert "prompt" not in model.encode_calls[0][1]
+
+
+def test_sentence_transformer_leaves_model_default_prompt_intact(monkeypatch):
+    _install_fake_sentence_transformers(monkeypatch)
+    encoder = SentenceTransformerEncoder("example/sbert", revision=_COMMIT)
+    model = encoder._runtime_component(device="cpu")
+    model.default_prompt_name = "document"
+
+    result = encoder.translate_batch(
+        {"source": _packet(["one two", "three"])},
+        mode="translate",
+        request=_request(),
+    )
+
+    assert result.outputs["output"]["metadata"]["token_count"].tolist() == [5, 4]
+    assert model.encode_calls[0][0] == "generic"
+    assert "prompt_name" not in model.encode_calls[0][1]
+    assert "prompt" not in model.encode_calls[0][1]
+
+
+@pytest.mark.parametrize(
+    ("task", "expected_kind", "expected_prompt"),
+    [
+        ("document", "document", "document"),
+        ("query", "query", "query"),
+        ("generic", "generic", None),
+    ],
+)
+def test_legacy_sentence_transformer_task_state_replays_with_deprecation_warning(
+    monkeypatch, task, expected_kind, expected_prompt
+):
+    _install_fake_sentence_transformers(monkeypatch)
+    state = {
+        "model": "example/sbert",
+        "revision": _COMMIT,
+        "task": task,
+    }
+
+    with pytest.warns(FutureWarning, match="removed in TeAL 1.0"):
+        encoder = SentenceTransformerEncoder.from_json_state(state)
+
+    model = encoder._runtime_component(device="cpu")
+    if task == "generic":
+        model.default_prompt_name = "query"
+
+    encoder.translate(["one two"])
+
+    assert model.encode_calls[0][0] == expected_kind
+    kwargs = model.encode_calls[0][1]
+    if expected_prompt is None:
+        assert "prompt_name" not in kwargs
+        assert "prompt" not in kwargs
+    else:
+        assert kwargs["prompt_name"] == expected_prompt
+    assert encoder.to_json_state()["task"] == task
 
 
 def test_sentence_transformer_context_guard_includes_model_prompt(monkeypatch):
