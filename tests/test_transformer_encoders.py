@@ -425,7 +425,7 @@ def test_sentence_transformer_leaves_model_default_prompt_intact(monkeypatch):
     [
         ("document", "document", "document"),
         ("query", "query", "query"),
-        ("generic", "generic", None),
+        ("generic", "generic", "query"),
     ],
 )
 def test_legacy_sentence_transformer_task_state_replays_with_deprecation_warning(
