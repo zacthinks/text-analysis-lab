@@ -15,6 +15,7 @@ pytest.importorskip("duckdb")
 
 import text_analysis_lab as teal
 from text_analysis_lab.core.writer import create_artifact_writer
+from text_analysis_lab.translators import CountVectorizer
 
 if sys.version_info < (3, 11):
     pytest.skip("GeCo requires Python >=3.11", allow_module_level=True)
@@ -111,12 +112,14 @@ def test_real_geco_external_create_register_and_reopen(tmp_path: Path):
     project = teal.Project.create(project_path, name="live_geco")
     try:
         F = _seed_table(project)
-        geometry_values = sparse.csr_matrix(
-            np.array([[i, i % 2, (i + 1) % 3] for i in range(8)], dtype=float)
-        )
-        geometry = _seed_matrix(
-            project, "live_geometry", "tfidf", geometry_values, ["a", "b", "c"]
-        )
+        geometry = project.translate(
+            CountVectorizer(
+                text_field="text",
+                vocabulary={"linked": 0, "document": 1, "missing": 2},
+            ),
+            F,
+        )["output"]
+        geometry_values = geometry.get_matrix()
         view_values = np.array([[float(i), float(i * i)] for i in range(8)])
         view = _seed_matrix(project, "live_view", "umap", view_values, ["x", "y"])
         split = project.probability_split(
@@ -134,10 +137,13 @@ def test_real_geco_external_create_register_and_reopen(tmp_path: Path):
             documents=T,
             text_field="text",
             geometry=geometry,
+            text=F,
             geometry_name="tfidf",
             projections={"umap": view},
         )
-        assert linked.manifest["schema_version"] == 2
+        assert linked.manifest["schema_version"] == 3
+        assert linked.manifest["text_artifact_id"] == F.artifact_id
+        assert linked.manifest["display_text_artifact_id"] == F.artifact_id
         assert linked.manifest["created_with_geco_version"] == str(
             getattr(geometric_coder, "__version__", "")
         )
@@ -172,7 +178,7 @@ def test_real_geco_external_create_register_and_reopen(tmp_path: Path):
         with ThreadPoolExecutor(max_workers=1) as pool:
             matrix = pool.submit(
                 linked.external_provider.geometry_matrix,
-                {"artifact_id": "live_geometry"},
+                {"artifact_id": geometry.artifact_id},
                 [{"row_id": key} for key in reversed(t_keys)],
             ).result()
         np.testing.assert_array_equal(

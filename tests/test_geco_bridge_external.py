@@ -293,6 +293,39 @@ def _seed_table(project: teal.Project):
     return project.get_artifact("art_docs")
 
 
+def _seed_display_table(project: teal.Project):
+    rows = pd.DataFrame(
+        {
+            "row_id": list(range(10)),
+            "text": [f"display document {i}" for i in range(10)],
+        }
+    )
+    writer = create_artifact_writer(
+        artifact_type="table",
+        artifact_dir=project.storage.artifact_dir("art_display"),
+        artifact_id="art_display",
+        label="display_text",
+        lineage_mode="new_key",
+        basis_artifact_ids=(),
+    )
+    writer.write(
+        {
+            "keys": rows[["row_id"]],
+            "data": rows[["text"]],
+        }
+    )
+    writer.finalize()
+    project.catalog.register_artifact(
+        artifact_id="art_display",
+        artifact_type="table",
+        label="display_text",
+        lineage_mode="new_key",
+        status="complete",
+        basis_artifact_ids=(),
+    )
+    return project.get_artifact("art_display")
+
+
 def _seed_matrix(
     project: teal.Project, artifact_id: str, label: str, values, *, columns
 ):
@@ -345,18 +378,14 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
     project = teal.Project.create(project_path, name="geco_bridge")
     try:
         F = _seed_table(project)
-        geometry_values = sparse.csr_matrix(
-            np.array(
-                [[i % 2, (i // 2) % 2, (i // 3) % 2] for i in range(10)], dtype=float
-            )
-        )
-        geometry = _seed_matrix(
-            project,
-            "art_geometry",
-            "tfidf",
-            geometry_values,
-            columns=["a", "b", "c"],
-        )
+        geometry = project.translate(
+            CountVectorizer(
+                text_field="text",
+                vocabulary={"document": 0, "alpha": 1, "beta": 2},
+            ),
+            F,
+        )["output"]
+        geometry_values = geometry.get_matrix()
         view_values = np.array([[float(i), -float(i)] for i in range(10)])
         view = _seed_matrix(
             project,
@@ -378,6 +407,8 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
             text_field="text",
             metadata_fields=["year"],
             geometry=geometry,
+            text=F,
+            display_text=F,
             geometry_name="tfidf",
             projections={"umap": view},
         )
@@ -435,8 +466,10 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
         assert predicted["probability"].between(0.0, 1.0).all()
 
         descriptor = linked.manifest
-        assert descriptor["schema_version"] == 2
+        assert descriptor["schema_version"] == 3
         assert descriptor["documents_artifact_id"] == T.artifact_id
+        assert descriptor["text_artifact_id"] == F.artifact_id
+        assert descriptor["display_text_artifact_id"] == F.artifact_id
         assert descriptor["created_with_geco_version"] == "0.next-test"
         assert "geometries" not in descriptor
         assert "projections" not in descriptor
@@ -446,9 +479,66 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
         listing = project.geco.list()[0]
         assert listing["name"] == "roomtemp"
         assert listing["documents_artifact_id"] == T.artifact_id
+        assert listing["text_artifact_id"] == F.artifact_id
+        assert listing["display_text_artifact_id"] == F.artifact_id
         assert "geometries" not in listing
         assert "projections" not in listing
 
+    finally:
+        project.close()
+
+
+def test_linked_geco_display_text_does_not_become_metadata_source(
+    tmp_path: Path, monkeypatch
+):
+    import text_analysis_lab.integrations.geco as bridge
+
+    _FakeGeometricCoder._registry.clear()
+    monkeypatch.setattr(bridge, "_load_geometric_coder", lambda: _FakeGeometricCoder)
+    monkeypatch.setattr(bridge, "_installed_geco_version", lambda: "0.next-test")
+
+    project = teal.Project.create(tmp_path / "project", name="geco_display_metadata")
+    try:
+        text = _seed_table(project)
+        display_text = _seed_display_table(project)
+        geometry = project.translate(
+            CountVectorizer(
+                text_field="text",
+                vocabulary={"document": 0, "alpha": 1, "beta": 2},
+            ),
+            text,
+        )["output"]
+        split = project.probability_split(
+            text,
+            n=3,
+            sample_label="audit",
+            remainder_label="train",
+            random_state=7,
+        )
+        documents = split["train"]
+        document_keys = _frame(documents)["row_id"].astype(int).tolist()
+
+        linked = project.geco.create(
+            "separate_sources",
+            documents=documents,
+            text=text,
+            display_text=display_text,
+            text_field="text",
+            metadata_fields=["year"],
+            geometry=geometry,
+            geometry_name="counts",
+        )
+
+        assert linked.coder.data["row_id"].astype(int).tolist() == document_keys
+        assert linked.coder.data["text"].tolist() == [
+            f"display document {key}" for key in document_keys
+        ]
+        assert linked.coder.data["year"].astype(int).tolist() == [
+            2020 + (key % 3) for key in document_keys
+        ]
+        assert linked.manifest["documents_artifact_id"] == documents.artifact_id
+        assert linked.manifest["text_artifact_id"] == text.artifact_id
+        assert linked.manifest["display_text_artifact_id"] == display_text.artifact_id
     finally:
         project.close()
 
@@ -588,9 +678,13 @@ def test_linked_geco_add_resources_use_geco_registry_without_mutating_descriptor
         geometry1 = project.translate(CountVectorizer(text_field="text", min_df=1), F)[
             "output"
         ]
-        geometry2 = _seed_matrix(
-            project, "g2", "g2", sparse.csr_matrix(np.ones((10, 2))), columns=["u", "v"]
-        )
+        geometry2 = project.translate(
+            CountVectorizer(
+                text_field="text",
+                vocabulary={"document": 0, "other": 1},
+            ),
+            F,
+        )["output"]
         view1 = _seed_matrix(
             project,
             "v1",
@@ -632,7 +726,7 @@ def test_linked_geco_add_resources_use_geco_registry_without_mutating_descriptor
         assert [record["name"] for record in geometry_records] == ["first", "second"]
         assert [record["supports_text_transform"] for record in geometry_records] == [
             True,
-            False,
+            True,
         ]
         assert [record["name"] for record in linked.coder.views()] == [
             "first_view",
@@ -667,9 +761,13 @@ def test_create_registration_failure_removes_new_workspace_and_link(
     project = teal.Project.create(tmp_path / "project", name="geco_transaction")
     try:
         F = _seed_table(project)
-        geometry = _seed_matrix(
-            project, "g", "g", sparse.eye(10, 3, format="csr"), columns=["a", "b", "c"]
-        )
+        geometry = project.translate(
+            CountVectorizer(
+                text_field="text",
+                vocabulary={"document": 0, "alpha": 1, "beta": 2},
+            ),
+            F,
+        )["output"]
         view = _seed_matrix(
             project,
             "v",
@@ -732,7 +830,7 @@ def test_linked_geco_rejects_query_support_for_nonreplayable_geometry(
             columns=["a", "b", "c"],
         )
         with pytest.raises(
-            GeCoIntegrationError, match="cannot replay semantic queries"
+            GeCoIntegrationError, match="not replayable from declared text"
         ):
             project.geco.create(
                 "roomtemp",
@@ -770,11 +868,12 @@ def test_linked_geco_replayable_geometry_supports_query_and_text_transform(
         geometry_record = linked.coder.geometries()[0]
         assert geometry_record["supports_query"] is True
         assert geometry_record["supports_text_transform"] is True
+        external_ref = geometry_record["external_ref"]
         query = linked.external_provider.transform_query(
-            {"artifact_id": tfidf.artifact_id}, "linked document"
+            external_ref, "linked document"
         )
         texts = linked.external_provider.transform_texts(
-            {"artifact_id": tfidf.artifact_id}, ["linked document 1", "unseen words"]
+            external_ref, ["linked document 1", "unseen words"]
         )
         assert query.shape == (1, len(tfidf.get_data_columns()))
         assert texts.shape == (2, len(tfidf.get_data_columns()))
