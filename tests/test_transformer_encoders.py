@@ -399,6 +399,7 @@ def test_sentence_transformer_uses_generic_encode_without_implicit_prompt(monkey
     model = encoder._runtime_model
     assert model.encode_calls[0][0] == "generic"
     assert "prompt_name" not in model.encode_calls[0][1]
+    assert model.encode_calls[0][1]["prompt"] == ""
 
 
 def test_sentence_transformer_context_guard_includes_model_prompt(monkeypatch):
