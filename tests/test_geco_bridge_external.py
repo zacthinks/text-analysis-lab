@@ -374,7 +374,7 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
             text_field="text",
             metadata_fields=["year"],
             geometry=geometry,
-            representation_text=F,
+            text=F,
             display_text=F,
             geometry_name="tfidf",
             projections={"umap": view},
@@ -435,7 +435,7 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
         descriptor = linked.manifest
         assert descriptor["schema_version"] == 3
         assert descriptor["documents_artifact_id"] == T.artifact_id
-        assert descriptor["representation_text_artifact_id"] == F.artifact_id
+        assert descriptor["text_artifact_id"] == F.artifact_id
         assert descriptor["display_text_artifact_id"] == F.artifact_id
         assert descriptor["created_with_geco_version"] == "0.next-test"
         assert "geometries" not in descriptor
@@ -446,7 +446,7 @@ def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch)
         listing = project.geco.list()[0]
         assert listing["name"] == "roomtemp"
         assert listing["documents_artifact_id"] == T.artifact_id
-        assert listing["representation_text_artifact_id"] == F.artifact_id
+        assert listing["text_artifact_id"] == F.artifact_id
         assert listing["display_text_artifact_id"] == F.artifact_id
         assert "geometries" not in listing
         assert "projections" not in listing
@@ -742,7 +742,7 @@ def test_linked_geco_rejects_query_support_for_nonreplayable_geometry(
             columns=["a", "b", "c"],
         )
         with pytest.raises(
-            GeCoIntegrationError, match="not replayable from declared representation_text"
+            GeCoIntegrationError, match="not replayable from declared text"
         ):
             project.geco.create(
                 "roomtemp",
