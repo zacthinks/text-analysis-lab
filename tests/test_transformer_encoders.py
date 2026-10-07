@@ -293,7 +293,7 @@ def test_transformer_operation_params_match_standalone_runtime_contract(monkeypa
     }
     with pytest.raises(OperatorError, match="unknown operation parameter"):
         sentence.validate_operation_params(
-            {"task": "query"}, sources={"source": source}, mode="translate"
+            {"prompt_name": "query"}, sources={"source": source}, mode="translate"
         )
 
 
