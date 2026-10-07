@@ -178,7 +178,7 @@ def test_provider_uses_recovered_pipeline_for_new_text_and_legacy_query_replay(
     provider = TeALGeCoProvider(project_obj)
     external_ref = {
         "artifact_id": "art_geometry",
-        "representation_artifact_id": "art_documents",
+        "text_artifact_id": "art_documents",
     }
     query = provider.transform_query(external_ref, "room temperature")
     texts = provider.transform_texts(external_ref, ["a", "b"])
