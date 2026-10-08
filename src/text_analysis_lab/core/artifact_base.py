@@ -17,7 +17,6 @@ from text_analysis_lab.core.errors import (
     ArtifactError,
     IncompleteArtifactError,
     MissingDataComponentError,
-    QueryError,
     UnsupportedArtifactOperationError,
 )
 from text_analysis_lab.core.kwic import KWICResult, keyword_in_context
@@ -1002,7 +1001,6 @@ class BaseArtifact(ABC):
         batch_size: int = 10_000,
         include_position: bool = False,
         streaming_mode: StreamingMode = "auto",
-        _internal_matrix_position_filter: bool = False,
     ) -> Any:
         """Return rows from this artifact in a requested form.
 
@@ -1020,33 +1018,6 @@ class BaseArtifact(ABC):
                 "form='single' with iter_batches=True requires batch_size=1; "
                 "otherwise rows would be discarded from multi-row batches."
             )
-
-        if self.artifact_type in {
-            ArtifactType.SPARSE_MATRIX,
-            ArtifactType.DENSE_MATRIX,
-        }:
-            # Matrix values are not columns of DuckDB's relational artifact view.
-            # Keep the positional ordering used by internal matrix workflows.
-            # The translator's private, generated position-range filter is
-            # allowed without exposing SQL matrix filtering to users.
-            positional_order = order_by == "_position" or (
-                isinstance(order_by, Sequence)
-                and not isinstance(order_by, (str, bytes))
-                and list(order_by) == ["_position"]
-            )
-            if (where is not None and not _internal_matrix_position_filter) or (
-                order_by is not None and not positional_order
-            ):
-                raise QueryError(
-                    "SQL where and order_by are not supported for dense or sparse "
-                    "matrix artifact queries: matrix feature values are stored "
-                    "outside the SQL view. Select the needed features with "
-                    "data_columns=[...], form='table', include_position=True; "
-                    "filter or sort the resulting Pandas DataFrame, then pass "
-                    "its '_position' values to query(positions=...). "
-                    "Queries without these SQL clauses (and order_by='_position') "
-                    "remain supported."
-                )
 
         catalog_status = self.status
         if (
