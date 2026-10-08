@@ -17,6 +17,7 @@ from text_analysis_lab.core.errors import (
     ArtifactError,
     IncompleteArtifactError,
     MissingDataComponentError,
+    QueryError,
     UnsupportedArtifactOperationError,
 )
 from text_analysis_lab.core.kwic import KWICResult, keyword_in_context
@@ -1008,6 +1009,30 @@ class BaseArtifact(ABC):
         shape. ``iter_batches=True`` returns an iterable rather than materializing
         the full result.
         """
+        if self.artifact_type in {
+            ArtifactType.SPARSE_MATRIX,
+            ArtifactType.DENSE_MATRIX,
+        }:
+            # Matrix values are not columns of DuckDB's relational artifact view.
+            # Keep the positional ordering used by internal matrix workflows.
+            positional_order = order_by == "_position" or (
+                isinstance(order_by, Sequence)
+                and not isinstance(order_by, (str, bytes))
+                and list(order_by) == ["_position"]
+            )
+            if where is not None or (
+                order_by is not None and not positional_order
+            ):
+                raise QueryError(
+                    "SQL where and order_by are not supported for dense or sparse "
+                    "matrix artifact queries: matrix feature values are stored "
+                    "outside the SQL view. Select the needed features with "
+                    "data_columns=[...], form='table', include_position=True; "
+                    "filter or sort the resulting Pandas DataFrame, then pass "
+                    "its '_position' values to query(positions=...). "
+                    "Queries without these SQL clauses (and order_by='_position') "
+                    "remain supported."
+                )
         _validate_query_form(form)
         _validate_sample_request(
             sample_n=sample_n,
