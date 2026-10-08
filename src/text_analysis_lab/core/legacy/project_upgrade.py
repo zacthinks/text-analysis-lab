@@ -213,19 +213,32 @@ def upgrade_legacy_operators(project: Any, *, dry_run: bool = False) -> dict[str
     This is explicit project maintenance. It never runs automatically from ordinary
     loading, operator lookup, or Pipeline reconstruction.
     """
+    pending_descriptor_operations = [
+        str(row["operation_id"])
+        for row in project.catalog.legacy_operation_rebinds(descriptor_synced=False)
+    ]
     recovered: list[str] = []
     if not dry_run:
         recovered = _recover_pending_descriptor_sync(project)
 
-    legacy_rows = project.catalog.list_operators(
-        include_deleted=False,
-        reuse_status="legacy_unknown",
-    )
+    all_rows = project.catalog.list_operators(include_deleted=False)
+    legacy_rows = [
+        row
+        for row in all_rows
+        if str(row.get("reuse_status", "legacy_unknown")) == "legacy_unknown"
+    ]
+    already_current_operator_ids = [
+        str(row["operator_id"])
+        for row in all_rows
+        if str(row.get("reuse_status", "legacy_unknown")) != "legacy_unknown"
+    ]
     items = [_plan_item(project, row) for row in legacy_rows]
 
     if dry_run:
         return {
             "dry_run": True,
+            "already_current_operator_ids": already_current_operator_ids,
+            "pending_descriptor_operations": pending_descriptor_operations,
             "recovered_descriptor_operations": [],
             "items": items,
         }
@@ -290,6 +303,8 @@ def upgrade_legacy_operators(project: Any, *, dry_run: bool = False) -> dict[str
 
     return {
         "dry_run": False,
+        "already_current_operator_ids": already_current_operator_ids,
+        "pending_descriptor_operations": pending_descriptor_operations,
         "recovered_descriptor_operations": recovered,
         "items": items,
     }
