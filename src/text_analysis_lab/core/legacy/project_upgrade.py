@@ -134,6 +134,12 @@ def _plan_item(project: Any, row: dict[str, Any]) -> dict[str, Any]:
     ]
     aliases = project.catalog.aliases_for_operator(legacy_id)
     strict_id, ambiguity = _canonical_strict_candidate(project, legacy_id)
+    canonical = project.catalog.legacy_operator_upgrade(legacy_id)
+    already_rebound = (
+        canonical is not None
+        and not complete_operations
+        and not aliases
+    )
 
     return {
         "legacy_operator_id": legacy_id,
@@ -145,6 +151,8 @@ def _plan_item(project: Any, row: dict[str, Any]) -> dict[str, Any]:
         "status": (
             "ambiguous_prior_migrations"
             if ambiguity
+            else "already_upgraded"
+            if already_rebound
             else "historical_only"
             if classification == "historical_only"
             else "invalid"
