@@ -24,10 +24,6 @@ from scipy import sparse
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
 from text_analysis_lab.core.errors import ArtifactNotFoundError, PipelineError
-from text_analysis_lab.integrations._representation_replay import (
-    _can_replay_texts_like,
-    _replay_texts_like,
-)
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.core.utils import utc_now_iso
 from text_analysis_lab.translators.geco_predictor import GeCoPredictor
@@ -197,19 +193,8 @@ class TeALGeCoProvider:
             return values.copy() if hasattr(values, "copy") else values
 
     def transform_query(self, external_ref: Any, query: str) -> Any:
-        """Replay one registered geometry's frozen TeAL query transformation."""
-        with self._project_session() as project:
-            artifact = self._matrix_artifact(project, external_ref, purpose="geometry")
-            try:
-                values = _replay_texts_like(
-                    project, artifact, [str(query)], query=True
-                )
-            except Exception as exc:
-                raise GeCoIntegrationError(
-                    f"Could not transform semantic query through TeAL geometry "
-                    f"{artifact.artifact_id!r}."
-                ) from exc
-            return values.copy() if hasattr(values, "copy") else values
+        """Transform one semantic-search string through the geometry's frozen Pipeline."""
+        return self.transform_texts(external_ref, [str(query)])
 
 
 class LinkedGeCoWorkspace:
@@ -658,8 +643,6 @@ class LinkedGeCoWorkspace:
         self,
         name: str,
         artifact: BaseArtifact | str,
-        *,
-        supports_query: bool | None = None,
     ) -> int:
         """Register another TeAL-backed geometry in GeCo's authoritative registry."""
         geometry_name = _validate_resource_name(name, kind="geometry")
@@ -683,17 +666,7 @@ class LinkedGeCoWorkspace:
                 f"declared text {text_source.artifact_id!r}."
             ) from exc
         text_replay = True
-        query_replay = _can_replay_texts_like(
-            self._project, geometry, query=True
-        )
-        resolved_supports_query = (
-            query_replay if supports_query is None else bool(supports_query)
-        )
-        if resolved_supports_query and not query_replay:
-            raise GeCoIntegrationError(
-                f"TeAL geometry {geometry.artifact_id!r} cannot replay semantic queries "
-                "through its frozen operator lineage."
-            )
+        resolved_supports_query = True
         return int(
             self._coder.register_external_geometry(
                 name=geometry_name,
@@ -806,7 +779,6 @@ class GeCoManager:
         projections: Mapping[str, BaseArtifact | str] | None = None,
         metadata_fields: Sequence[str] | None = None,
         geometry_name: str | None = None,
-        supports_query: bool | None = None,
         overwrite: bool = False,
     ) -> LinkedGeCoWorkspace:
         """Create a fixed-universe GeCo workspace linked to TeAL numerical artifacts."""
@@ -887,18 +859,8 @@ class GeCoManager:
                 f"{text_artifact.artifact_id!r}."
             ) from exc
         text_replay = True
-        query_replay = _can_replay_texts_like(
-            self.project, geometry_artifact, query=True
-        )
+        resolved_supports_query = True
         provider = TeALGeCoProvider(self.project)
-        resolved_supports_query = (
-            query_replay if supports_query is None else bool(supports_query)
-        )
-        if resolved_supports_query and not query_replay:
-            raise GeCoIntegrationError(
-                f"TeAL geometry {geometry_artifact.artifact_id!r} cannot replay semantic "
-                "queries through its frozen operator lineage."
-            )
 
         # Preflight the exact stable-key order before creating any mutable GeCo state.
         matrix = provider.geometry_matrix(

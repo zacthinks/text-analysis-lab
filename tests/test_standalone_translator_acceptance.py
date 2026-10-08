@@ -13,7 +13,6 @@ import pytest
 from scipy import sparse
 
 import text_analysis_lab as teal
-from text_analysis_lab.integrations._representation_replay import _replay_texts_like
 from text_analysis_lab.translators import (
     CountVectorizer,
     DelimiterDecomposer,
@@ -88,7 +87,7 @@ def _ordered_keys(artifact) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
-def test_frozen_pipeline_survives_fresh_interpreter_and_matches_geco_replay(
+def test_frozen_pipeline_survives_fresh_interpreter_and_matches_reconstructed_pipeline(
     tmp_path: Path,
 ) -> None:
     project_path = tmp_path / "project"
@@ -101,6 +100,7 @@ def test_frozen_pipeline_survives_fresh_interpreter_and_matches_geco_replay(
             "count_operator_id": str(fitted["count"].operator_id),
             "tfidf_operator_id": str(fitted["tfidf"].operator_id),
             "svd_operator_id": str(fitted["svd"].operator_id),
+            "source_artifact_id": str(source.artifact_id),
             "target_artifact_id": str(fitted["reduced"].artifact_id),
             "texts": [
                 "alpha gamma gamma",
@@ -156,12 +156,11 @@ def test_frozen_pipeline_survives_fresh_interpreter_and_matches_geco_replay(
     try:
         before_operations = len(reopened.list_operations())
         before_artifacts = len(reopened.list_artifacts())
-        replayed = _replay_texts_like(
-            reopened,
-            payload["target_artifact_id"],
-            payload["texts"],
-            query=False,
+        pipeline = reopened.pipeline(
+            start=payload["source_artifact_id"],
+            end=payload["target_artifact_id"],
         )
+        replayed = pipeline.translate(payload["texts"], project=reopened)["output"]["values"]
         assert len(reopened.list_operations()) == before_operations
         assert len(reopened.list_artifacts()) == before_artifacts
     finally:

@@ -513,7 +513,7 @@ def test_transformer_standalone_runtime_defaults_match_teal_contract() -> None:
     assert sentence_signature.parameters["model_batch_size"].default == 32
 
 
-def test_sentence_transformer_standalone_matches_teal_batch_with_fixed_task(
+def test_sentence_transformer_standalone_matches_teal_batch_with_generic_encode(
     monkeypatch,
 ) -> None:
     import text_analysis_lab.translators.sentence_transformer_encoder as module
@@ -522,20 +522,11 @@ def test_sentence_transformer_standalone_matches_teal_batch_with_fixed_task(
         tokenizer = object()
         prompts = {}
 
-        def encode_document(self, texts, **kwargs):
-            _ = kwargs
-            return np.asarray([[len(text), 1.0] for text in texts], dtype=float)
-
-        def encode_query(self, texts, **kwargs):
-            _ = kwargs
-            return np.asarray([[len(text), 2.0] for text in texts], dtype=float)
-
         def encode(self, texts, **kwargs):
             _ = kwargs
             return np.asarray([[len(text), 0.0] for text in texts], dtype=float)
 
-    document = SentenceTransformerEncoder("fake-model", task="document")
-    query = SentenceTransformerEncoder("fake-model", task="query")
+    translator = SentenceTransformerEncoder("fake-model")
     fake_model = FakeModel()
     monkeypatch.setattr(module, "resolve_device", lambda value: "cpu")
     monkeypatch.setattr(
@@ -543,26 +534,24 @@ def test_sentence_transformer_standalone_matches_teal_batch_with_fixed_task(
         "count_tokens",
         lambda tokenizer, texts: [len(text.split()) for text in texts],
     )
-    for translator in (document, query):
-        monkeypatch.setattr(
-            translator,
-            "_runtime_component",
-            lambda *, device: fake_model,
-        )
-        monkeypatch.setattr(
-            translator,
-            "_context_limit",
-            lambda *, model, tokenizer: 100,
-        )
+    monkeypatch.setattr(
+        translator,
+        "_runtime_component",
+        lambda *, device: fake_model,
+    )
+    monkeypatch.setattr(
+        translator,
+        "_context_limit",
+        lambda *, model, tokenizer: 100,
+    )
 
     texts = ["hello world", "TeAL"]
-    direct = document.translate(texts)
-    query_values = query.translate(texts)
-    series_query = query.translate(pd.Series(texts))
+    direct = translator.translate(texts)
+    series = translator.translate(pd.Series(texts))
     assert direct["values"].dtype == np.float32
-    assert query_values["values"][:, 1].tolist() == [2.0, 2.0]
-    np.testing.assert_array_equal(series_query["values"], query_values["values"])
-    assert query_values["feature_metadata"]["column"].tolist() == ["dim_0", "dim_1"]
+    assert direct["values"][:, 1].tolist() == [0.0, 0.0]
+    np.testing.assert_array_equal(series["values"], direct["values"])
+    assert direct["feature_metadata"]["column"].tolist() == ["dim_0", "dim_1"]
 
     frame = pd.DataFrame({"doc_id": [1, 2], "text": texts})
     packet = InputBatch(
@@ -575,16 +564,15 @@ def test_sentence_transformer_standalone_matches_teal_batch_with_fixed_task(
         is_first=True,
         is_last=True,
     )
-    batch = query.translate_batch(
+    batch = translator.translate_batch(
         {"source": packet},
         mode="translate",
         request=TranslationRequest(
             params={"device": "cpu", "model_batch_size": 32}
         ),
     ).outputs["output"]
-    np.testing.assert_allclose(batch["data"]["values"], query_values["values"])
-    pd.testing.assert_frame_equal(batch["metadata"], query_values["metadata"])
-
+    np.testing.assert_allclose(batch["data"]["values"], direct["values"])
+    pd.testing.assert_frame_equal(batch["metadata"], direct["metadata"])
 
 
 def test_matrix_row_aggregator_standalone_matches_teal_batch() -> None:

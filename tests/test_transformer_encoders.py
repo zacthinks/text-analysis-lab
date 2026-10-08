@@ -293,21 +293,21 @@ def test_transformer_operation_params_match_standalone_runtime_contract(monkeypa
     }
     with pytest.raises(OperatorError, match="unknown operation parameter"):
         sentence.validate_operation_params(
-            {"task": "query"}, sources={"source": source}, mode="translate"
+            {"prompt_name": "query"}, sources={"source": source}, mode="translate"
         )
 
 
 
 
 
-def test_frozen_sentence_transformer_blocks_scientific_reassignment() -> None:
+def test_frozen_sentence_transformer_blocks_prompt_reassignment() -> None:
     encoder = SentenceTransformerEncoder(
-        "example/sbert", revision=_COMMIT, task="document"
+        "example/sbert", revision=_COMMIT, prompt_name="document"
     )
     encoder.is_frozen = True
 
-    with pytest.raises(FrozenOperatorError, match="Cannot modify 'task'"):
-        encoder.task = "query"
+    with pytest.raises(FrozenOperatorError, match="Cannot modify 'prompt_name'"):
+        encoder.prompt_name = "query"
 
     # Explicitly declared runtime caches remain mutable after freeze.
     encoder._runtime_device = "cpu"
@@ -381,10 +381,10 @@ def test_contextual_transformer_output_lineage_uses_token_basis(monkeypatch):
     assert specs["contextual_embeddings"].basis_labels == ("tokens",)
 
 
-def test_sentence_transformer_uses_document_recipe_and_counts_prompt(monkeypatch):
+def test_sentence_transformer_uses_generic_encode_without_implicit_prompt(monkeypatch):
     _install_fake_sentence_transformers(monkeypatch)
     encoder = SentenceTransformerEncoder(
-        "example/sbert", revision=_COMMIT, task="document", normalize=True
+        "example/sbert", revision=_COMMIT, normalize=True
     )
     result = encoder.translate_batch(
         {"source": _packet(["one two", "three"])},
@@ -395,17 +395,74 @@ def test_sentence_transformer_uses_document_recipe_and_counts_prompt(monkeypatch
     values = np.asarray(payload["data"]["values"])
     assert values.shape == (2, 3)
     assert np.linalg.norm(values, axis=1).tolist() == pytest.approx([1.0, 1.0])
-    # document prompt "doc: " adds one model token to each source before specials
-    assert payload["metadata"]["token_count"].tolist() == [5, 4]
+    assert payload["metadata"]["token_count"].tolist() == [4, 3]
     model = encoder._runtime_model
-    assert model.encode_calls[0][0] == "document"
-    assert model.encode_calls[0][1]["prompt_name"] == "document"
+    assert model.encode_calls[0][0] == "generic"
+    assert "prompt_name" not in model.encode_calls[0][1]
+    assert "prompt" not in model.encode_calls[0][1]
+
+
+def test_sentence_transformer_leaves_model_default_prompt_intact(monkeypatch):
+    _install_fake_sentence_transformers(monkeypatch)
+    encoder = SentenceTransformerEncoder("example/sbert", revision=_COMMIT)
+    model = encoder._runtime_component(device="cpu")
+    model.default_prompt_name = "document"
+
+    result = encoder.translate_batch(
+        {"source": _packet(["one two", "three"])},
+        mode="translate",
+        request=_request(),
+    )
+
+    assert result.outputs["output"]["metadata"]["token_count"].tolist() == [5, 4]
+    assert model.encode_calls[0][0] == "generic"
+    assert "prompt_name" not in model.encode_calls[0][1]
+    assert "prompt" not in model.encode_calls[0][1]
+
+
+@pytest.mark.parametrize(
+    ("task", "expected_kind", "expected_prompt"),
+    [
+        ("document", "document", "document"),
+        ("query", "query", "query"),
+        ("generic", "generic", "query"),
+    ],
+)
+def test_legacy_sentence_transformer_task_state_replays_with_deprecation_warning(
+    monkeypatch, task, expected_kind, expected_prompt
+):
+    _install_fake_sentence_transformers(monkeypatch)
+    state = {
+        "model": "example/sbert",
+        "revision": _COMMIT,
+        "task": task,
+    }
+
+    with pytest.warns(FutureWarning, match="removed in TeAL 1.0"):
+        encoder = SentenceTransformerEncoder.from_json_state(state)
+
+    model = encoder._runtime_component(device="cpu")
+    if task == "generic":
+        model.default_prompt_name = "query"
+
+    encoder.translate(["one two"])
+
+    assert model.encode_calls[0][0] == expected_kind
+    kwargs = model.encode_calls[0][1]
+    if expected_prompt is None:
+        assert "prompt_name" not in kwargs
+        assert "prompt" not in kwargs
+    else:
+        assert kwargs["prompt_name"] == expected_prompt
+    assert encoder.to_json_state()["task"] == task
 
 
 def test_sentence_transformer_context_guard_includes_model_prompt(monkeypatch):
     _install_fake_sentence_transformers(monkeypatch)
-    encoder = SentenceTransformerEncoder("example/sbert", revision=_COMMIT)
-    # 4 source words + 1 prompt word + 2 special tokens = 7 > model limit 6
+    encoder = SentenceTransformerEncoder(
+        "example/sbert", revision=_COMMIT, prompt_name="document"
+    )
+    # 4 source words + 1 explicit prompt word + 2 special tokens = 7 > model limit 6
     with pytest.raises(ContextWindowExceededError) as excinfo:
         encoder.translate_batch(
             {"source": _packet(["one two three four"])},

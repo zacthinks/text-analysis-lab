@@ -2,7 +2,7 @@
 
 This is intentionally narrower than ordinary translation.  It exists for
 runtime consumers such as externally backed GeCo geometries that need to embed
-one query or a few newly composed texts in the *same fitted representation* as
+newly composed texts in the *same fitted representation* as
 an existing TeAL matrix artifact.
 """
 
@@ -31,12 +31,10 @@ class _RepresentationReplayError(OperatorError):
 def _can_replay_texts_like(
     project: Project,
     artifact: BaseArtifact | str,
-    *,
-    query: bool = False,
 ) -> bool:
     """Return whether TeAL can replay ``artifact``'s frozen lineage on new text."""
     try:
-        _build_replay_plan(project, project.get_artifact(artifact), query=query)
+        _build_replay_plan(project, project.get_artifact(artifact))
     except (ArtifactError, OperatorError, _RepresentationReplayError, KeyError, ValueError):
         return False
     return True
@@ -46,8 +44,6 @@ def _replay_texts_like(
     project: Project,
     artifact: BaseArtifact | str,
     texts: Sequence[str],
-    *,
-    query: bool = False,
 ) -> Any:
     """Replay raw texts into the representation of an existing matrix artifact.
 
@@ -62,7 +58,7 @@ def _replay_texts_like(
             f"artifact; got {target.artifact_type.value!r}."
         )
     normalized = ["" if value is None else str(value) for value in texts]
-    plan = _build_replay_plan(project, target, query=query)
+    plan = _build_replay_plan(project, target)
     values: Any = normalized
     for stage in plan:
         operator = stage["operator"]
@@ -72,7 +68,6 @@ def _replay_texts_like(
             operator,
             values,
             kind=kind,
-            query=query,
             params=params,
         )
     _validate_replayed_rows(values, len(normalized), target)
@@ -84,8 +79,6 @@ def _replay_texts_like(
 def _build_replay_plan(
     project: Project,
     artifact: BaseArtifact,
-    *,
-    query: bool,
 ) -> list[dict[str, Any]]:
     if artifact.artifact_type not in _MATRIX_TYPES:
         raise _RepresentationReplayError(
@@ -139,15 +132,6 @@ def _build_replay_plan(
             raise _RepresentationReplayError(
                 f"Frozen operator {operator.__class__.__name__} cannot transform new raw text."
             )
-        if (
-            query
-            and operator.__class__.__name__ == "SentenceTransformerEncoder"
-            and getattr(operator, "task", None) not in {"query", "generic"}
-        ):
-            raise _RepresentationReplayError(
-                "Query replay cannot reinterpret a frozen SentenceTransformerEncoder "
-                "with a different task. Configure and freeze a separate query encoder."
-            )
         return [{"kind": "texts", "operator": operator, "params": params}]
 
     if source.artifact_type in _MATRIX_TYPES:
@@ -156,7 +140,7 @@ def _build_replay_plan(
                 f"Frozen operator {operator.__class__.__name__} cannot replay new matrix rows."
             )
         return [
-            *_build_replay_plan(project, source, query=query),
+            *_build_replay_plan(project, source),
             {"kind": "matrix", "operator": operator, "params": params},
         ]
 
@@ -172,7 +156,6 @@ def _replay_stage(
     values: Any,
     *,
     kind: str,
-    query: bool,
     params: Mapping[str, Any],
 ) -> Any:
     """Execute one frozen replay stage through the ordinary translation contract."""
@@ -193,7 +176,7 @@ def _replay_stage(
     # without requiring them to invent a public standalone translator contract.
     fallback = getattr(operator, "transform_external_matrix", None)
     if callable(fallback):
-        return fallback(values, query=query, params=params)
+        return fallback(values, params=params)
     raise _RepresentationReplayError(
         f"Frozen operator {operator.__class__.__name__} cannot replay matrix rows."
     )
