@@ -1002,6 +1002,7 @@ class BaseArtifact(ABC):
         batch_size: int = 10_000,
         include_position: bool = False,
         streaming_mode: StreamingMode = "auto",
+        _internal_matrix_position_filter: bool = False,
     ) -> Any:
         """Return rows from this artifact in a requested form.
 
@@ -1009,18 +1010,31 @@ class BaseArtifact(ABC):
         shape. ``iter_batches=True`` returns an iterable rather than materializing
         the full result.
         """
+        _validate_query_form(form)
+        _validate_sample_request(
+            sample_n=sample_n,
+            sample_frac=sample_frac,
+        )
+        if iter_batches and form == "single" and int(batch_size) != 1:
+            raise ValueError(
+                "form='single' with iter_batches=True requires batch_size=1; "
+                "otherwise rows would be discarded from multi-row batches."
+            )
+
         if self.artifact_type in {
             ArtifactType.SPARSE_MATRIX,
             ArtifactType.DENSE_MATRIX,
         }:
             # Matrix values are not columns of DuckDB's relational artifact view.
             # Keep the positional ordering used by internal matrix workflows.
+            # The translator's private, generated position-range filter is
+            # allowed without exposing SQL matrix filtering to users.
             positional_order = order_by == "_position" or (
                 isinstance(order_by, Sequence)
                 and not isinstance(order_by, (str, bytes))
                 and list(order_by) == ["_position"]
             )
-            if where is not None or (
+            if (where is not None and not _internal_matrix_position_filter) or (
                 order_by is not None and not positional_order
             ):
                 raise QueryError(
@@ -1033,16 +1047,6 @@ class BaseArtifact(ABC):
                     "Queries without these SQL clauses (and order_by='_position') "
                     "remain supported."
                 )
-        _validate_query_form(form)
-        _validate_sample_request(
-            sample_n=sample_n,
-            sample_frac=sample_frac,
-        )
-        if iter_batches and form == "single" and int(batch_size) != 1:
-            raise ValueError(
-                "form='single' with iter_batches=True requires batch_size=1; "
-                "otherwise rows would be discarded from multi-row batches."
-            )
 
         catalog_status = self.status
         if (
