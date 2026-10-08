@@ -12,6 +12,7 @@ from collections.abc import Iterable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Any, get_args
 from uuid import uuid4
 
@@ -1996,6 +1997,37 @@ class QueryEngine:
     # Execution
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _matrix_query_error(artifact: BaseArtifact, exc: Exception) -> QueryError | None:
+        """Explain missing matrix features without interfering with valid SQL."""
+        if artifact.artifact_type not in {
+            ArtifactType.DENSE_MATRIX,
+            ArtifactType.SPARSE_MATRIX,
+        }:
+            return None
+        message = str(exc)
+        # DuckDB may report either spelling, depending on its version.
+        missing = re.search(
+            r'(?:Referenced column|Column with name)\\s+["\\']([^"\\']+)["\\']'
+            r'\\s+(?:not found|does not exist)',
+            message,
+            flags=re.IGNORECASE,
+        )
+        if missing is None:
+            return None
+        name = missing.group(1)
+        if name not in artifact.get_data_columns():
+            return None
+        return QueryError(
+            f"Matrix feature {name!r} cannot be used in SQL where or order_by: "
+            "matrix feature values are not columns in the SQL view. "
+            "Queries on primary keys, row positions and metadata are supported. "
+            "To filter on matrix values, select the feature names with "
+            "data_columns=[...], form='table', include_position=True, filter "
+            "or sort the Pandas DataFrame and use query(positions=...) to "
+            "retrieve the matching matrix rows."
+        )
+
     def artifact_query(
         self,
         artifact: BaseArtifact,
@@ -2029,6 +2061,9 @@ class QueryEngine:
         except MissingDependencyError:
             raise
         except Exception as exc:
+            explanation = self._matrix_query_error(artifact, exc)
+            if explanation is not None:
+                raise explanation from exc
             raise QueryError(f"Artifact query failed: {exc}") from exc
         finally:
             for name in reversed(registered):
@@ -2132,6 +2167,11 @@ class QueryEngine:
                     if emitted_any:
                         raise
                     yield from yield_paged()
+        except Exception as exc:
+            explanation = self._matrix_query_error(artifact, exc)
+            if explanation is not None:
+                raise explanation from exc
+            raise
         finally:
             for name in reversed(registered):
                 with suppress(Exception):
