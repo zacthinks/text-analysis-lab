@@ -211,6 +211,12 @@ Analyses performed outside TeAL can still be registered as project Artifacts.
 
 Use `Project.from_keyed_frame(...)` when external measurements attach new columns to an existing key universe. Use `Project.register_external(...)` when you need more explicit control over provenance and structural basis.
 
+## Upgrading older projects
+
+Projects created before TeAL's strict frozen-operator format may need an explicit compatibility upgrade before their historical transformations can participate in current Pipeline replay. TeAL only upgrades operators it can prove are exact migrations and leaves ambiguous historical state untouched.
+
+Use `project.upgrade_legacy_operators(dry_run=True)` to inspect a project before applying changes. See [docs/UPGRADING.md](docs/UPGRADING.md) for the full procedure and guarantees.
+
 ## Development and testing
 
 For contributors working on TeAL itself:
