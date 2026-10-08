@@ -1090,6 +1090,7 @@ def _query_source(
         form=request.form,
         iter_batches=False,
         include_position=request.include_position,
+        _internal_matrix_position_filter=where is not None,
     )
 
 
