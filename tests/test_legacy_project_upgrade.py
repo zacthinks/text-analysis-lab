@@ -141,6 +141,7 @@ def test_project_legacy_upgrade_rebinds_exact_completed_history(
         } == operator_ids_after_first
         assert project.get_operation(operation_id)["operator_id"] == strict_id
         assert second["items"][0]["strict_operator_id"] == strict_id
+        assert second["items"][0]["status"] == "already_upgraded"
     finally:
         project.close()
 
@@ -244,5 +245,79 @@ def test_project_legacy_upgrade_recovers_unsynced_operation_descriptor(
         assert project.catalog.legacy_operation_rebinds(
             descriptor_synced=False
         ) == []
+    finally:
+        project.close()
+
+
+def test_project_legacy_upgrade_does_not_guess_between_prior_migrations(
+    tmp_path: Path,
+) -> None:
+    project = teal.Project.create(tmp_path / "project", name="legacy_upgrade_ambiguous")
+    try:
+        source = _make_source(project, tmp_path)
+        translator = TextLength({"text": "words"})
+        output = project.translate(translator, source)["output"]
+        assert translator.operator_id is not None
+        legacy_id = translator.operator_id
+        operation = project.operation_for_artifact(output)
+        assert operation is not None
+        operation_id = str(operation["operation_id"])
+        _downgrade_operator_to_v1(project, legacy_id)
+
+        first = project.migrate_legacy_operator(legacy_id)
+        second = project.migrate_legacy_operator(legacy_id)
+        assert first.operator_id is not None
+        assert second.operator_id is not None
+        assert first.operator_id != second.operator_id
+
+        report = project.upgrade_legacy_operators()
+        item = report["items"][0]
+        assert item["status"] == "ambiguous_prior_migrations"
+        assert first.operator_id in str(item["reason"])
+        assert second.operator_id in str(item["reason"])
+        assert project.get_operation(operation_id)["operator_id"] == legacy_id
+        assert project.catalog.legacy_operator_upgrade(legacy_id) is None
+    finally:
+        project.close()
+
+
+def test_project_legacy_upgrade_leaves_incomplete_operations_on_legacy_operator(
+    tmp_path: Path,
+) -> None:
+    project = teal.Project.create(tmp_path / "project", name="legacy_upgrade_incomplete")
+    try:
+        legacy_id = "optr_999998"
+        legacy_dir = project.storage.operator_dir(legacy_id)
+        (legacy_dir / "assets").mkdir(parents=True)
+
+        legacy = TextLength({"text": "words"})
+        legacy.assign_operator_id(legacy_id)
+        descriptor = legacy.to_descriptor()
+        descriptor["schema_version"] = 1
+        descriptor["assets"] = {}
+        (legacy_dir / "operator.json").write_text(
+            json.dumps(descriptor, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        project.catalog.register_operator(
+            operator_id=legacy_id,
+            operation_type="translate",
+            snapshot_status="serialized",
+            reuse_status="legacy_unknown",
+        )
+        operation_id = "oper_incomplete"
+        project.catalog.register_operation(
+            operation_id=operation_id,
+            operation_type="translate",
+            operator_id=legacy_id,
+            status="incomplete",
+        )
+
+        report = project.upgrade_legacy_operators()
+        item = report["items"][0]
+        assert item["status"] == "upgraded"
+        assert item["complete_operations"] == []
+        assert item["incomplete_operations"] == [operation_id]
+        assert project.get_operation(operation_id)["operator_id"] == legacy_id
     finally:
         project.close()
