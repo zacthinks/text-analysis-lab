@@ -16,6 +16,7 @@ from text_analysis_lab.translators import (
     EmbeddingLookup,
     FeatureTrimmer,
     FunctionMapper,
+    MatrixNormalizer,
     MatrixTranspose,
     RegexCleaner,
     SVD,
@@ -578,6 +579,34 @@ def test_project_pipeline_reconstructs_recorded_representation_chain(
         )
     finally:
         reopened.close()
+
+
+def test_project_pipeline_rejects_column_normalization_as_reusable_stage(
+    tmp_path: Path,
+) -> None:
+    project = teal.Project.create(
+        tmp_path / "project-column-normalization",
+        name="pipeline_column_normalization",
+        delete_existing=True,
+    )
+    try:
+        source = _source(project, tmp_path)
+        counts = project.translate(
+            CountVectorizer(text_field="text", min_df=1),
+            source,
+        )["output"]
+        normalized = project.translate(
+            MatrixNormalizer(axis="columns", norm="l2"),
+            counts,
+        )["output"]
+
+        with pytest.raises(
+            PipelineError,
+            match="Column-wise normalization depends on the full input row population",
+        ):
+            project.pipeline(start=source, end=normalized)
+    finally:
+        project.close()
 
 
 def test_project_pipeline_reconstructs_recomputable_umap(
