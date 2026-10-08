@@ -16,6 +16,7 @@ from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
     ColumnRequest,
+    ExecutionCapabilities,
     InputBatch,
     OutputMap,
     OutputSpec,
@@ -63,6 +64,26 @@ class MatrixNormalizer(BaseTranslator):
     @property
     def supports_parallel_translate(self) -> bool:
         return self.axis == "rows"
+
+    def execution_capabilities(
+        self,
+        *,
+        project=None,
+    ) -> ExecutionCapabilities:
+        caps = super().execution_capabilities(project=project)
+        if self.axis != "columns":
+            return caps
+        return ExecutionCapabilities(
+            reusable=False,
+            artifact=caps.artifact,
+            native=caps.native,
+            portable=caps.portable,
+            requirements=caps.requirements,
+            reasons=(
+                "Column-wise normalization depends on the full input row population "
+                "and is not a fixed transformation for replay on new rows.",
+            ),
+        )
 
     def supports_resume(self, *, mode: TranslationMode, route: RunRoute) -> bool:
         if mode != "translate":
