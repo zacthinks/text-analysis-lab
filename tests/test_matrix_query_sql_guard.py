@@ -107,3 +107,16 @@ def test_table_sql_clauses_remain_supported(tmp_path: Path):
         assert result["doc_id"].tolist() == [0, 2]
     finally:
         project.close()
+
+
+def test_matrix_query_internal_translator_window_remains_supported(matrix_artifact):
+    # Translation plans generate position-range SQL internally. Public queries
+    # must reject identical SQL while the trusted translation path still runs.
+    with pytest.raises(QueryError, match="SQL where"):
+        matrix_artifact.query(where="_position >= 1 AND _position < 3")
+    result = matrix_artifact.query(
+        where="_position >= 1 AND _position < 3",
+        _internal_matrix_position_filter=True,
+        form="native",
+    )
+    assert result["info"]["doc_id"].tolist() == [1, 2]
