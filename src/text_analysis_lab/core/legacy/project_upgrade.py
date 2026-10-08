@@ -51,14 +51,14 @@ def _descriptor_payload(project: Any, operation_id: str) -> dict[str, Any]:
     return payload
 
 
-def _write_rebound_descriptor(
+def _stage_rebound_descriptor(
     project: Any,
     *,
     operation_id: str,
     legacy_operator_id: str,
     strict_operator_id: str,
-) -> None:
-    """Atomically synchronize one completed operation descriptor after catalog rebind."""
+) -> Path:
+    """Prepare one replacement operation descriptor without changing the live file."""
     path = project.storage.operation_descriptor_path(operation_id)
     payload = _descriptor_payload(project, operation_id)
     current = str(payload.get("operator_id", ""))
@@ -78,8 +78,39 @@ def _write_rebound_descriptor(
         json.dumps(payload, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    return staged
+
+
+def _commit_staged_descriptor(
+    project: Any,
+    *,
+    operation_id: str,
+    staged: Path,
+) -> None:
+    path = project.storage.operation_descriptor_path(operation_id)
     os.replace(staged, path)
     project.catalog.mark_legacy_rebind_descriptor_synced(operation_id)
+
+
+def _write_rebound_descriptor(
+    project: Any,
+    *,
+    operation_id: str,
+    legacy_operator_id: str,
+    strict_operator_id: str,
+) -> None:
+    """Prepare and atomically synchronize one operation descriptor."""
+    staged = _stage_rebound_descriptor(
+        project,
+        operation_id=operation_id,
+        legacy_operator_id=legacy_operator_id,
+        strict_operator_id=strict_operator_id,
+    )
+    _commit_staged_descriptor(
+        project,
+        operation_id=operation_id,
+        staged=staged,
+    )
 
 
 def _recover_pending_descriptor_sync(project: Any) -> list[str]:
@@ -212,28 +243,33 @@ def upgrade_legacy_operators(project: Any, *, dry_run: bool = False) -> dict[str
 
         complete_operations = list(item["complete_operations"])
 
-        # Validate every descriptor before catalog mutation.
-        for operation_id in complete_operations:
-            payload = _descriptor_payload(project, operation_id)
-            descriptor_operator = str(payload.get("operator_id", ""))
-            if descriptor_operator not in {legacy_id, strict_id}:
-                raise OperatorError(
-                    f"Operation {operation_id} descriptor references "
-                    f"{descriptor_operator!r}; expected {legacy_id!r}."
+        # Stage every descriptor before catalog mutation so serialization and
+        # filesystem writes are proven viable before durable references change.
+        staged_descriptors: dict[str, Path] = {}
+        try:
+            for operation_id in complete_operations:
+                staged_descriptors[operation_id] = _stage_rebound_descriptor(
+                    project,
+                    operation_id=operation_id,
+                    legacy_operator_id=legacy_id,
+                    strict_operator_id=strict_id,
                 )
 
-        project.catalog.apply_legacy_operator_upgrade(
-            legacy_operator_id=legacy_id,
-            strict_operator_id=strict_id,
-            operation_ids=complete_operations,
-        )
-
-        for operation_id in complete_operations:
-            _write_rebound_descriptor(
-                project,
-                operation_id=operation_id,
+            project.catalog.apply_legacy_operator_upgrade(
                 legacy_operator_id=legacy_id,
                 strict_operator_id=strict_id,
+                operation_ids=complete_operations,
+            )
+        except Exception:
+            for staged in staged_descriptors.values():
+                staged.unlink(missing_ok=True)
+            raise
+
+        for operation_id, staged in staged_descriptors.items():
+            _commit_staged_descriptor(
+                project,
+                operation_id=operation_id,
+                staged=staged,
             )
 
         item["status"] = "upgraded"
