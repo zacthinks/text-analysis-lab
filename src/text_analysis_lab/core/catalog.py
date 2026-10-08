@@ -195,6 +195,29 @@ class ProjectCatalog:
                 CREATE INDEX IF NOT EXISTS idx_operator_aliases_touched_at
                 ON operator_aliases(operator_id, touched_at DESC, alias);
 
+                CREATE TABLE IF NOT EXISTS legacy_operator_upgrades (
+                    legacy_operator_id TEXT PRIMARY KEY,
+                    strict_operator_id TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (legacy_operator_id) REFERENCES operators(operator_id),
+                    FOREIGN KEY (strict_operator_id) REFERENCES operators(operator_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS legacy_operation_rebinds (
+                    operation_id TEXT PRIMARY KEY,
+                    legacy_operator_id TEXT NOT NULL,
+                    strict_operator_id TEXT NOT NULL,
+                    descriptor_synced INTEGER NOT NULL DEFAULT 0
+                        CHECK (descriptor_synced IN (0, 1)),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (operation_id) REFERENCES operations(operation_id),
+                    FOREIGN KEY (legacy_operator_id) REFERENCES operators(operator_id),
+                    FOREIGN KEY (strict_operator_id) REFERENCES operators(operator_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_legacy_operation_rebinds_sync
+                ON legacy_operation_rebinds(descriptor_synced, operation_id);
+
                 CREATE TABLE IF NOT EXISTS memos (
                     memo_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     target_type TEXT NOT NULL,
@@ -566,6 +589,121 @@ class ProjectCatalog:
                 (str(operator_id),),
             )
             return int(cur.rowcount)
+
+    def legacy_operator_upgrade(self, legacy_operator_id: str) -> dict[str, Any] | None:
+        """Return the canonical strict replacement for one legacy operator, if any."""
+        with self.con as con:
+            row = con.execute(
+                "SELECT * FROM legacy_operator_upgrades WHERE legacy_operator_id = ?",
+                (str(legacy_operator_id),),
+            ).fetchone()
+        return self._dict(row)
+
+    def legacy_operation_rebinds(
+        self,
+        *,
+        descriptor_synced: bool | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return project-level legacy operation rebind audit rows."""
+        sql = "SELECT * FROM legacy_operation_rebinds"
+        params: list[Any] = []
+        if descriptor_synced is not None:
+            sql += " WHERE descriptor_synced = ?"
+            params.append(1 if descriptor_synced else 0)
+        sql += " ORDER BY operation_id"
+        with self.con as con:
+            return self._dicts(con.execute(sql, params).fetchall())
+
+    def apply_legacy_operator_upgrade(
+        self,
+        *,
+        legacy_operator_id: str,
+        strict_operator_id: str,
+        operation_ids: Iterable[str],
+    ) -> None:
+        """Atomically record/rebind one exact legacy operator upgrade in the catalog."""
+        legacy_id = str(legacy_operator_id)
+        strict_id = str(strict_operator_id)
+        operation_ids = tuple(sorted({str(item) for item in operation_ids}))
+
+        with self.con as con:
+            existing = con.execute(
+                "SELECT strict_operator_id FROM legacy_operator_upgrades "
+                "WHERE legacy_operator_id = ?",
+                (legacy_id,),
+            ).fetchone()
+            if existing is not None and str(existing["strict_operator_id"]) != strict_id:
+                raise ValueError(
+                    f"Legacy operator {legacy_id} is already canonically mapped to "
+                    f"{existing['strict_operator_id']}, not {strict_id}."
+                )
+
+            if existing is None:
+                con.execute(
+                    """
+                    INSERT INTO legacy_operator_upgrades(
+                        legacy_operator_id, strict_operator_id, created_at
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (legacy_id, strict_id, utc_now_iso()),
+                )
+
+            for operation_id in operation_ids:
+                row = con.execute(
+                    "SELECT operator_id, status FROM operations WHERE operation_id = ?",
+                    (operation_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(operation_id)
+                if str(row["status"]) != "complete":
+                    raise ValueError(
+                        f"Operation {operation_id} is not complete and cannot be rebound."
+                    )
+                current_operator = str(row["operator_id"])
+                if current_operator not in {legacy_id, strict_id}:
+                    raise ValueError(
+                        f"Operation {operation_id} references {current_operator}, not "
+                        f"{legacy_id} or {strict_id}."
+                    )
+                if current_operator == legacy_id:
+                    con.execute(
+                        "UPDATE operations SET operator_id = ? WHERE operation_id = ?",
+                        (strict_id, operation_id),
+                    )
+                con.execute(
+                    """
+                    INSERT INTO legacy_operation_rebinds(
+                        operation_id,
+                        legacy_operator_id,
+                        strict_operator_id,
+                        descriptor_synced,
+                        created_at
+                    ) VALUES (?, ?, ?, 0, ?)
+                    ON CONFLICT(operation_id) DO UPDATE SET
+                        legacy_operator_id = excluded.legacy_operator_id,
+                        strict_operator_id = excluded.strict_operator_id
+                    """,
+                    (operation_id, legacy_id, strict_id, utc_now_iso()),
+                )
+
+            con.execute(
+                "UPDATE operator_aliases SET operator_id = ? WHERE operator_id = ?",
+                (strict_id, legacy_id),
+            )
+
+    def mark_legacy_rebind_descriptor_synced(self, operation_id: str) -> None:
+        """Mark one rebound operation descriptor synchronized with its catalog row."""
+        with self.con as con:
+            cur = con.execute(
+                """
+                UPDATE legacy_operation_rebinds
+                SET descriptor_synced = 1
+                WHERE operation_id = ?
+                """,
+                (str(operation_id),),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(str(operation_id))
 
     # ------------------------------------------------------------------
     # Operations
