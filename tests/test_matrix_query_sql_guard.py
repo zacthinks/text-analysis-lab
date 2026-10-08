@@ -43,26 +43,63 @@ def matrix_artifact(tmp_path: Path, request):
     "clauses",
     [
         {"where": '"apple" >= 5 AND "orange" >= 6'},
-        {"where": "doc_id >= 2"},
-        {"where": "year >= 2022", "metadata_mode": "full"},
         {"order_by": '"orange" DESC'},
-        {"order_by": "doc_id DESC"},
         {"where": '"apple" >= 5', "order_by": '"orange" DESC'},
     ],
 )
-def test_matrix_sql_clauses_fail_with_actionable_error(matrix_artifact, clauses):
-    with pytest.raises(QueryError, match="Select the needed features with") as exc:
+def test_matrix_feature_sql_fails_with_actionable_error(matrix_artifact, clauses):
+    with pytest.raises(QueryError, match="Matrix feature") as exc:
         matrix_artifact.query(**clauses)
     message = str(exc.value)
-    assert "dense or sparse" in message
     assert "data_columns" in message
     assert "include_position=True" in message
     assert "query(positions=...)" in message
 
 
-def test_matrix_sql_clauses_fail_for_streaming_queries(matrix_artifact):
-    with pytest.raises(QueryError, match="matrix feature values"):
-        matrix_artifact.query(where='"apple" > 0', iter_batches=True)
+def test_matrix_feature_sql_fails_in_streaming_query(matrix_artifact):
+    with pytest.raises(QueryError, match="Matrix feature"):
+        list(matrix_artifact.query(where='"apple" > 0', iter_batches=True))
+
+
+@pytest.mark.parametrize("condition,expected", [
+    ("doc_id >= 2", [2, 3, 4]),
+    ("year >= 2022", [2, 3, 4]),
+    ("_position < 2", [0, 1]),
+])
+def test_matrix_sql_filter_on_relational_columns(matrix_artifact, condition, expected):
+    frame = matrix_artifact.query(
+        where=condition,
+        metadata_mode="full",
+        metadata_columns=True,
+        form="table",
+    )
+    assert frame["doc_id"].tolist() == expected
+
+
+@pytest.mark.parametrize("order", ["doc_id DESC", "year DESC"])
+def test_matrix_sql_sort_on_relational_columns(matrix_artifact, order):
+    frame = matrix_artifact.query(
+        order_by=order,
+        metadata_mode="full",
+        metadata_columns=True,
+        form="table",
+    )
+    assert frame["doc_id"].tolist() == [4, 3, 2, 1, 0]
+
+
+def test_matrix_sql_where_and_order_together(matrix_artifact):
+    frame = matrix_artifact.query(
+        where="year >= 2022",
+        order_by="doc_id DESC",
+        metadata_mode="full",
+        form="table",
+    )
+    assert frame["doc_id"].tolist() == [4, 3, 2]
+
+
+def test_missing_nonfeature_column_retains_normal_error(matrix_artifact):
+    with pytest.raises(QueryError, match="Artifact query failed"):
+        matrix_artifact.query(where='"not_a_feature" >= 5')
 
 
 def test_matrix_feature_table_filter_then_position_query(matrix_artifact):
@@ -109,14 +146,8 @@ def test_table_sql_clauses_remain_supported(tmp_path: Path):
         project.close()
 
 
-def test_matrix_query_internal_translator_window_remains_supported(matrix_artifact):
-    # Translation plans generate position-range SQL internally. Public queries
-    # must reject identical SQL while the trusted translation path still runs.
-    with pytest.raises(QueryError, match="SQL where"):
-        matrix_artifact.query(where="_position >= 1 AND _position < 3")
-    result = matrix_artifact.query(
-        where="_position >= 1 AND _position < 3",
-        _internal_matrix_position_filter=True,
-        form="native",
+def test_matrix_position_window_is_valid_sql(matrix_artifact):
+    frame = matrix_artifact.query(
+        where="_position >= 1 AND _position < 3", form="table"
     )
-    assert result["info"]["doc_id"].tolist() == [1, 2]
+    assert frame["doc_id"].tolist() == [1, 2]
