@@ -301,9 +301,14 @@ def upgrade_legacy_operators(project: Any, *, dry_run: bool = False) -> dict[str
         item["status"] = "upgraded"
         item["reason"] = None
 
+    current_after = [
+        str(row["operator_id"])
+        for row in project.catalog.list_operators(include_deleted=False)
+        if str(row.get("reuse_status", "legacy_unknown")) != "legacy_unknown"
+    ]
     return {
         "dry_run": False,
-        "already_current_operator_ids": already_current_operator_ids,
+        "already_current_operator_ids": current_after,
         "pending_descriptor_operations": pending_descriptor_operations,
         "recovered_descriptor_operations": recovered,
         "items": items,
