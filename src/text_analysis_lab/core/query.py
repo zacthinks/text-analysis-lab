@@ -2008,11 +2008,16 @@ class QueryEngine:
         message = str(exc)
         # DuckDB may report either spelling, depending on its version.
         missing = re.search(
-            r'(?:Referenced column|Column with name)\\s+["\\']([^"\\']+)["\\']'
-            r'\\s+(?:not found|does not exist)',
+            r'Referenced column "([^"]+)" not found',
             message,
             flags=re.IGNORECASE,
         )
+        if missing is None:
+            missing = re.search(
+                r'Column with name "([^"]+)" does not exist',
+                message,
+                flags=re.IGNORECASE,
+            )
         if missing is None:
             return None
         name = missing.group(1)
