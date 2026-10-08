@@ -557,6 +557,16 @@ class Project:
 
         return migrate_v1_operator_snapshot(self, operator_id)
 
+    def upgrade_legacy_operators(self, *, dry_run: bool = False) -> dict[str, Any]:
+        """Upgrade exactly migratable legacy operator references for project replay.
+
+        The upgrade is explicit and auditable. It does not rerun analyses or mutate
+        artifact payloads, and historical-only snapshots remain untouched.
+        """
+        from text_analysis_lab.core.legacy import upgrade_legacy_operators
+
+        return upgrade_legacy_operators(self, dry_run=dry_run)
+
     def add_operator_alias(self, ref: BaseOperator | str, alias: str) -> None:
         """Add a project-level alias for a frozen operator."""
         self.catalog.add_operator_alias(self.resolve_operator_id(ref), alias)
