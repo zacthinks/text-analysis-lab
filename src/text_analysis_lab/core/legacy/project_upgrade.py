@@ -30,6 +30,19 @@ def _valid_prior_migrations(project: Any, legacy_operator_id: str) -> list[str]:
             continue
         if str(payload.get("migrated_from_operator_id")) != str(legacy_operator_id):
             continue
+        if int(payload.get("migrated_to_snapshot_schema", 0)) != 2:
+            continue
+        descriptor_path = project.storage.operator_descriptor_path(operator_id)
+        try:
+            descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(descriptor, dict):
+            continue
+        if int(descriptor.get("schema_version", 0)) != 2:
+            continue
+        if str(descriptor.get("operator_id", "")) != operator_id:
+            continue
         matches.append(operator_id)
     return sorted(set(matches))
 
