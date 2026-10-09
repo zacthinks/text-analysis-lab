@@ -4,6 +4,15 @@ TeAL provides persistent, lineage-aware artifacts and operators for reproducible
 computational text-analysis workflows.
 """
 
+from importlib.metadata import PackageNotFoundError, version as _distribution_version
+
+try:
+    __version__ = _distribution_version("text-analysis-lab")
+except PackageNotFoundError:
+    # Source-tree imports outside an installed development environment have no
+    # distribution metadata. The authoritative version remains pyproject.toml.
+    __version__ = "0+unknown"
+
 from text_analysis_lab.core.aggregate import (
     AggregateField,
     ConcatReducer,
@@ -49,6 +58,7 @@ from text_analysis_lab.linguistics import (
 from . import analysis, dictionaries, translators, visualization
 
 __all__ = [
+    "__version__",
     "AggregateField",
     "BaseArtifact",
     "BaseOperator",

@@ -1,6 +1,6 @@
 # Text Analysis Lab (TeAL)
 
-**Current development release: 0.2.0 · Python 3.11+ · MIT**
+**Current development release: 0.3.0 · Python 3.11+ · MIT**
 
 Text Analysis Lab (TeAL) is an end-to-end project environment for computer-assisted text analysis. It is designed to support transparent, intentional, rigorous, and reproducible multi-stage work: importing and restructuring corpora, building representations, exploring patterns, developing and validating measures, and carrying results into downstream analysis while preserving the relationships among those stages.
 
