@@ -7,6 +7,7 @@ from text_analysis_lab.translators._hf_utils import (
 from text_analysis_lab.translators.artifact_count_vectorizer import (
     ArtifactCountVectorizer,
 )
+from text_analysis_lab.translators.clustering import DBSCAN, KMeans
 from text_analysis_lab.translators.contextual_transformer import (
     CONTEXTUAL_EMBEDDINGS_LABEL,
     ContextualTransformer,
@@ -53,6 +54,8 @@ from text_analysis_lab.translators.word_sense_disambiguator import (
 
 __all__ = [
     "CONTEXTUAL_EMBEDDINGS_LABEL",
+    "DBSCAN",
+    "KMeans",
     "LDA",
     "LDA_TOPICS_LABEL",
     "LSA",
