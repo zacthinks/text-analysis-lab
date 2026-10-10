@@ -93,7 +93,7 @@ def test_spectral_rejects_unimplemented_precomputed():
 @pytest.mark.parametrize("factory,kind", [
     (lambda: MiniBatchKMeans(n_clusters=2, random_state=7, n_init=3, batch_size=4, reassignment_ratio=0), "sparse"),
     (lambda: GaussianMixture(n_components=2, random_state=7, n_init=2), "dense"),
-    (lambda: SpectralClustering(n_clusters=2, random_state=7, assign_labels="cluster_qr"), "sparse"),
+    (lambda: SpectralClustering(n_clusters=2, n_neighbors=3, random_state=7, assign_labels="cluster_qr"), "sparse"),
 ])
 def test_phase4_project_persistence_and_keys(tmp_path, factory, kind):
     import text_analysis_lab as teal
