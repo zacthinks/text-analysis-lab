@@ -89,6 +89,8 @@ def _source_request(
     sources: Mapping[str, "BaseArtifact"],
     *,
     name: str,
+    mode: TranslationMode,
+    request: TranslationRequest,
 ) -> SourceRequest:
     source = single_source(sources, name=name)
     if source.artifact_type.value not in {"sparse_matrix", "dense_matrix"}:
@@ -101,11 +103,14 @@ def _source_request(
     )
     if translator.source_features_ is None:
         translator.source_features_ = resolved_features
+    # Fitting is global; assigning a row to already-frozen K-means centers is
+    # independent of other rows. This changes processing only, never sampling.
+    batched_prediction = mode == "translate" and translator.batched_translate
     return SourceRequest(
         artifact_type=("sparse_matrix", "dense_matrix"),
-        mode="full_artifact",
+        mode="batches" if batched_prediction else "full_artifact",
         columns=ColumnRequest(keys=True, data=True, metadata=False),
-        batch_size=None,
+        batch_size=(request.batch_size or 10_000) if batched_prediction else None,
         form="native",
         metadata_mode="none",
         include_position=False,
@@ -118,6 +123,7 @@ class _ClusteringBase(BaseTranslator):
     operation_type = "translate"
     source_features_: tuple[str, ...] | None
     n_clusters_: int | None
+    batched_translate = False
 
     @property
     def requires_fit(self) -> bool:
@@ -163,8 +169,9 @@ class _ClusteringBase(BaseTranslator):
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
-        _ = mode, request
-        return _source_request(self, sources, name=type(self).__name__)
+        return _source_request(
+            self, sources, name=type(self).__name__, mode=mode, request=request
+        )
 
     def _standalone_input(self, input_matrix: Any) -> tuple[Any, Mapping[str, Any] | None, bool]:
         source = input_matrix if isinstance(input_matrix, Mapping) else None
@@ -246,6 +253,8 @@ class _ClusteringBase(BaseTranslator):
 
 class KMeans(_ClusteringBase):
     """Sklearn K-means with a compact, centers-only reusable frozen state."""
+
+    batched_translate = True
 
     def __init__(
         self,
