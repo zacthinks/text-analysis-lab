@@ -241,3 +241,77 @@ def test_dbscan_duplicate_and_singleton_and_bad_metric():
     assert result[-1].nnz == 0
     with pytest.raises(Exception):
         DBSCAN(metric="not_a_distance").fit_transform(matrix)
+
+
+def test_kmeans_fit_is_full_artifact_but_reuse_is_batched():
+    request = TranslationRequest(batch_size=2)
+    model = KMeans(n_clusters=2)
+    source = _source()
+    fit_request = model.input_request(
+        sources={"source": source}, mode="fit_translate", request=request
+    )
+    assert fit_request.mode == "full_artifact"
+    assert fit_request.batch_size is None
+    model.fit_transform(X)
+    predict_request = model.input_request(
+        sources={"source": source}, mode="translate", request=request
+    )
+    assert predict_request.mode == "batches"
+    assert predict_request.batch_size == 2
+    dbscan = DBSCAN()
+    assert dbscan.input_request(
+        sources={"source": source}, mode="fit_translate", request=request
+    ).mode == "full_artifact"
+
+
+def test_kmeans_batched_prediction_matches_full_prediction_with_keys():
+    trained = KMeans(n_clusters=2, n_init=10, random_state=17)
+    trained.fit_transform(X)
+    expected = trained.translate(X).toarray()
+    collected = []
+    collected_keys = []
+    for start, stop in ((0, 2), (2, 5), (5, 7)):
+        part = X[start:stop]
+        keys = [23, 2, 42, 9, 10, 1, 19][start:stop]
+        packet = InputBatch(
+            source_label="source", artifact_id="source-1",
+            primary_key=("doc_id",),
+            data={"info": pd.DataFrame({"doc_id": keys}), "matrix": part},
+            batch_index=start, batch_count=3,
+            is_first=start == 0, is_last=stop == 7,
+        )
+        output = trained.translate_batch(
+            {"source": packet}, mode="translate",
+            request=TranslationRequest(batch_size=2),
+        ).outputs["output"]
+        collected.append(output["data"]["values"])
+        collected_keys.extend(output["keys"]["doc_id"].tolist())
+    np.testing.assert_array_equal(sparse.vstack(collected).toarray(), expected)
+    assert collected_keys == [23, 2, 42, 9, 10, 1, 19]
+
+
+def test_real_project_kmeans_reuse_batched_matches_standalone(tmp_path):
+    import text_analysis_lab as teal
+
+    location = tmp_path / "batch_reuse"
+    project = teal.Project.create(location, name="batch_reuse")
+    try:
+        source = _register_numeric_matrix(
+            project, artifact_id="batch_fit", matrix=X,
+            keys=[23, 2, 42, 9, 10, 1, 19],
+        )
+        trained = KMeans(n_clusters=2, n_init=10, random_state=17)
+        fitted = project.translate(trained, source)["output"]
+        fresh = _register_numeric_matrix(
+            project, artifact_id="batch_apply",
+            matrix=sparse.csr_matrix(X),
+            keys=[19, 1, 10, 9, 42, 2, 23],
+        )
+        result = project.translate(trained, fresh, batch_size=2)["output"]
+        np.testing.assert_array_equal(
+            result.get_matrix().toarray(), fitted.get_matrix().toarray()
+        )
+        assert result.get_matrix().shape == (7, 2)
+        assert result.get_data_columns() == ["cluster_0", "cluster_1"]
+    finally:
+        project.close()
