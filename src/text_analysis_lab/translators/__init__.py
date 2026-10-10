@@ -24,6 +24,7 @@ from text_analysis_lab.translators.feature_trimmer import FeatureTrimmer
 from text_analysis_lab.translators.fitted_predictor import FittedPredictor
 from text_analysis_lab.translators.function_mapper import FunctionMapper
 from text_analysis_lab.translators.geco_predictor import GeCoPredictor
+from text_analysis_lab.translators.hdbscan import HDBSCAN
 from text_analysis_lab.translators.lda import LDA, LDA_TOPICS_LABEL
 from text_analysis_lab.translators.matrix_normalizer import MatrixNormalizer
 from text_analysis_lab.translators.matrix_row_aggregator import MatrixRowAggregator
@@ -55,6 +56,7 @@ from text_analysis_lab.translators.word_sense_disambiguator import (
 __all__ = [
     "CONTEXTUAL_EMBEDDINGS_LABEL",
     "DBSCAN",
+    "HDBSCAN",
     "KMeans",
     "LDA",
     "LDA_TOPICS_LABEL",
