@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import sklearn
 from scipy import sparse
 from sklearn.metrics import pairwise_distances_argmin
 
@@ -124,6 +125,19 @@ class _ClusteringBase(BaseTranslator):
     source_features_: tuple[str, ...] | None
     n_clusters_: int | None
     batched_translate = False
+    sklearn_version_: str | None = None
+
+    def _record_backend_version(self) -> None:
+        """Record the upstream backend used for this particular scientific fit."""
+        self.sklearn_version_ = sklearn.__version__
+
+    def _backend_snapshot(self) -> dict[str, str | None]:
+        return {"backend": "sklearn", "sklearn_version": self.sklearn_version_}
+
+    def _restore_backend_snapshot(self, state: Mapping[str, Any]) -> None:
+        # Earlier pre-Phase-3 snapshots did not carry the backend version.
+        raw = state.get("sklearn_version")
+        self.sklearn_version_ = None if raw is None else str(raw)
 
     @property
     def requires_fit(self) -> bool:
@@ -301,6 +315,7 @@ class KMeans(_ClusteringBase):
         )
         labels = estimator.fit_predict(matrix)
         self._centers = np.asarray(estimator.cluster_centers_, dtype=float).copy()
+        self._record_backend_version()
         self.n_clusters_ = self.n_clusters
         return self._output(_one_hot(labels, n_clusters=self.n_clusters), source, structured)
 
@@ -323,6 +338,7 @@ class KMeans(_ClusteringBase):
             "random_state": self.random_state,
             "source_features": list(self.source_features_) if self.source_features_ is not None else None,
             "is_fitted": self.is_fitted,
+            **self._backend_snapshot(),
         }
 
     @classmethod
@@ -338,6 +354,7 @@ class KMeans(_ClusteringBase):
         raw = state.get("source_features")
         if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
             result.source_features_ = tuple(map(str, raw))
+        result._restore_backend_snapshot(state)
         return result
 
     def save_assets(self, assets_dir: Path) -> Mapping[str, Any]:
@@ -423,6 +440,7 @@ class DBSCAN(_ClusteringBase):
         )
         labels = estimator.fit_predict(matrix)
         membership = _one_hot(labels)
+        self._record_backend_version()
         self.n_clusters_ = membership.shape[1]
         self._fit_completed = True
         return self._output(membership, source, structured)
@@ -445,6 +463,7 @@ class DBSCAN(_ClusteringBase):
             "source_features": list(self.source_features_) if self.source_features_ is not None else None,
             "n_clusters_found": self.n_clusters_,
             "fit_completed": self._fit_completed,
+            **self._backend_snapshot(),
         }
 
     @classmethod
@@ -463,4 +482,5 @@ class DBSCAN(_ClusteringBase):
         raw_count = state.get("n_clusters_found")
         result.n_clusters_ = None if raw_count is None else int(raw_count)
         result._fit_completed = bool(state.get("fit_completed", False))
+        result._restore_backend_snapshot(state)
         return result
