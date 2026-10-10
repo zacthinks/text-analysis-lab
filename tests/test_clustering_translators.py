@@ -147,7 +147,7 @@ def test_real_project_kmeans_reload_and_frozen_feature_schema(tmp_path):
         assert artifact.get_data_columns() == ["cluster_0", "cluster_1"]
         assert artifact.get_matrix().shape == (7, 2)
         assert artifact.get_matrix().nnz == 7
-        assert artifact.lineage_mode == "preserved_key"
+        assert artifact.descriptor["lineage"]["lineage_mode"] == "preserved_key"
         first_id = artifact.artifact_id
         model_id = model.operator_id
     finally:
@@ -202,7 +202,7 @@ def test_real_project_dbscan_noise_and_zero_width_round_trip(tmp_path):
         model = DBSCAN(eps=.01, min_samples=3)
         artifact = project.translate(model, source)["output"]
         assert artifact.primary_key == ["doc_id"]
-        assert artifact.lineage_mode == "preserved_key"
+        assert artifact.descriptor["lineage"]["lineage_mode"] == "preserved_key"
         assert artifact.get_data_columns() == []
         assert artifact.get_matrix().shape == (7, 0)
         first_id = artifact.artifact_id
