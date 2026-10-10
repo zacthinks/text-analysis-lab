@@ -93,12 +93,14 @@ def _source_request(
     source = single_source(sources, name=name)
     if source.artifact_type.value not in {"sparse_matrix", "dense_matrix"}:
         raise OperatorError(f"{name} requires sparse_matrix or dense_matrix input.")
-    translator.source_features_ = establish_or_validate_features(
+    resolved_features = establish_or_validate_features(
         translator.source_features_,
         source.get_data_columns(),
         fitted=translator.is_fitted,
         name=name,
     )
+    if translator.source_features_ is None:
+        translator.source_features_ = resolved_features
     return SourceRequest(
         artifact_type=("sparse_matrix", "dense_matrix"),
         mode="full_artifact",
@@ -171,12 +173,14 @@ class _ClusteringBase(BaseTranslator):
         )
         matrix = _validate_matrix(matrix, name=type(self).__name__)
         if metadata is not None:
-            self.source_features_ = establish_or_validate_features(
+            resolved_features = establish_or_validate_features(
                 self.source_features_,
                 feature_labels(metadata, name=type(self).__name__),
                 fitted=self.is_fitted,
                 name=type(self).__name__,
             )
+            if self.source_features_ is None:
+                self.source_features_ = resolved_features
         if self.source_features_ is not None and len(self.source_features_) != matrix.shape[1]:
             raise ValueError(f"{type(self).__name__} requires the fitted feature width.")
         return matrix, source, structured
