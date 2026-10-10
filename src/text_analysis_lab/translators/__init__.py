@@ -8,6 +8,7 @@ from text_analysis_lab.translators.artifact_count_vectorizer import (
     ArtifactCountVectorizer,
 )
 from text_analysis_lab.translators.clustering import DBSCAN, KMeans
+from text_analysis_lab.translators.advanced_clustering import MiniBatchKMeans, SpectralClustering
 from text_analysis_lab.translators.contextual_transformer import (
     CONTEXTUAL_EMBEDDINGS_LABEL,
     ContextualTransformer,
@@ -24,6 +25,7 @@ from text_analysis_lab.translators.feature_trimmer import FeatureTrimmer
 from text_analysis_lab.translators.fitted_predictor import FittedPredictor
 from text_analysis_lab.translators.function_mapper import FunctionMapper
 from text_analysis_lab.translators.geco_predictor import GeCoPredictor
+from text_analysis_lab.translators.gaussian_mixture import GaussianMixture
 from text_analysis_lab.translators.hdbscan import HDBSCAN
 from text_analysis_lab.translators.hierarchical_clustering import (
     AgglomerativeClustering,
@@ -61,6 +63,9 @@ __all__ = [
     "CONTEXTUAL_EMBEDDINGS_LABEL",
     "DBSCAN",
     "HDBSCAN",
+    "MiniBatchKMeans",
+    "GaussianMixture",
+    "SpectralClustering",
     "OPTICS",
     "AgglomerativeClustering",
     "KMeans",
