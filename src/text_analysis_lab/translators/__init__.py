@@ -25,6 +25,10 @@ from text_analysis_lab.translators.fitted_predictor import FittedPredictor
 from text_analysis_lab.translators.function_mapper import FunctionMapper
 from text_analysis_lab.translators.geco_predictor import GeCoPredictor
 from text_analysis_lab.translators.hdbscan import HDBSCAN
+from text_analysis_lab.translators.hierarchical_clustering import (
+    AgglomerativeClustering,
+    OPTICS,
+)
 from text_analysis_lab.translators.lda import LDA, LDA_TOPICS_LABEL
 from text_analysis_lab.translators.matrix_normalizer import MatrixNormalizer
 from text_analysis_lab.translators.matrix_row_aggregator import MatrixRowAggregator
@@ -57,6 +61,8 @@ __all__ = [
     "CONTEXTUAL_EMBEDDINGS_LABEL",
     "DBSCAN",
     "HDBSCAN",
+    "OPTICS",
+    "AgglomerativeClustering",
     "KMeans",
     "LDA",
     "LDA_TOPICS_LABEL",

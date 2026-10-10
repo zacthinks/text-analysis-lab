@@ -115,6 +115,7 @@ class HDBSCAN(_ClusteringBase):
         labels = estimator.fit_predict(matrix)
         membership = _one_hot(labels)
         self.n_clusters_ = membership.shape[1]
+        self._record_backend_version()
         self._fit_completed = True
         return self._output(membership, source, structured)
 
@@ -141,6 +142,7 @@ class HDBSCAN(_ClusteringBase):
             ),
             "n_clusters_found": self.n_clusters_,
             "fit_completed": self._fit_completed,
+            **self._backend_snapshot(),
         }
 
     @classmethod
@@ -164,4 +166,5 @@ class HDBSCAN(_ClusteringBase):
         count = state.get("n_clusters_found")
         result.n_clusters_ = None if count is None else int(count)
         result._fit_completed = bool(state.get("fit_completed", False))
+        result._restore_backend_snapshot(state)
         return result
