@@ -110,6 +110,29 @@ def _custom_call(scorer: FeatureScorer, context: Mapping[str, Any], kwargs: Mapp
     return scorer(*args, **named)
 
 
+def _named_custom_parameters(custom: Mapping[str, FeatureScorer]) -> set[str]:
+    """Find explicitly requested context fields without triggering computation.
+
+    A bare **kwargs parameter does not opt into potentially expensive corpus
+    aggregation. Scorers must name corpus statistics to request them.
+    """
+    named: set[str] = set()
+    for scorer in custom.values():
+        try:
+            signature = inspect.signature(scorer)
+        except (TypeError, ValueError):
+            continue
+        named.update(
+            parameter.name
+            for parameter in signature.parameters.values()
+            if parameter.kind not in (
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            )
+        )
+    return named
+
+
 def top_features(
     artifact: BaseArtifact,
     *,
@@ -141,6 +164,14 @@ def top_features(
     feature_indices, row_key, reference, term_frequency, document_frequency,
     background_probability and caller-supplied keyword arguments. A scorer
     returns one finite numeric score for each feature in the current row.
+    Valid row probabilities are available even for custom-only rankings.
+    A named probabilities parameter rejects invalid distributions.
+
+    Corpus statistics are computed only when a built-in method or an explicitly
+    named custom parameter requests them. A scorer accepting only **kwargs
+    receives None for unrequested corpus statistics; name those parameters
+    explicitly to request the scan. Custom background_probability needs
+    an explicit reference matrix (as does built-in lift).
     """
     require_matrix_artifact(artifact, "top_features()")
     if isinstance(n, bool) or not isinstance(n, (int, np.integer)) or n < 0:
@@ -161,6 +192,7 @@ def top_features(
     for name, scorer in custom.items():
         if not isinstance(name, str) or not name or not callable(scorer):
             raise ValueError("Custom scorers require nonempty string names and callable values.")
+    custom_fields = _named_custom_parameters(custom)
     names, labels = _feature_axis(artifact, label_field=label_field)
     width = len(names)
     primary_key = [str(value) for value in artifact.primary_key]
@@ -184,7 +216,17 @@ def top_features(
             raise ValueError("reference must have the exact same canonical feature set.")
     if "lift" in selected and reference is None:
         raise ValueError("lift requires an explicit corpus count matrix via reference=.")
-    needs_counts = bool(CORPUS_METHODS & set(selected)) or reference is not None
+    if "background_probability" in custom_fields and reference is None:
+        raise ValueError(
+            "Custom background_probability requires an explicit corpus count "
+            "matrix via reference=."
+        )
+    needs_background = "lift" in selected or "background_probability" in custom_fields
+    needs_counts = (
+        bool(CORPUS_METHODS & set(selected))
+        or bool({"term_frequency", "document_frequency"} & custom_fields)
+        or needs_background
+    )
     counts_source = reference if reference is not None else artifact
     tf: np.ndarray | None = None
     df: np.ndarray | None = None
@@ -201,10 +243,12 @@ def top_features(
         aligned = [by_name[name] for name in names]
         tf = summary["sum"].to_numpy(dtype=float)[aligned]
         df = summary["nonzero_rows"].to_numpy(dtype=float)[aligned]
-        if "lift" in selected:
+        if needs_background:
             total = float(np.sum(tf))
             if not np.isfinite(total) or total <= 0:
-                raise ValueError("lift requires positive total corpus term frequency.")
+                raise ValueError(
+                    "Background prevalence requires positive total corpus term frequency."
+                )
             background = tf / total
 
     # FREX exclusivity requires a cross-row denominator: one streaming pass,
@@ -239,8 +283,16 @@ def top_features(
             position = info["_position"].iloc[i]
             values = _dense_row(matrix, i, width)
             probability: np.ndarray | None = None
-            if set(selected) & {"probability", "lift", "frex"}:
-                probability = _valid_probability(values, position=position, method="probability/lift/frex")
+            if set(selected) & {"probability", "lift", "frex"} or "probabilities" in custom_fields:
+                probability = _valid_probability(
+                    values, position=position, method="probability/lift/frex/custom"
+                )
+            elif custom and np.all(values >= 0):
+                # Cheap optional context for **kwargs scorers; signed/zero rows
+                # remain valid for custom formulas using raw values only.
+                row_sum = float(np.sum(values))
+                if np.isfinite(row_sum) and row_sum > 0:
+                    probability = values / row_sum
             scores: dict[str, np.ndarray] = {}
             if "value" in selected:
                 scores["value"] = values
