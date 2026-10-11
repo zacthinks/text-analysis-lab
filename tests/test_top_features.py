@@ -24,6 +24,9 @@ class MatrixArtifact:
         self.n_rows = self.matrix.shape[0]
         self.analysis = ArtifactAnalysis(self)
 
+    def get_matrix(self, *, positions=None):
+        return self.matrix if positions is None else self.matrix[positions]
+
     def get_data_columns(self):
         return self.names
 
