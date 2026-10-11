@@ -135,3 +135,69 @@ def test_sparse_batches_without_whole_matrix_conversion():
     result = analysis.top_features(artifact, n=1, methods=["value"], batch_size=3)
     assert len(result) == 21
     assert result["value_ranking"].eq("a").all()
+
+
+def test_custom_only_probabilities_are_computed_without_builtin():
+    artifact = MatrixArtifact([[1, 3, 0]])
+    def scoring(probabilities):
+        assert probabilities is not None
+        return probabilities
+    result = artifact.analysis.top_features(methods=[], custom={"custom_prob": scoring})
+    assert result["custom_prob_ranking"].tolist() == ["b", "a", "c"]
+    assert result["custom_prob_score"].tolist() == pytest.approx([0.75, 0.25, 0.0])
+
+
+def test_custom_only_probabilities_reject_invalid_distribution():
+    for values, message in [([-1, 2, 3], "nonnegative"), ([0, 0, 0], "positive row mass")]:
+        artifact = MatrixArtifact([values])
+        with pytest.raises(ValueError, match=message):
+            artifact.analysis.top_features(
+                methods=[], custom={"p": lambda probabilities: probabilities}
+            )
+
+
+def test_custom_only_reference_background_and_frequency_alignment(monkeypatch):
+    subject = MatrixArtifact([[1, 1, 0]], names=["b", "a", "c"])
+    reference = MatrixArtifact([[2, 1, 0], [0, 1, 0]], names=["a", "b", "c"])
+    seen = []
+    import importlib
+    top_module = importlib.import_module("text_analysis_lab.analysis.top_features")
+
+    real_summary = top_module.feature_summary
+    def recording_summary(*args, **kwargs):
+        seen.append(args[0])
+        return real_summary(*args, **kwargs)
+    monkeypatch.setattr(top_module, "feature_summary", recording_summary)
+
+    def score(background_probability, term_frequency, document_frequency):
+        assert background_probability.tolist() == pytest.approx([0.5, 0.5, 0])
+        assert term_frequency.tolist() == pytest.approx([2, 2, 0])
+        assert document_frequency.tolist() == pytest.approx([2, 1, 0])
+        return background_probability
+    result = subject.analysis.top_features(
+        methods=[], reference=reference, custom={"background": score}
+    )
+    assert seen == [reference]
+    assert result["background_ranking"].tolist() == ["b", "a", "c"]
+
+
+def test_raw_value_custom_with_signed_reference_skips_summary(monkeypatch):
+    import importlib
+    top_module = importlib.import_module("text_analysis_lab.analysis.top_features")
+    subject = MatrixArtifact([[-3, 2, 0]])
+    reference = MatrixArtifact([[-1, 4, 0]])
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Unneeded reference aggregation")
+    monkeypatch.setattr(top_module, "feature_summary", unexpected)
+    result = subject.analysis.top_features(
+        methods=["value"], reference=reference, custom={"double": lambda values: 2 * values}
+    )
+    assert result["double_ranking"].tolist() == ["b", "c", "a"]
+
+
+def test_background_custom_requires_reference():
+    subject = MatrixArtifact([[1, 2, 3]])
+    with pytest.raises(ValueError, match="background_probability requires"):
+        subject.analysis.top_features(
+            methods=[], custom={"bg": lambda background_probability: background_probability}
+        )
