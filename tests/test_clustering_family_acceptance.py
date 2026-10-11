@@ -13,6 +13,7 @@ import pytest
 from scipy import sparse
 
 import text_analysis_lab as teal
+from text_analysis_lab.core.errors import OperatorError
 from text_analysis_lab.core.operator import TranslationRequest
 from text_analysis_lab.translators import (
     AgglomerativeClustering,
@@ -38,6 +39,13 @@ X = np.asarray(
     dtype=np.float64,
 )
 KEYS = [23, 2, 42, 9, 10, 1, 19]
+
+# New observations and a disjoint, nonsequential key space make replay of
+# saved training-row memberships insufficient to pass the reusable-model test.
+NEW_X = np.asarray([
+    [3.4, 0.3], [0.2, 3.4], [1.7, 1.4], [0.8, 2.6], [3.8, 2.1],
+], dtype=np.float64)
+NEW_KEYS = [901, 4, 1007, 55, 203]
 
 
 CASES = [
@@ -142,9 +150,57 @@ def test_clustering_family_project_freeze_and_lineage(
                 sources={"source": source}, mode="translate",
                 request=TranslationRequest(batch_size=3),
             ).mode == "batches"
+
+            # Each reusable model must apply a fixed scientific transformation
+            # to genuinely unseen observations with a different set of keys.
+            unseen = _register_numeric_matrix(
+                reopened, artifact_id="unseen", matrix=NEW_X, keys=NEW_KEYS
+            )
+            expected = _values(frozen.translate(NEW_X))
+            assert expected.shape == (len(NEW_KEYS), matrix.shape[1])
+            saved_state = frozen.to_json_state()
+            for batch_size in (1, 3):
+                predicted = reopened.translate(
+                    frozen, unseen, batch_size=batch_size
+                )["output"]
+                assert predicted.primary_key == ["doc_id"]
+                assert predicted.descriptor["lineage"]["lineage_mode"] == "preserved_key"
+                assert predicted.get_data_columns() == first.get_data_columns()
+                assert predicted.get_feature_metadata()["column"].tolist() == (
+                    first.get_data_columns()
+                )
+                result = predicted.query(
+                    key_columns=True, data_columns=True,
+                    metadata_columns=False, metadata_mode="none",
+                    form="native", include_position=False,
+                )
+                assert result["info"]["doc_id"].tolist() == NEW_KEYS
+                actual = _values(result["matrix"])
+                assert actual.shape == expected.shape
+                np.testing.assert_allclose(actual, expected, atol=1e-8)
+                if soft:
+                    assert predicted.artifact_type.value == "dense_matrix"
+                    assert np.all(np.isfinite(actual))
+                    assert np.all((0 <= actual) & (actual <= 1))
+                    np.testing.assert_allclose(actual.sum(axis=1), 1.0, atol=1e-9)
+                else:
+                    assert predicted.artifact_type.value == "sparse_matrix"
+                    assert set(np.unique(actual)).issubset({0, 1})
+                    np.testing.assert_array_equal(actual.sum(axis=1), 1)
+                assert frozen.to_json_state() == saved_state
+                np.testing.assert_allclose(
+                    _values(frozen.translate(NEW_X)), expected, atol=1e-8
+                )
+            with pytest.raises(OperatorError, match="ordered feature schema"):
+                frozen.translate({"values": NEW_X, "columns": ["y", "x"]})
         else:
-            with pytest.raises(Exception):
+            before_artifacts = len(reopened.list_artifacts())
+            before_operations = len(reopened.list_operations())
+            with pytest.raises(OperatorError, match="not a reusable frozen transform"):
                 reopened.translate(frozen, source, batch_size=3)
+            # Refusal should happen before any execution or output is created.
+            assert len(reopened.list_artifacts()) == before_artifacts
+            assert len(reopened.list_operations()) == before_operations
     finally:
         reopened.close()
 
@@ -173,7 +229,13 @@ def test_clustering_family_sparse_inputs_without_changing_output_kind(name, fact
     model = factory()
     output = model.fit_transform(sparse.csr_matrix(X))
     assert sparse.isspmatrix_csr(output)
-    assert output.shape[0] == len(X)
+    assert output.shape == (len(X), 2)
+    assert set(np.unique(output.toarray())).issubset({0, 1})
+    row_sums = np.asarray(output.sum(axis=1)).ravel()
+    if name in {"dbscan", "hdbscan"}:
+        assert np.all(row_sums <= 1)
+    else:
+        np.testing.assert_array_equal(row_sums, np.ones(len(X)))
 
 
 @pytest.mark.parametrize(
