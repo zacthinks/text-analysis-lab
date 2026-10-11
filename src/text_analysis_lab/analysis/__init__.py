@@ -32,6 +32,7 @@ from text_analysis_lab.analysis.polarity_scores import (
     polarity_total_difference,
 )
 from text_analysis_lab.analysis.row_summary import row_summary
+from text_analysis_lab.analysis.top_features import top_features
 from text_analysis_lab.analysis.summary import ArtifactSummary, summarize
 from text_analysis_lab.analysis.valence import valence
 from text_analysis_lab.core.kwic import KWICResult, keyword_in_context
@@ -66,5 +67,6 @@ __all__ = [
     "polarity_total_difference",
     "row_summary",
     "summarize",
+    "top_features",
     "valence",
 ]

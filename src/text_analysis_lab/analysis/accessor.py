@@ -126,6 +126,27 @@ class ArtifactAnalysis:
 
         return feature_summary(self._artifact, batch_size=batch_size)
 
+    def top_features(
+        self,
+        *,
+        n: int = 10,
+        methods: Sequence[str] | str = ("value",),
+        reference: BaseArtifact | str | None = None,
+        frex_weight: float = 0.7,
+        label_field: str = "column",
+        custom: Mapping[str, Any] | None = None,
+        batch_size: int = 1_000,
+        **custom_kwargs: Any,
+    ) -> pd.DataFrame:
+        """Rank matrix-row features by multiple independent scoring methods."""
+        from text_analysis_lab.analysis.top_features import top_features
+
+        return top_features(
+            self._artifact, n=n, methods=methods, reference=reference,
+            frex_weight=frex_weight, label_field=label_field, custom=custom,
+            batch_size=batch_size, **custom_kwargs,
+        )
+
     def nearest_neighbors(
         self,
         *,
