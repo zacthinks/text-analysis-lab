@@ -186,7 +186,7 @@ def test_clustering_family_project_freeze_and_lineage(
                 else:
                     assert predicted.artifact_type.value == "sparse_matrix"
                     assert set(np.unique(actual)).issubset({0, 1})
-                    np.testing.assert_array_equal(actual.sum(axis=1), 1)
+                    np.testing.assert_array_equal(actual.sum(axis=1), np.ones(len(NEW_KEYS)))
                 assert frozen.to_json_state() == saved_state
                 np.testing.assert_allclose(
                     _values(frozen.translate(NEW_X)), expected, atol=1e-8
