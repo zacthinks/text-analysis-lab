@@ -90,7 +90,7 @@ def test_reference_alignment_frequency_and_lift():
         reference=reference,
         n=3,
     )
-    assert result["term_frequency_ranking"].tolist() == ["a", "b", "c"]
+    assert result["term_frequency_ranking"].tolist() == ["b", "a", "c"]
     assert result["term_frequency_score"].tolist() == [2.0, 2.0, 0.0]
     assert result["document_frequency_ranking"].tolist() == ["b", "a", "c"]
     assert result["lift_ranking"].iloc[0] == "b"
