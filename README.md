@@ -21,7 +21,7 @@ TeAL currently includes:
 - corpus inspection, context retrieval, KWIC, summaries, diagnostics, and visualization;
 - sparse and dense matrix analytics, including nearest neighbors, distances, row summaries, feature summaries, and matrix summaries;
 - spaCy sentence/token decomposition with POS tags, dependencies, entities, and lexical flags;
-- count matrices, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, and Word2Vec;
+- count matrices, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, Word2Vec, and ten clustering translators (including density, centroid, medoid, spectral, spherical, and probabilistic methods);
 - sentence-transformer and contextual-transformer representations;
 - researcher-defined and provider-backed dictionaries and lexicons;
 - classical classification, frozen fitted predictors, and external-result registration;
@@ -161,6 +161,27 @@ result = outputs["output"]
 `project.translate(...)` always returns a mapping from output label to Artifact, including for single-output translators.
 
 Built-in translators include text cleaning and diagnostics, spaCy decomposition, count vectorization, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, Word2Vec, sentence/contextual transformer encoding, dictionary coding, fitted prediction, linguistic models, function mapping, and external API/model paths.
+
+## Clustering numeric matrix artifacts
+
+TeAL supports ten unsupervised clustering translators, including KMeans,
+MiniBatchKMeans, KMedoids, SphericalKMeans, DBSCAN, HDBSCAN, OPTICS,
+AgglomerativeClustering, GaussianMixture and SpectralClustering.
+Their output Artifacts preserve the input primary keys and lineage.
+Most emit sparse hard-membership matrices; GaussianMixture emits dense
+posterior responsibilities instead. Density noise is an all-zero row,
+never an invented noise cluster.
+
+Clustering fits consume the full researcher-chosen input artifact, not an
+automatically sampled subset. Reusable models (KMeans, MiniBatchKMeans,
+KMedoids, SphericalKMeans and GaussianMixture) can apply their frozen
+state to new compatible rows in execution batches. DBSCAN, HDBSCAN,
+OPTICS, agglomerative and spectral clustering are fit-only.
+KMedoids uses an **optional** GPL-3.0-or-later Rust FasterPAM dependency,
+installed with `text-analysis-lab[kmedoids]`.
+For accepted source types, metric constraints, memory costs, and
+scientific/backend provenance see [clustering documentation](docs/clustering.md).
+
 
 ## Project Center
 

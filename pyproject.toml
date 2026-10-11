@@ -28,7 +28,11 @@ dependencies = [
 pdf = [
     "pdfplumber>=0.11.9",
 ]
+kmedoids = [
+    "kmedoids>=0.5.5,<0.6",
+]
 all = [
+    "kmedoids>=0.5.5,<0.6",
     "pdfplumber>=0.11.9",
     "afinn>=0.1",
     "click>=8.4.1",
