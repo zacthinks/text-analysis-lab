@@ -45,6 +45,7 @@ from text_analysis_lab.translators.sentence_transformer_encoder import (
     SentenceTransformerEncoder,
 )
 from text_analysis_lab.translators.spacy_translator import SpacyTranslator
+from text_analysis_lab.translators.spherical_kmeans import SphericalKMeans
 from text_analysis_lab.translators.svd import (
     LSA,
     SVD,
@@ -67,6 +68,7 @@ __all__ = [
     "MiniBatchKMeans",
     "GaussianMixture",
     "SpectralClustering",
+    "SphericalKMeans",
     "OPTICS",
     "AgglomerativeClustering",
     "KMeans",
