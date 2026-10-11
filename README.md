@@ -1,6 +1,6 @@
 # Text Analysis Lab (TeAL)
 
-**Current development release: 0.3.0 · Python 3.11+ · MIT**
+**Current development release: 0.4.0 · Python 3.11+ · MIT**
 
 Text Analysis Lab (TeAL) is an end-to-end project environment for computer-assisted text analysis. It is designed to support transparent, intentional, rigorous, and reproducible multi-stage work: importing and restructuring corpora, building representations, exploring patterns, developing and validating measures, and carrying results into downstream analysis while preserving the relationships among those stages.
 
@@ -19,7 +19,7 @@ TeAL currently includes:
 - filtering, sampling, splitting, restriction, key selection, merging, joining, aggregation, run collapsing, and primary-key restructuring;
 - alias-backed reuse and safe overwrite semantics;
 - corpus inspection, context retrieval, KWIC, summaries, diagnostics, and visualization;
-- sparse and dense matrix analytics, including nearest neighbors, distances, row summaries, feature summaries, and matrix summaries;
+- sparse and dense matrix analytics, including nearest neighbors, distances, row summaries, feature summaries, matrix summaries, and generic `top_features()` rankings (value, probability, frequency, lift, FREX, and custom scores);
 - spaCy sentence/token decomposition with POS tags, dependencies, entities, and lexical flags;
 - count matrices, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, Word2Vec, and ten clustering translators (including density, centroid, medoid, spectral, spherical, and probabilistic methods);
 - sentence-transformer and contextual-transformer representations;
