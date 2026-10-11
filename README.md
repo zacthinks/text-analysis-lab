@@ -183,6 +183,8 @@ For accepted source types, metric constraints, memory costs, and
 scientific/backend provenance see [clustering documentation](docs/clustering.md).
 
 
+## Project Center
+
 The Project Center provides a visual interface to the same TeAL project used from Python. It supports project graph inspection, lineage/provenance views, artifact previews, storage inspection, and versioned memos for projects, artifacts, operations, and operators.
 
 Launch it from Python:
