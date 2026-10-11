@@ -8,6 +8,10 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Added
 
+- Ten unsupervised clustering translators with keyed, provenance-aware matrix outputs: KMeans, MiniBatchKMeans, KMedoids, SphericalKMeans, DBSCAN, HDBSCAN, OPTICS, AgglomerativeClustering, GaussianMixture, and SpectralClustering. Explicit fit-only and reusable frozen-model boundaries, sparse hard assignments, density-noise semantics, and dense Gaussian-mixture posterior responsibilities.
+- Optional Rust FasterPAM `kmedoids` backend (`[kmedoids]` extra), upstream scientific credits, and NumPy/SciPy spherical K-means referenced to spherecluster.
+- Backend-version fit provenance, clustering-specific scientific documentation, and integrated ten-method persistence/reuse tests.
+
 ### Changed
 
 ### Fixed
