@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "text-analysis-lab"
-version = "0.3.0"
+version = "0.4.0"
 description = "Persistent, lineage-aware workflows for reproducible text analysis"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,7 +28,11 @@ dependencies = [
 pdf = [
     "pdfplumber>=0.11.9",
 ]
+kmedoids = [
+    "kmedoids>=0.5.5,<0.6",
+]
 all = [
+    "kmedoids>=0.5.5,<0.6",
     "pdfplumber>=0.11.9",
     "afinn>=0.1",
     "click>=8.4.1",

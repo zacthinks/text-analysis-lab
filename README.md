@@ -1,6 +1,6 @@
 # Text Analysis Lab (TeAL)
 
-**Current development release: 0.3.0 · Python 3.11+ · MIT**
+**Current development release: 0.4.0 · Python 3.11+ · MIT**
 
 Text Analysis Lab (TeAL) is an end-to-end project environment for computer-assisted text analysis. It is designed to support transparent, intentional, rigorous, and reproducible multi-stage work: importing and restructuring corpora, building representations, exploring patterns, developing and validating measures, and carrying results into downstream analysis while preserving the relationships among those stages.
 
@@ -19,9 +19,9 @@ TeAL currently includes:
 - filtering, sampling, splitting, restriction, key selection, merging, joining, aggregation, run collapsing, and primary-key restructuring;
 - alias-backed reuse and safe overwrite semantics;
 - corpus inspection, context retrieval, KWIC, summaries, diagnostics, and visualization;
-- sparse and dense matrix analytics, including nearest neighbors, distances, row summaries, feature summaries, and matrix summaries;
+- sparse and dense matrix analytics, including nearest neighbors, distances, row summaries, feature summaries, matrix summaries, and generic `top_features()` rankings (value, probability, frequency, lift, FREX, and custom scores);
 - spaCy sentence/token decomposition with POS tags, dependencies, entities, and lexical flags;
-- count matrices, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, and Word2Vec;
+- count matrices, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, Word2Vec, and ten clustering translators (including density, centroid, medoid, spectral, spherical, and probabilistic methods);
 - sentence-transformer and contextual-transformer representations;
 - researcher-defined and provider-backed dictionaries and lexicons;
 - classical classification, frozen fitted predictors, and external-result registration;
@@ -161,6 +161,27 @@ result = outputs["output"]
 `project.translate(...)` always returns a mapping from output label to Artifact, including for single-output translators.
 
 Built-in translators include text cleaning and diagnostics, spaCy decomposition, count vectorization, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, Word2Vec, sentence/contextual transformer encoding, dictionary coding, fitted prediction, linguistic models, function mapping, and external API/model paths.
+
+## Clustering numeric matrix artifacts
+
+TeAL supports ten unsupervised clustering translators, including KMeans,
+MiniBatchKMeans, KMedoids, SphericalKMeans, DBSCAN, HDBSCAN, OPTICS,
+AgglomerativeClustering, GaussianMixture and SpectralClustering.
+Their output Artifacts preserve the input primary keys and lineage.
+Most emit sparse hard-membership matrices; GaussianMixture emits dense
+posterior responsibilities instead. Density noise is an all-zero row,
+never an invented noise cluster.
+
+Clustering fits consume the full researcher-chosen input artifact, not an
+automatically sampled subset. Reusable models (KMeans, MiniBatchKMeans,
+KMedoids, SphericalKMeans and GaussianMixture) can apply their frozen
+state to new compatible rows in execution batches. DBSCAN, HDBSCAN,
+OPTICS, agglomerative and spectral clustering are fit-only.
+KMedoids uses an **optional** GPL-3.0-or-later Rust FasterPAM dependency,
+installed with `text-analysis-lab[kmedoids]`.
+For accepted source types, metric constraints, memory costs, and
+scientific/backend provenance see [clustering documentation](docs/clustering.md).
+
 
 ## Project Center
 

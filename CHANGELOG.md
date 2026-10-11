@@ -16,6 +16,25 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
+## [0.4.0] - 2026-10-11
+
+### Added
+
+- Generic matrix-row `top_features()` analysis with value, absolute, probability, term/document frequency, corpus-adjusted lift, empirical unshrunk FREX, and custom scorers, including canonical Feature Metadata alignment and corpus references.
+- Persisted-Project DTM/LDA/SVD ranking acceptance checks across reopening, plus cross-family clustering acceptance.
+
+- Ten unsupervised clustering translators with keyed, provenance-aware matrix outputs: KMeans, MiniBatchKMeans, KMedoids, SphericalKMeans, DBSCAN, HDBSCAN, OPTICS, AgglomerativeClustering, GaussianMixture, and SpectralClustering. Explicit fit-only and reusable frozen-model boundaries, sparse hard assignments, density-noise semantics, and dense Gaussian-mixture posterior responsibilities.
+- Optional Rust FasterPAM `kmedoids` backend (`[kmedoids]` extra), upstream scientific credits, and NumPy/SciPy spherical K-means referenced to spherecluster.
+- Backend-version fit provenance, clustering-specific scientific documentation, and integrated ten-method persistence/reuse tests.
+
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
 ## [0.3.0] - 2026-10-09
 
 ### Added

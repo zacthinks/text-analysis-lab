@@ -7,6 +7,8 @@ from text_analysis_lab.translators._hf_utils import (
 from text_analysis_lab.translators.artifact_count_vectorizer import (
     ArtifactCountVectorizer,
 )
+from text_analysis_lab.translators.clustering import DBSCAN, KMeans
+from text_analysis_lab.translators.advanced_clustering import MiniBatchKMeans, SpectralClustering
 from text_analysis_lab.translators.contextual_transformer import (
     CONTEXTUAL_EMBEDDINGS_LABEL,
     ContextualTransformer,
@@ -23,7 +25,14 @@ from text_analysis_lab.translators.feature_trimmer import FeatureTrimmer
 from text_analysis_lab.translators.fitted_predictor import FittedPredictor
 from text_analysis_lab.translators.function_mapper import FunctionMapper
 from text_analysis_lab.translators.geco_predictor import GeCoPredictor
+from text_analysis_lab.translators.gaussian_mixture import GaussianMixture
+from text_analysis_lab.translators.hdbscan import HDBSCAN
+from text_analysis_lab.translators.hierarchical_clustering import (
+    AgglomerativeClustering,
+    OPTICS,
+)
 from text_analysis_lab.translators.lda import LDA, LDA_TOPICS_LABEL
+from text_analysis_lab.translators.kmedoids import KMedoids
 from text_analysis_lab.translators.matrix_normalizer import MatrixNormalizer
 from text_analysis_lab.translators.matrix_row_aggregator import MatrixRowAggregator
 from text_analysis_lab.translators.matrix_transpose import MatrixTranspose
@@ -36,6 +45,7 @@ from text_analysis_lab.translators.sentence_transformer_encoder import (
     SentenceTransformerEncoder,
 )
 from text_analysis_lab.translators.spacy_translator import SpacyTranslator
+from text_analysis_lab.translators.spherical_kmeans import SphericalKMeans
 from text_analysis_lab.translators.svd import (
     LSA,
     SVD,
@@ -53,6 +63,16 @@ from text_analysis_lab.translators.word_sense_disambiguator import (
 
 __all__ = [
     "CONTEXTUAL_EMBEDDINGS_LABEL",
+    "DBSCAN",
+    "HDBSCAN",
+    "MiniBatchKMeans",
+    "GaussianMixture",
+    "SpectralClustering",
+    "SphericalKMeans",
+    "OPTICS",
+    "AgglomerativeClustering",
+    "KMeans",
+    "KMedoids",
     "LDA",
     "LDA_TOPICS_LABEL",
     "LSA",
