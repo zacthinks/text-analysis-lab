@@ -13,6 +13,7 @@ import pytest
 from scipy import sparse
 
 import text_analysis_lab as teal
+from text_analysis_lab.core.operator import TranslationRequest
 from text_analysis_lab.translators import (
     AgglomerativeClustering,
     DBSCAN,
@@ -139,7 +140,7 @@ def test_clustering_family_project_freeze_and_lineage(
             )
             assert frozen.input_request(
                 sources={"source": source}, mode="translate",
-                request=teal.core.operator.TranslationRequest(batch_size=3),
+                request=TranslationRequest(batch_size=3),
             ).mode == "batches"
         else:
             with pytest.raises(Exception):
