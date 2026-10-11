@@ -32,6 +32,7 @@ from text_analysis_lab.translators.hierarchical_clustering import (
     OPTICS,
 )
 from text_analysis_lab.translators.lda import LDA, LDA_TOPICS_LABEL
+from text_analysis_lab.translators.kmedoids import KMedoids
 from text_analysis_lab.translators.matrix_normalizer import MatrixNormalizer
 from text_analysis_lab.translators.matrix_row_aggregator import MatrixRowAggregator
 from text_analysis_lab.translators.matrix_transpose import MatrixTranspose
@@ -69,6 +70,7 @@ __all__ = [
     "OPTICS",
     "AgglomerativeClustering",
     "KMeans",
+    "KMedoids",
     "LDA",
     "LDA_TOPICS_LABEL",
     "LSA",
