@@ -677,16 +677,18 @@ def _validate_batch_hierarchy(
             required = _batch_prefix(source, spec.min_batch_by)
             if spec.mode == "batches":
                 if request.batch_by is None:
-                    raise OperatorError(
-                        f"Source {label!r} requires batch_by={spec.min_batch_by!r}; "
-                        "ordinary row batching cannot preserve the required group."
-                    )
-                selected = _batch_prefix(source, request.batch_by)
-                if required[:len(selected)] != selected:
-                    raise OperatorError(
-                        f"batch_by={request.batch_by!r} is finer than required "
-                        f"min_batch_by={spec.min_batch_by!r}."
-                    )
+                    if required != tuple(str(k) for k in source.primary_key):
+                        raise OperatorError(
+                            f"Source {label!r} requires batch_by={spec.min_batch_by!r}; "
+                            "ordinary row batching cannot preserve the required group."
+                        )
+                else:
+                    selected = _batch_prefix(source, request.batch_by)
+                    if required[:len(selected)] != selected:
+                        raise OperatorError(
+                            f"batch_by={request.batch_by!r} is finer than required "
+                            f"min_batch_by={spec.min_batch_by!r}."
+                        )
         if request.batch_by is not None:
             if spec.mode != "batches":
                 raise OperatorError(
@@ -719,7 +721,9 @@ def _validate_run_route(route: str) -> RunRoute:
 def _warn_batch_size_adjustments(
     request: TranslationRequest, input_request: InputRequest
 ) -> None:
-    if request.batch_size is None:
+    if request.batch_size is None or request.batch_by is not None:
+        # With grouped batching the caller's requested count takes precedence:
+        # the translator's row-batch preference is not the effective group size.
         return
 
     batched = {
@@ -1014,6 +1018,24 @@ def _build_plan_units(
     input_request: InputRequest,
     request: TranslationRequest,
 ) -> Iterable[_PlanUnit]:
+    if request.batch_by is not None:
+        # Grouped input is single-source by contract. Yield each plan unit to
+        # SQLite as it is discovered; never retain every group in Python.
+        label, source_request = next(iter(input_request.items()))
+        artifact = sources[label]
+        if source_request.batch_size is None and request.batch_size is None:
+            raise OperatorError("Grouped batching requires an effective batch_size.")
+        for i, plan_source in enumerate(
+            _iter_group_source_plans(
+                artifact=artifact,
+                label=label,
+                level=request.batch_by,
+                batch_size=int(request.batch_size or source_request.batch_size),
+            )
+        ):
+            yield _PlanUnit(unit_index=i, sources={label: plan_source})
+        return
+
     planned_sources: dict[str, list[_SourcePlan]] = {}
 
     for label, source_request in input_request.items():
@@ -1041,14 +1063,6 @@ def _build_plan_units(
                 f"Cannot create a durable batch plan for source {label!r}: "
                 f"artifact {artifact.artifact_id} does not record n_rows."
             )
-        if request.batch_by is not None:
-            planned_sources[label] = _group_slices_for_source(
-                artifact=artifact,
-                label=label,
-                level=request.batch_by,
-                batch_size=int(request.batch_size or source_request.batch_size),
-            )
-            continue
         planned_sources[label] = _position_slices_for_source(
             label=label,
             artifact_id=artifact.artifact_id,
@@ -1067,13 +1081,18 @@ def _build_plan_units(
             yield _PlanUnit(unit_index=unit_index, sources=unit_sources)
 
 
-def _group_slices_for_source(
+def _iter_group_source_plans(
     *,
     artifact: BaseArtifact,
     label: str,
     level: str,
     batch_size: int,
-) -> list[_SourcePlan]:
+) -> Iterable[_SourcePlan]:
+    """Stream complete key-group assignments into durable plan units.
+
+    Only the current batch of key tuples is held in Python. SQLite receives
+    each generated unit immediately through _ExecutionPlan.initialize().
+    """
     from text_analysis_lab.core.utils import quote_identifier
 
     prefix = _batch_prefix(artifact, level)
@@ -1081,29 +1100,34 @@ def _group_slices_for_source(
         artifact, metadata_mode="none", include_data=False
     )
     columns = ", ".join(quote_identifier(k) for k in prefix)
-    sql = (
+    grouped_sql = (
         f"SELECT {columns}, MIN(_position) AS first_position "
-        f"FROM ({view.sql}) AS base GROUP BY {columns} "
-        "ORDER BY first_position"
+        f"FROM ({view.sql}) AS base GROUP BY {columns}"
     )
-    cursor = artifact.project.query.con.execute(sql)
-    chunks: list[str] = []
-    while True:
+    con = artifact.project.query.con
+    n_groups = int(
+        con.execute(f"SELECT COUNT(*) FROM ({grouped_sql}) AS grouped").fetchone()[0]
+    )
+    batch_count = (n_groups + batch_size - 1) // batch_size
+    cursor = con.execute(
+        f"SELECT {columns} FROM ({grouped_sql}) AS grouped ORDER BY first_position"
+    )
+    for i in range(batch_count):
         rows = cursor.fetchmany(batch_size)
         if not rows:
-            break
-        chunks.append(json.dumps([list(map(int, row[:len(prefix)])) for row in rows]))
-    return [
-        _SourcePlan(
+            raise OperatorError("Grouped source plan ended before expected group count.")
+        yield _SourcePlan(
             source_label=label,
             artifact_id=artifact.artifact_id,
             mode="batches",
             source_batch_index=i,
-            source_batch_count=len(chunks),
-            group_keys_json=chunk,
+            source_batch_count=batch_count,
+            group_keys_json=json.dumps(
+                [list(map(int, row[:len(prefix)])) for row in rows]
+            ),
         )
-        for i, chunk in enumerate(chunks)
-    ]
+    if cursor.fetchone() is not None:
+        raise OperatorError("Grouped source plan exceeded expected group count.")
 
 
 def _position_slices_for_source(
