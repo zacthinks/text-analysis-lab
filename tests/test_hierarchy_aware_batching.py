@@ -254,3 +254,93 @@ def test_grouped_translation_resumes_without_replaying_completed_units(tmp_path)
         assert project.catalog.get_operation(operation_id)["status"] == "complete"
     finally:
         project.close()
+
+
+def test_legacy_positional_requests_are_unchanged():
+    # Existing user-defined translators may construct these positionally.
+    from text_analysis_lab.core.operator import ColumnRequest
+    columns = ColumnRequest(keys=True, data=False, metadata=False)
+    old = SourceRequest("table", "batches", columns, 17, "table", "none", True)
+    assert old.batch_size == 17
+    assert old.form == "table"
+    assert old.metadata_mode == "none"
+    assert old.include_position is True
+    assert old.min_batch_by is None
+    old_translation = TranslationRequest(2, 5, 3, {"flag": 1})
+    assert old_translation.workers == 2
+    assert old_translation.batch_size == 5
+    assert old_translation.max_outstanding_units == 3
+    assert old_translation.params == {"flag": 1}
+    assert old_translation.batch_by is None
+
+
+def test_legacy_plan_sqlite_migration(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old_operation"
+    path.mkdir()
+    connection = sqlite3.connect(path / "plan.sqlite")
+    connection.executescript("""
+        CREATE TABLE plan_units (
+            unit_index INTEGER PRIMARY KEY, status TEXT NOT NULL,
+            assigned_worker INTEGER, started_at TEXT, completed_at TEXT, error TEXT
+        );
+        CREATE TABLE plan_sources (
+            unit_index INTEGER NOT NULL, source_label TEXT NOT NULL,
+            artifact_id TEXT NOT NULL, mode TEXT NOT NULL,
+            source_batch_index INTEGER NOT NULL, source_batch_count INTEGER NOT NULL,
+            start_position INTEGER, stop_position INTEGER,
+            PRIMARY KEY (unit_index, source_label)
+        );
+        INSERT INTO plan_units(unit_index, status) VALUES (0, 'pending');
+        INSERT INTO plan_sources VALUES (0, 'source', 'old', 'batches', 0, 1, 0, 2);
+    """)
+    connection.close()
+    plan = _ExecutionPlan(path)
+    try:
+        old = plan.get_unit(0).sources["source"]
+        assert old.start_position == 0 and old.stop_position == 2
+        assert old.group_keys_json is None
+        plan.mark_complete(0)
+        assert plan.complete_count() == 1
+    finally:
+        plan.close()
+
+
+def test_user_key_names_overlap_internal_group_aliases(tmp_path):
+    pytest.importorskip("duckdb")
+    pytest.importorskip("pyarrow")
+    from text_analysis_lab import Project
+    from text_analysis_lab.core.writer import create_artifact_writer
+
+    project = Project.create(tmp_path / "collision", name="aliases")
+    try:
+        keys = ["first_position", "__batch_order", "__teal_group_first_position", "token"]
+        rows = pd.DataFrame({
+            "first_position": [1, 2, 1, 2],
+            "__batch_order": [1, 1, 1, 1],
+            "__teal_group_first_position": [1, 1, 1, 1],
+            "token": [0, 0, 1, 1],
+            "value": ["one", "two", "three", "four"],
+        })
+        writer = create_artifact_writer(
+            artifact_type="table", artifact_dir=project.storage.artifact_dir("art_aliases"),
+            artifact_id="art_aliases", label="source", lineage_mode="new_key",
+            basis_artifact_ids=(),
+        )
+        writer.write({"keys": rows[keys], "data": rows[["value"]]})
+        writer.finalize()
+        project.catalog.register_artifact(
+            artifact_id="art_aliases", artifact_type="table", label="source",
+            lineage_mode="new_key", status="complete", basis_artifact_ids=(),
+        )
+        source = project.get_artifact("art_aliases")
+        output = project.translate(
+            _Echo(min_level="__teal_group_first_position"), source,
+            batch_size=1, batch_by="__teal_group_first_position",
+        )["output"]
+        assert output.n_rows == 4
+        actual = output.query(key_columns=True, data_columns="value", form="table")
+        assert sorted(actual["value"].tolist()) == sorted(rows["value"].tolist())
+    finally:
+        project.close()
