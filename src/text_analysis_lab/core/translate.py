@@ -1100,9 +1100,12 @@ def _iter_group_source_plans(
         artifact, metadata_mode="none", include_data=False
     )
     columns = ", ".join(f"base.{quote_identifier(k)}" for k in prefix)
-    # Keep the synthetic order column separate from user-supplied opaque keys.
+    # Synthetic names must not collide with *any* opaque primary-key label.
+    first_alias = "__teal_group_first_position"
+    while first_alias in artifact.primary_key:
+        first_alias += "_"
     grouped_sql = (
-        f"SELECT {columns}, MIN(base._position) AS __teal_group_first_position "
+        f"SELECT {columns}, MIN(base._position) AS {quote_identifier(first_alias)} "
         f"FROM ({view.sql}) AS base GROUP BY {columns}"
     )
     con = artifact.project.query.con
@@ -1113,7 +1116,7 @@ def _iter_group_source_plans(
     projected = ", ".join(f"grouped.{quote_identifier(k)}" for k in prefix)
     cursor = con.execute(
         f"SELECT {projected} FROM ({grouped_sql}) AS grouped "
-        "ORDER BY grouped.__teal_group_first_position"
+        f"ORDER BY grouped.{quote_identifier(first_alias)}"
     )
     for i in range(batch_count):
         rows = cursor.fetchmany(batch_size)
@@ -1239,7 +1242,10 @@ def _query_group_source(
     )
     # Assign private value-table aliases unrelated to user primary-key names.
     internal = [f"__teal_key_{i}" for i in range(len(keys))]
-    names = ", ".join([*(quote_identifier(k) for k in internal), "__teal_batch_ordinal"])
+    ordinal = "__teal_batch_ordinal"
+    while ordinal in internal:
+        ordinal += "_"
+    names = ", ".join([*(quote_identifier(k) for k in internal), quote_identifier(ordinal)])
     join = " AND ".join(
         f"base.{quote_identifier(k)} = g.{quote_identifier(alias)}"
         for k, alias in zip(keys, internal)
@@ -1251,7 +1257,7 @@ def _query_group_source(
     sql = (
         f"SELECT base._position FROM ({view.sql}) AS base "
         f"JOIN (VALUES {values}) AS g({names}) ON {join} "
-        f"ORDER BY g.__teal_batch_ordinal, {order}"
+        f"ORDER BY g.{quote_identifier(ordinal)}, {order}"
     )
     positions = [int(row[0]) for row in artifact.project.query.con.execute(sql).fetchall()]
     return artifact.query(
