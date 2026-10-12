@@ -344,3 +344,46 @@ def test_user_key_names_overlap_internal_group_aliases(tmp_path):
         assert sorted(actual["value"].tolist()) == sorted(rows["value"].tolist())
     finally:
         project.close()
+
+
+class _TwoOutputEcho(_Echo):
+    def output_specs(self, *, sources, request):
+        return {
+            "left": OutputSpec(artifact_type="table", lineage_mode="preserved_key"),
+            "right": OutputSpec(artifact_type="table", lineage_mode="preserved_key"),
+        }
+
+    def translate_batch(self, inputs, *, mode, request):
+        one = super().translate_batch(inputs, mode=mode, request=request).outputs["output"]
+        return BatchResult(outputs={"left": one, "right": {
+            "keys": one["keys"].copy(),
+            "data": one["data"].copy(),
+        }})
+
+    def make_translate_worker(self, *, mode, request):
+        return _TwoOutputEcho(self.min_level)
+
+
+def test_grouped_multi_output_writer_and_parallel_workers(tmp_path):
+    pytest.importorskip("duckdb")
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("dask.distributed")
+    from text_analysis_lab import Project
+
+    project = Project.create(tmp_path / "parallel", name="grouped_parallel")
+    try:
+        source, rows = _source(project)
+        results = project.translate(
+            _TwoOutputEcho(min_level="document"), source,
+            batch_size=1, batch_by="document", workers=2,
+        )
+        assert set(results) == {"left", "right"}
+        for output in results.values():
+            assert output.n_rows == len(rows)
+            actual = output.query(key_columns=True, data_columns="value", form="table")
+            fields = ["collection", "document", "token", "value"]
+            assert sorted(map(tuple, actual[fields].to_numpy())) == sorted(
+                map(tuple, rows[fields].to_numpy())
+            )
+    finally:
+        project.close()
