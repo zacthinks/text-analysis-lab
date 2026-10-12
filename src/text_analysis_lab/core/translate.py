@@ -1074,7 +1074,7 @@ def _group_slices_for_source(
     level: str,
     batch_size: int,
 ) -> list[_SourcePlan]:
-    from text_analysis_lab.core.query import quote_identifier
+    from text_analysis_lab.core.utils import quote_identifier
 
     prefix = _batch_prefix(artifact, level)
     view = artifact.project.query.build_artifact_view_sql(
@@ -1199,7 +1199,7 @@ def _query_group_source(
     request: SourceRequest,
     groups: list[list[int]],
 ) -> Any:
-    from text_analysis_lab.core.query import quote_identifier
+    from text_analysis_lab.core.utils import quote_identifier
 
     if not groups:
         raise OperatorError("Grouped batch has no groups.")
@@ -1212,7 +1212,7 @@ def _query_group_source(
     )
     names = ", ".join([*(quote_identifier(k) for k in keys), "__batch_order"])
     join = " AND ".join(f"base.{quote_identifier(k)} = g.{quote_identifier(k)}" for k in keys)
-    order = ", ".join(f"base.{quote_identifier(k)}" for k in artifact.primary_key)
+    order = "base._position"
     view = artifact.project.query.build_artifact_view_sql(
         artifact, metadata_mode="none", include_data=False
     )
