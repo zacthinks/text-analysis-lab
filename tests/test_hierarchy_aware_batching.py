@@ -105,6 +105,10 @@ def test_prefix_resolution_and_required_boundary():
         _validate_batch_hierarchy({"source": source}, {"source": spec}, TranslationRequest(batch_by="d"))
     with pytest.raises(OperatorError, match="requires batch_by"):
         _validate_batch_hierarchy({"source": source}, {"source": spec}, TranslationRequest())
+    leaf = SourceRequest(
+        artifact_type="table", mode="batches", batch_size=2, min_batch_by="d"
+    )
+    _validate_batch_hierarchy({"source": source}, {"source": leaf}, TranslationRequest())
 
 
 def test_plan_round_trip_and_restart(tmp_path):
@@ -168,3 +172,79 @@ def test_project_grouped_batches_preserve_rows_and_are_reopenable(tmp_path):
         assert reopened.get_artifact(output_id).n_rows == len(original)
     finally:
         reopened.close()
+
+
+class _FailOnceEcho(_Echo):
+    def __init__(self, sentinel_path, *, operator_id=None):
+        super().__init__(min_level="document", operator_id=operator_id)
+        self.sentinel_path = str(sentinel_path)
+
+    def supports_resume(self, *, mode, route):
+        return mode == "translate" and route == "sequential"
+
+    def translate_batch(self, inputs, *, mode, request):
+        batch = inputs["source"]
+        if batch.batch_index == 1 and not __import__("pathlib").Path(self.sentinel_path).exists():
+            __import__("pathlib").Path(self.sentinel_path).write_text("failed")
+            raise RuntimeError("interrupted grouped unit")
+        return super().translate_batch(inputs, mode=mode, request=request)
+
+    def to_json_state(self):
+        return {"sentinel_path": self.sentinel_path}
+
+    @classmethod
+    def from_json_state(cls, state):
+        return cls(state["sentinel_path"])
+
+    def save_intermediate_state(self, intermediate_dir, *, operator_id, mode, route):
+        intermediate_dir.mkdir(parents=True, exist_ok=True)
+        (intermediate_dir / "state.json").write_text(json.dumps(self.to_json_state()))
+
+    @classmethod
+    def load_intermediate_state(cls, intermediate_dir, *, operator_id, mode, route):
+        state = json.loads((intermediate_dir / "state.json").read_text())
+        value = cls.from_json_state(state)
+        value.operator_id = operator_id
+        return value
+
+
+def test_grouped_translation_resumes_without_replaying_completed_units(tmp_path):
+    pytest.importorskip("duckdb")
+    pytest.importorskip("pyarrow")
+    from text_analysis_lab import Project
+
+    project = Project.create(tmp_path / "resume_project", name="grouped_resume")
+    try:
+        source, rows = _source(project)
+        with pytest.raises(RuntimeError, match="interrupted grouped unit"):
+            project.translate(
+                _FailOnceEcho(tmp_path / "fail-once"),
+                source,
+                batch_size=1,
+                batch_by="document",
+                workers=1,
+            )
+        operation_id = str(project.catalog.list_operations()[-1]["operation_id"])
+        assert project.catalog.get_operation(operation_id)["status"] == "failed"
+
+        from text_analysis_lab.core.translate import _ExecutionPlan
+        plan = _ExecutionPlan(project.storage.operation_dir(operation_id))
+        try:
+            assert plan.complete_count() == 1
+            first = plan.get_unit(0).sources["source"]
+            assert json.loads(first.group_keys_json) == [[1, 1]]
+        finally:
+            plan.close()
+
+        output = project.resume_operation(operation_id)["output"]
+        assert output.status == "complete"
+        assert output.n_rows == len(rows)
+        actual = output.query(key_columns=True, data_columns="value", form="table")
+        fields = ["collection", "document", "token", "value"]
+        assert sorted(map(tuple, actual[fields].to_numpy())) == sorted(
+            map(tuple, rows[fields].to_numpy())
+        )
+        assert len(actual.drop_duplicates(["collection", "document", "token"])) == len(rows)
+        assert project.catalog.get_operation(operation_id)["status"] == "complete"
+    finally:
+        project.close()
