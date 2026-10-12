@@ -1099,9 +1099,10 @@ def _iter_group_source_plans(
     view = artifact.project.query.build_artifact_view_sql(
         artifact, metadata_mode="none", include_data=False
     )
-    columns = ", ".join(quote_identifier(k) for k in prefix)
+    columns = ", ".join(f"base.{quote_identifier(k)}" for k in prefix)
+    # Keep the synthetic order column separate from user-supplied opaque keys.
     grouped_sql = (
-        f"SELECT {columns}, MIN(_position) AS first_position "
+        f"SELECT {columns}, MIN(base._position) AS __teal_group_first_position "
         f"FROM ({view.sql}) AS base GROUP BY {columns}"
     )
     con = artifact.project.query.con
@@ -1109,8 +1110,10 @@ def _iter_group_source_plans(
         con.execute(f"SELECT COUNT(*) FROM ({grouped_sql}) AS grouped").fetchone()[0]
     )
     batch_count = (n_groups + batch_size - 1) // batch_size
+    projected = ", ".join(f"grouped.{quote_identifier(k)}" for k in prefix)
     cursor = con.execute(
-        f"SELECT {columns} FROM ({grouped_sql}) AS grouped ORDER BY first_position"
+        f"SELECT {projected} FROM ({grouped_sql}) AS grouped "
+        "ORDER BY grouped.__teal_group_first_position"
     )
     for i in range(batch_count):
         rows = cursor.fetchmany(batch_size)
@@ -1234,8 +1237,13 @@ def _query_group_source(
         "(" + ", ".join(str(int(v)) for v in group) + f", {i})"
         for i, group in enumerate(groups)
     )
-    names = ", ".join([*(quote_identifier(k) for k in keys), "__batch_order"])
-    join = " AND ".join(f"base.{quote_identifier(k)} = g.{quote_identifier(k)}" for k in keys)
+    # Assign private value-table aliases unrelated to user primary-key names.
+    internal = [f"__teal_key_{i}" for i in range(len(keys))]
+    names = ", ".join([*(quote_identifier(k) for k in internal), "__teal_batch_ordinal"])
+    join = " AND ".join(
+        f"base.{quote_identifier(k)} = g.{quote_identifier(alias)}"
+        for k, alias in zip(keys, internal)
+    )
     order = "base._position"
     view = artifact.project.query.build_artifact_view_sql(
         artifact, metadata_mode="none", include_data=False
@@ -1243,7 +1251,7 @@ def _query_group_source(
     sql = (
         f"SELECT base._position FROM ({view.sql}) AS base "
         f"JOIN (VALUES {values}) AS g({names}) ON {join} "
-        f"ORDER BY g.__batch_order, {order}"
+        f"ORDER BY g.__teal_batch_ordinal, {order}"
     )
     positions = [int(row[0]) for row in artifact.project.query.con.execute(sql).fetchall()]
     return artifact.query(
