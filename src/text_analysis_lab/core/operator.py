@@ -78,6 +78,7 @@ class SourceRequest:
     mode: SourceMode = "batches"
     columns: ColumnRequest = field(default_factory=ColumnRequest)
     batch_size: int | None = None
+    min_batch_by: str | None = None
     form: QueryForm = "native"
     metadata_mode: MetadataMode = "none"
     include_position: bool = False
@@ -94,6 +95,7 @@ class TranslationRequest:
 
     workers: int = 1
     batch_size: int | None = None
+    batch_by: str | None = None
     max_outstanding_units: int | None = None
     params: Mapping[str, Any] = field(default_factory=dict)
 
