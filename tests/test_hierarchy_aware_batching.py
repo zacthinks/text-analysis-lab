@@ -144,6 +144,12 @@ def test_project_grouped_batches_preserve_rows_and_are_reopenable(tmp_path):
             batch_size=1, batch_by="document",
         )["output"]
         assert output.n_rows == len(original)
+        # Group batches follow first occurrence of each group, then stable
+        # artifact position within that group. This differs from interleaved
+        # physical source order and is an explicit batching policy.
+        assert output.query(
+            key_columns=False, data_columns="value", form="table"
+        )["value"].tolist() == ["a", "d", "b", "e", "c", "f", "g"]
         observed = output.query(
             key_columns=True, data_columns="value", form="table"
         )
