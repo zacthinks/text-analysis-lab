@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -64,6 +65,7 @@ class CountVectorizer(BaseTranslator):
         max_features: int | None = None,
         binary: bool = False,
         stemmer: str | None = None,
+        ngram_separator: str = "_",
         vocabulary: Mapping[str, int] | None = None,
         operator_id: str | None = None,
     ) -> None:
@@ -96,6 +98,12 @@ class CountVectorizer(BaseTranslator):
         if stemmer is not None and self.analyzer != "word":
             raise ValueError("stemmer is supported only with analyzer='word'.")
         self.stemmer = stemmer
+        if not isinstance(ngram_separator, str) or not ngram_separator:
+            raise ValueError("ngram_separator must be a non-empty string.")
+        self.ngram_separator = ngram_separator
+        self._fit_tf: Counter[str] = Counter()
+        self._fit_df: Counter[str] = Counter()
+        self._fit_document_count = 0
         self.vocabulary_: dict[str, int] | None = (
             None if vocabulary is None else _normalize_vocabulary(vocabulary)
         )
@@ -163,21 +171,25 @@ class CountVectorizer(BaseTranslator):
         source = _single_source(sources)
         if source.artifact_type.value != "table":
             raise OperatorError("CountVectorizer requires a table artifact source.")
+        batched_fit = mode == "fit_translate" and request.batch_size is not None
         return SourceRequest(
             artifact_type="table",
-            mode="full_artifact" if mode == "fit_translate" else "batches",
+            mode="batches" if mode == "translate" or batched_fit else "full_artifact",
             columns=ColumnRequest(keys=True, data=self.text_field, metadata=False),
             batch_size=(
-                None
-                if mode == "fit_translate"
-                else request.batch_size
-                if request.batch_size is not None
-                else 10_000
-            ),
+                request.batch_size if request.batch_size is not None else 10_000
+            ) if mode == "translate" or batched_fit else None,
             form="table",
             metadata_mode="none",
             include_position=False,
         )
+
+    def translation_passes(
+        self, *, sources: Mapping[str, BaseArtifact], mode: TranslationMode,
+        request: TranslationRequest, input_request: Mapping[str, SourceRequest],
+    ) -> int:
+        _ = sources, input_request
+        return 2 if mode == "fit_translate" and request.batch_size is not None else 1
 
     def translate(
         self,
@@ -224,13 +236,27 @@ class CountVectorizer(BaseTranslator):
         keys = frame.loc[:, key_columns].reset_index(drop=True)
 
         if mode == "fit_translate":
-            if self.is_fitted:
-                raise OperatorError(
-                    "fit_translate received an already fitted CountVectorizer."
-                )
-            self._vectorizer = self._make_vectorizer()
-            matrix = self._vectorizer.fit_transform(texts)
-            self.vocabulary_ = _normalize_vocabulary(self._vectorizer.vocabulary_)
+            if request.pass_count > 1:
+                if request.pass_index == 0:
+                    if self.is_fitted:
+                        raise OperatorError(
+                            "The fitting pass received an already fitted CountVectorizer."
+                        )
+                    self._accumulate_fit_batch(texts)
+                    return BatchResult()
+                if not self.is_fitted:
+                    raise OperatorNotFittedError(
+                        "CountVectorizer vocabulary was not finalized at the pass barrier."
+                    )
+                matrix = self._require_vectorizer().transform(texts).tocsr()
+            else:
+                if self.is_fitted:
+                    raise OperatorError(
+                        "fit_translate received an already fitted CountVectorizer."
+                    )
+                self._vectorizer = self._make_vectorizer()
+                matrix = self._vectorizer.fit_transform(texts)
+                self.vocabulary_ = _normalize_vocabulary(self._vectorizer.vocabulary_)
         elif mode == "translate":
             matrix = self.translate(texts)["values"]
         else:  # pragma: no cover - runner validates mode
@@ -256,6 +282,49 @@ class CountVectorizer(BaseTranslator):
     ) -> OutputMap | None:
         _ = batch_index, mode, request
         return result.outputs
+
+    def _accumulate_fit_batch(self, texts: list[str]) -> None:
+        # Use sklearn for the complete preprocessing / tokenizer / n-gram
+        # pipeline. Disable only restrictions that require corpus-wide totals.
+        self._fit_document_count += len(texts)
+        batch = self._make_vectorizer()
+        batch.set_params(min_df=1, max_df=1.0, max_features=None)
+        try:
+            matrix = batch.fit_transform(texts)
+        except ValueError as exc:
+            # A batch with only stopwords / empty texts is harmless; a
+            # corpus-wide empty vocabulary still fails at the pass barrier.
+            if "empty vocabulary" not in str(exc):
+                raise
+            return
+        features = batch.get_feature_names_out()
+        term_totals = np.asarray(matrix.sum(axis=0)).ravel()
+        document_totals = matrix.getnnz(axis=0)
+        self._fit_tf.update({
+            str(term): int(value)
+            for term, value in zip(features, term_totals, strict=True)
+        })
+        self._fit_df.update({
+            str(term): int(value)
+            for term, value in zip(features, document_totals, strict=True)
+        })
+
+    def complete_translation_pass(
+        self, *, mode: TranslationMode, request: TranslationRequest,
+    ) -> OutputMap | None:
+        if mode == "fit_translate" and request.pass_count > 1 and request.pass_index == 0:
+            self.vocabulary_ = _select_global_vocabulary(
+                term_frequency=self._fit_tf,
+                document_frequency=self._fit_df,
+                n_documents=self._fit_document_count,
+                min_df=self.min_df, max_df=self.max_df,
+                max_features=self.max_features,
+            )
+            self._vectorizer = self._make_vectorizer(vocabulary=self.vocabulary_)
+            self._fit_tf.clear()
+            self._fit_df.clear()
+            self._fit_document_count = 0
+        return None
 
     def finalize_translation(
         self,
@@ -292,6 +361,7 @@ class CountVectorizer(BaseTranslator):
             "max_features": self.max_features,
             "binary": self.binary,
             "stemmer": self.stemmer,
+            "ngram_separator": self.ngram_separator,
             "is_fitted": self.is_fitted,
         }
         if include_vocabulary and self.vocabulary_ is not None:
@@ -313,6 +383,8 @@ class CountVectorizer(BaseTranslator):
             max_features=cast(int | None, state.get("max_features")),
             binary=bool(state.get("binary", False)),
             stemmer=cast(str | None, state.get("stemmer")),
+            # Old operator snapshots used sklearn's space-separated display.
+            ngram_separator=str(state.get("ngram_separator", " ")),
             vocabulary=cast(Mapping[str, int] | None, vocabulary),
         )
 
@@ -352,6 +424,15 @@ class CountVectorizer(BaseTranslator):
         state["operator_id"] = operator_id
         manifest = self.save_assets(intermediate_dir)
         state["assets"] = dict(manifest)
+        state["fit_document_count"] = self._fit_document_count
+        if self._fit_tf:
+            stats_name = "fit_statistics.parquet"
+            pd.DataFrame({
+                "term": list(self._fit_tf),
+                "term_frequency": [self._fit_tf[t] for t in self._fit_tf],
+                "document_frequency": [self._fit_df[t] for t in self._fit_tf],
+            }).to_parquet(intermediate_dir / stats_name, index=False)
+            state["fit_statistics_file"] = stats_name
         (intermediate_dir / "state.json").write_text(
             json.dumps(state, indent=2, sort_keys=True), encoding="utf-8"
         )
@@ -376,6 +457,22 @@ class CountVectorizer(BaseTranslator):
                 "CountVectorizer intermediate assets must be a mapping."
             )
         obj.load_assets(intermediate_dir, assets)
+        obj._fit_document_count = int(state.get("fit_document_count", 0))
+        stats_name = state.get("fit_statistics_file")
+        if stats_name:
+            stats = pd.read_parquet(intermediate_dir / str(stats_name))
+            obj._fit_tf.update({
+                str(term): int(count)
+                for term, count in zip(
+                    stats["term"], stats["term_frequency"], strict=True
+                )
+            })
+            obj._fit_df.update({
+                str(term): int(count)
+                for term, count in zip(
+                    stats["term"], stats["document_frequency"], strict=True
+                )
+            })
         obj.operator_id = operator_id
         return obj
 
@@ -429,7 +526,18 @@ class CountVectorizer(BaseTranslator):
         if self.vocabulary_ is None:
             raise OperatorNotFittedError("CountVectorizer has no fitted vocabulary.")
         frame = _vocabulary_frame(self.vocabulary_)
-        return frame["term"].astype(str).tolist()
+        terms = frame["term"].astype(str).tolist()
+        # Display-only formatting: sklearn's vocabulary and analyzer retain
+        # their original term strings for correct frozen transform behavior.
+        if self.analyzer == "word":
+            displayed = [term.replace(" ", self.ngram_separator) for term in terms]
+            if len(set(displayed)) != len(displayed):
+                raise ArtifactError(
+                    "CountVectorizer n-gram display labels are ambiguous with "
+                    f"ngram_separator={self.ngram_separator!r}; choose another separator."
+                )
+            return displayed
+        return terms
 
 
 class _PorterAnalyzer:
@@ -484,6 +592,37 @@ class _PorterAnalyzer:
                     for index in range(len(stems) - n + 1)
                 )
         return features
+
+
+def _select_global_vocabulary(
+    *, term_frequency: Mapping[str, int],
+    document_frequency: Mapping[str, int], n_documents: int,
+    min_df: int | float, max_df: int | float, max_features: int | None,
+) -> dict[str, int]:
+    # Match sklearn CountVectorizer.fit_transform's _sort_features /
+    # _limit_features order, including numpy argsort frequency tie behavior.
+    # Alphabetization happens before max_features selection.
+    terms = sorted(term_frequency)
+    if not terms:
+        raise ValueError("empty vocabulary; perhaps the documents only contain stop words")
+    high = max_df if isinstance(max_df, int) else max_df * n_documents
+    low = min_df if isinstance(min_df, int) else min_df * n_documents
+    if high < low:
+        raise ValueError("max_df corresponds to < documents than min_df")
+    dfs = np.array([document_frequency[term] for term in terms], dtype=np.int64)
+    mask = (dfs <= high) & (dfs >= low)
+    if max_features is not None and mask.sum() > max_features:
+        frequencies = np.array([term_frequency[term] for term in terms], dtype=np.int64)
+        selected = np.where(mask)[0][np.argsort(-frequencies[mask])[:max_features]]
+        updated = np.zeros(len(terms), dtype=bool)
+        updated[selected] = True
+        mask = updated
+    retained = [term for term, keep in zip(terms, mask, strict=True) if keep]
+    if not retained:
+        raise ValueError(
+            "After pruning, no terms remain. Try a lower min_df or a higher max_df."
+        )
+    return {term: index for index, term in enumerate(retained)}
 
 
 def _normalize_stop_words(value: str | Sequence[str] | None) -> str | list[str] | None:
