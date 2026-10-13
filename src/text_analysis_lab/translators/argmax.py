@@ -200,7 +200,7 @@ def _argmax_frame(matrix: Any, names: tuple[str, ...]) -> pd.DataFrame:
         csr.sort_indices()
         if csr.shape[1] != width:
             raise ArtifactError("ArgMax source width differs from its feature schema.")
-        if not np.issubdtype(csr.dtype, np.number) or not np.all(np.isfinite(csr.data)):
+        if not np.issubdtype(csr.dtype, np.number) or np.issubdtype(csr.dtype, np.complexfloating) or not np.all(np.isfinite(csr.data)):
             raise ArtifactError("ArgMax requires finite numeric matrix values.")
         for i in range(csr.shape[0]):
             lo, hi = csr.indptr[i], csr.indptr[i + 1]
@@ -230,7 +230,7 @@ def _argmax_frame(matrix: Any, names: tuple[str, ...]) -> pd.DataFrame:
         arr = np.asarray(matrix)
         if arr.ndim != 2 or arr.shape[1] != width:
             raise ArtifactError("ArgMax requires a matrix matching its feature schema.")
-        if not np.issubdtype(arr.dtype, np.number) or not np.all(np.isfinite(arr)):
+        if not np.issubdtype(arr.dtype, np.number) or np.issubdtype(arr.dtype, np.complexfloating) or not np.all(np.isfinite(arr)):
             raise ArtifactError("ArgMax requires finite numeric matrix values.")
         for row in arr:
             if not np.any(row):
