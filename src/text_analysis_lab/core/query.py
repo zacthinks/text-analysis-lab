@@ -565,10 +565,11 @@ class QueryEngine:
                 registered.append(positions_name)
 
             def eligibility_sql() -> str:
-                view = self.build_artifact_view_sql(
+                view = self.build_composed_view_sql(
                     artifact,
                     metadata_mode=metadata_mode,
                     include_data=include_data,
+                    with_artifacts=with_artifacts,
                 )
                 ctes = [f"artifact_view AS ({view.sql})"]
                 from_sql = "artifact_view v"
