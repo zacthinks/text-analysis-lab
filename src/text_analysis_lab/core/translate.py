@@ -522,7 +522,10 @@ def translate(
             runtime,
             translator.finalize_translation(
                 mode=mode,
-                request=translation_request,
+                request=replace(
+                    translation_request,
+                    pass_index=translation_request.pass_count - 1,
+                ),
             ),
         )
 
@@ -637,7 +640,10 @@ def resume_translate(
         )
         _commit_final_outputs(
             runtime,
-            translator.finalize_translation(mode=mode, request=request),
+            translator.finalize_translation(
+                mode=mode,
+                request=replace(request, pass_index=request.pass_count - 1),
+            ),
         )
         _serialize_pending_operator_snapshot(project, translator, runtime)
         _complete_runtime(project, runtime)
