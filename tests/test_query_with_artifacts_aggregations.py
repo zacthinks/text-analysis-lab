@@ -155,9 +155,13 @@ def test_qualified_attached_collisions_use_narrow_output_names(tmp_path):
         )
         assert ct_both.loc["X", 1] == 1
         assert ct_both.loc["Y", 2] == 1
+        another = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2], "score": [11, 12]}),
+            primary_key="doc_id", data_fields="score",
+        )
         with pytest.raises(QueryError, match="ambiguous"):
             left.visualize.histogram(
-                score, with_artifacts=right,
+                score, with_artifacts=[right, another],
                 with_columns=["score"], output="result",
             )
     finally:
