@@ -1,6 +1,6 @@
 # Hierarchy-aware batching in `Project.translate()`
 
-**Introduced in TeAL 0.4.1.** This document describes the translation *execution* batch policy. It does not change any translator's scientific aggregation unit or fitting algorithm.
+**Introduced in TeAL 0.5.0.** This document describes the translation *execution* batch policy. It does not change any translator's scientific aggregation unit or fitting algorithm.
 
 ## User interface
 
@@ -48,11 +48,11 @@ The engine records selected groups and units durably in SQLite and reuses that s
 
 ## Scope and safety
 
-- Grouped execution in 0.4.1 supports **one source** requesting `mode="batches"`. Multi-source group synchronization is not inferred or supported. Non-grouped multi-source and `mode="full_artifact"` behavior remain available as before.
+- Grouped execution in 0.5.0 supports **one source** requesting `mode="batches"`. Multi-source group synchronization is not inferred or supported. Non-grouped multi-source and `mode="full_artifact"` behavior remain available as before.
 - `form="single"` is permitted with explicit grouped execution only when `batch_by` is the **finest** primary-key name **and** the effective `batch_size` is **1**. Other combinations may have multiple rows in a single packet and are rejected up front rather than silently losing records.
 - A batch contains all rows in the selected groups. In pathological cases, even one giant group can exceed RAM; this feature guarantees **group integrity**, not a fixed byte/row memory ceiling.
-- Some translators fit globally and continue requesting `mode="full_artifact"`. Specifically, `ArtifactCountVectorizer` is **not** migrated to batched vocabulary fitting or transformation in 0.4.1. That is a subsequent two-pass architecture effort, not a capability introduced by this release.
+- Some translators fit globally and continue requesting `mode="full_artifact"`. Specifically, `ArtifactCountVectorizer` is **not** migrated to batched vocabulary fitting or transformation in 0.5.0. That is a subsequent two-pass architecture effort, not a capability introduced by this release.
 
 ## Release version
 
-Version `0.4.1` is an explicit exception to the project's usual pre-1.0 policy that reserves minor releases for new public features: this is a backward-compatible execution-only extension without a planned scientific-semantics change. The exception does not alter the default release policy.
+Version `0.5.0` follows TeAL's existing pre-1.0 minor-release policy because it introduces a new public execution mode. The feature is deliberately small and backward-compatible; the second version number signals a new public capability, not its implementation size.
