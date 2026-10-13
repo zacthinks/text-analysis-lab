@@ -715,16 +715,23 @@ class _MatrixArtifact(BaseArtifact):
         if self.artifact_type == ArtifactType.SPARSE_MATRIX:
             csr = matrix.tocsr()
             records: list[dict[str, Any]] = []
+            # Records are dense scalar projections: a stored sparse zero and
+            # an implicit sparse zero have identical numerical meaning. The
+            # previous nonzero-only dictionaries were subsequently merged
+            # with .get(), turning implicit zeros into None.
+            zero = csr.dtype.type(0).item()
             for row_index in range(int(csr.shape[0])):
                 row = csr.getrow(row_index)
-                records.append(
-                    {
-                        selected[int(col_index)]: (
-                            value.item() if hasattr(value, "item") else value
-                        )
-                        for col_index, value in zip(row.indices, row.data, strict=True)
-                    }
-                )
+                stored = {
+                    int(col_index): (
+                        value.item() if hasattr(value, "item") else value
+                    )
+                    for col_index, value in zip(row.indices, row.data, strict=True)
+                }
+                records.append({
+                    name: stored.get(index, zero)
+                    for index, name in enumerate(selected)
+                })
             return records
         dense = np.asarray(matrix)
         return [
