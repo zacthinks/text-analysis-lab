@@ -21,7 +21,11 @@ in `pyproject.toml`.
 
 Do not maintain a second hard-coded Python version constant. `text_analysis_lab.__version__` is derived from installed package metadata.
 
-The README release label and a matching release heading in `CHANGELOG.md` must agree with `pyproject.toml`; CI checks this.
+The matching release heading in `CHANGELOG.md` must agree with `pyproject.toml`; CI checks this. **Do not put release versions or release history in the public README.**
+
+## README editorial policy
+
+**README.md is a timeless, public-facing introduction to TeAL, not a development notebook.** Prioritize clear project purpose, genuinely supported features and translators, installation, practical quick-start examples, and links to focused documentation. Improve those sections when they genuinely help a visitor understand or use TeAL. **No clutter:** do not append version-specific feature announcements, release numbers, migration histories, PR notes, phase/gate status, engineering caveats, internal implementation details, or running change logs. Put release changes in `CHANGELOG.md`, upgrade instructions in `docs/UPGRADING.md`, detailed feature contracts in topic-specific `docs/`, and development planning in private branch memos. Keep the README concise, coherent, and stable across releases. A README edit must justify its value to a prospective user independently of the current PR.
 
 ## Normal development
 
@@ -34,9 +38,8 @@ When a PR is the **final release-worthy PR for a coherent feature, refactor, or 
 1. choose the next SemVer version;
 2. move the relevant `[Unreleased]` entries into a dated `[X.Y.Z]` section;
 3. update `pyproject.toml`;
-4. update the README release label;
-5. leave a fresh empty `[Unreleased]` section;
-6. merge only with normal Tests and Acceptance green.
+4. leave a fresh empty `[Unreleased]` section;
+5. merge only with normal Tests and Acceptance green.
 
 Examples:
 
@@ -68,7 +71,7 @@ Pushing `vX.Y.Z` runs `.github/workflows/release.yml`.
 The workflow refuses to create a release unless:
 
 - the tag version exactly matches `pyproject.toml`;
-- README and changelog version metadata are consistent;
+- changelog and package version metadata are consistent;
 - the test suite passes;
 - Acceptance passes;
 - the package builds successfully.
