@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
 
 
-def spectrum(
+def svd_spectrum(
     artifact: BaseArtifact,
     *,
     n_components: int = 10,
@@ -34,7 +34,7 @@ def spectrum(
     Like the existing SVD translator, this fits sklearn TruncatedSVD and
     materializes the input matrix. It is not a streaming/batched fit.
     """
-    require_matrix_artifact(artifact, "spectrum()")
+    require_matrix_artifact(artifact, "svd_spectrum()")
     if isinstance(n_components, bool) or not isinstance(n_components, (int, np.integer)):
         raise TypeError("n_components must be a positive integer.")
     if n_components < 1:
@@ -44,10 +44,10 @@ def spectrum(
 
     matrix = artifact.get_matrix()
     if not hasattr(matrix, "shape") or len(matrix.shape) != 2:
-        raise ValueError("spectrum() requires a two-dimensional matrix.")
+        raise ValueError("svd_spectrum() requires a two-dimensional matrix.")
     rows, columns = (int(value) for value in matrix.shape)
     if rows < 2 or columns < 2:
-        raise ValueError("spectrum() requires at least two rows and two features.")
+        raise ValueError("svd_spectrum() requires at least two rows and two features.")
     limit = min(rows, columns) if algorithm == "randomized" else min(rows, columns) - 1
     if n_components > limit:
         raise ValueError(
@@ -66,7 +66,7 @@ def spectrum(
         values = np.asarray(matrix, dtype=float)
         total_energy = float(np.sum(np.square(values), dtype=float))
     if not np.all(np.isfinite(values)) or not np.isfinite(total_energy):
-        raise ValueError("spectrum() requires a matrix with finite numeric values.")
+        raise ValueError("svd_spectrum() requires a matrix with finite numeric values.")
 
     # A zero input has no defined decomposition importance; provide explicitly
     # zero contributions instead of scipy/sklearn's potential NaNs.
