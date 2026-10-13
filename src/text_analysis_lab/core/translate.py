@@ -695,7 +695,27 @@ def _validate_batch_hierarchy(
                     f"batch_by={request.batch_by!r} cannot be honored for "
                     f"source {label!r} requesting full_artifact."
                 )
-            _batch_prefix(source, request.batch_by)
+            selected = _batch_prefix(source, request.batch_by)
+            if spec.form == "single":
+                effective_size = (
+                    request.batch_size
+                    if request.batch_size is not None
+                    else spec.batch_size
+                )
+                # A full primary key uniquely identifies one source row. Any
+                # coarser key or more than one group may produce a multi-row
+                # packet, and artifact.query(form="single") would drop rows.
+                if (
+                    selected != tuple(str(k) for k in source.primary_key)
+                    or effective_size != 1
+                ):
+                    raise OperatorError(
+                        f"Source {label!r} requests form='single', but "
+                        f"batch_by={request.batch_by!r} with "
+                        f"batch_size={effective_size!r} could contain multiple "
+                        "rows. Grouped form='single' requires batch_by at the "
+                        "finest primary-key level and an effective batch_size=1."
+                    )
 
 
 def _validate_max_outstanding_units(value: Any) -> int | None:
