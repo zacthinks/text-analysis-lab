@@ -48,7 +48,7 @@ def spectrum(
     rows, columns = (int(value) for value in matrix.shape)
     if rows < 2 or columns < 2:
         raise ValueError("spectrum() requires at least two rows and two features.")
-    limit = columns if algorithm == "randomized" else min(rows, columns) - 1
+    limit = min(rows, columns) if algorithm == "randomized" else min(rows, columns) - 1
     if n_components > limit:
         raise ValueError(
             f"n_components={n_components} exceeds the {algorithm} limit "
@@ -83,7 +83,7 @@ def spectrum(
         if not np.all(np.isfinite(variance)):
             # For constant rows every feature has zero sample variance,
             # despite potentially nonzero uncentered matrix energy.
-            if np.all(np.var(estimator.transform(matrix), axis=0) == 0):
+            if np.allclose(np.var(estimator.transform(matrix), axis=0), 0.0):
                 variance = np.zeros_like(singular)
             else:
                 raise ValueError("TruncatedSVD returned nonfinite explained variance.")
