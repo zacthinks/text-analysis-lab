@@ -28,7 +28,7 @@ jobs:
       - name: Check version metadata
         run: uv run python scripts/check_version.py
 
-      - name: Run pytest (2 workers)
+      - name: Run pytest (4 workers)
         # Keep all test files selected; distribute independent files across workers.
         # CI-only xdist overlay leaves local pytest and the uv lockfile unchanged.
-        run: uv run --with pytest-xdist==3.8.0 pytest -n 2 --dist=loadfile -q -rs --durations=30
+        run: uv run --with pytest-xdist==3.8.0 pytest -n 4 --dist=loadfile -q -rs --durations=30
