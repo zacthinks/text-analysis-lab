@@ -232,12 +232,39 @@ class _ExecutionPlan:
                         ),
                     )
 
-    def reset_all_to_pending(self) -> None:
-        """Start the next complete traversal without changing source assignments."""
+    def activate_pass(self, pass_index: int) -> None:
+        """Reconcile the committed checkpoint's pass index with SQLite.
+
+        Only a *new* pass resets the unit statuses. Reopening midway through
+        the current pass must retain completed units.
+        """
         with self.con as con:
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS plan_pass_state (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    current_pass INTEGER NOT NULL
+                )"""
+            )
+            con.execute(
+                "INSERT OR IGNORE INTO plan_pass_state(id, current_pass) VALUES (1, 0)"
+            )
+            stored = int(con.execute(
+                "SELECT current_pass FROM plan_pass_state WHERE id=1"
+            ).fetchone()[0])
+            if stored == pass_index:
+                return
+            if stored + 1 != pass_index:
+                raise OperatorError(
+                    f"Pass checkpoint/index mismatch: SQLite={stored}, "
+                    f"checkpoint={pass_index}."
+                )
             con.execute(
                 """UPDATE plan_units SET status='pending', assigned_worker=NULL,
                    started_at=NULL, completed_at=NULL, error=NULL"""
+            )
+            con.execute(
+                "UPDATE plan_pass_state SET current_pass=? WHERE id=1",
+                (pass_index,),
             )
 
     def reset_running_to_pending(self) -> None:
@@ -789,12 +816,10 @@ def _run_repeated_plan(
     if first >= request.pass_count:
         raise OperatorError("Checkpoint pass index exceeds requested pass count.")
     for pass_index in range(first, request.pass_count):
-        # A boundary checkpoint is authoritative: it may have been committed
-        # immediately before SQLite statuses were reset. Replaying already
-        # completed pass occurrences is forbidden.
-        if pass_index != 0 and pass_index == first:
-            if plan.complete_count():
-                plan.reset_all_to_pending()
+        # A checkpoint can be promoted immediately before the SQLite pass
+        # transition. activate_pass only resets at a *new* pass boundary;
+        # resuming midway through this pass preserves completed units.
+        plan.activate_pass(pass_index)
         current = replace(request, pass_index=pass_index)
         _run_plan(
             translator=translator, runtime=runtime, plan=plan,
@@ -810,7 +835,7 @@ def _run_repeated_plan(
                 translator=translator, runtime=runtime,
                 mode=mode, route=route, pass_index=pass_index + 1,
             )
-            plan.reset_all_to_pending()
+            plan.activate_pass(pass_index + 1)
 
 
 def _validate_max_outstanding_units(value: Any) -> int | None:
