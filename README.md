@@ -1,6 +1,6 @@
 # Text Analysis Lab (TeAL)
 
-**Current development release: 0.5.0 · Python 3.11+ · MIT**
+**Current development release: 0.6.0 · Python 3.11+ · MIT**
 
 Text Analysis Lab (TeAL) is an end-to-end project environment for computer-assisted text analysis. It is designed to support transparent, intentional, rigorous, and reproducible multi-stage work: importing and restructuring corpora, building representations, exploring patterns, developing and validating measures, and carrying results into downstream analysis while preserving the relationships among those stages.
 
@@ -130,6 +130,33 @@ Artifacts are written directly into the project. Reopen the project later and re
 project = teal.Project.open("demo.teal")
 documents = project.get_artifact("documents")
 ```
+
+## Optional repeated translation plans (v0.6.0)
+
+Custom `BaseTranslator` implementations can opt into replaying the **same durable
+source plan** multiple times with `translation_passes(...)` (default: one).
+For every nonterminal pass, `complete_translation_pass(...)` runs only after
+all planned units have been handled and checkpointed; the next pass uses the
+same materialization assignments and a fresh pass-specific execution context
+(`TranslationRequest.pass_index` and `pass_count`). `finalize_translation`
+still runs once after the final pass.
+
+Repeated passes support sequential and already-supported parallel routes,
+including compatible multi-source plans. Parallel workers are recreated after
+the canonical pass boundary. A fitting translator may emit no outputs in the
+first pass and emit its final rows in a later pass; the existing writer,
+lineage, and frozen-scientific-state contracts still apply. In-progress
+operations that do not record pass metadata default to one pass on resume.
+
+Repeated traversal rereads the saved sources; it does not cache every input
+batch in memory or copy the persisted source plan per pass. Huge individual
+batches/groups still require corresponding memory. TeAL checkpoints coordinate
+its own translator/writer recovery but do not guarantee transactional exactly-
+once external side effects across arbitrary hard crashes.
+
+**Scope:** The engine now permits repeated source-plan delivery; this release
+does *not* convert `CountVectorizer` or `ArtifactCountVectorizer` to streaming
+multi-pass fitting. Those scientific algorithm changes are separate work.
 
 ## Complete-group translation batching (v0.5.0)
 
