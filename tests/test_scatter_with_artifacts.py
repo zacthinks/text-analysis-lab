@@ -92,3 +92,67 @@ def test_scatter_attached_matrix_feature_as_color(tmp_path):
         assert sorted(float(x) for trace in figure.data for x in trace.x) == [0., 2., 4.]
     finally:
         project.close()
+
+
+def test_missing_attached_categorical_color_label_keeps_unmatched_points(tmp_path):
+    project = teal.Project.create(tmp_path / "missing_color", name="missing_color")
+    try:
+        docs = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3], "text": ["a", "b", "c"]}),
+            primary_key="doc_id", data_fields="text",
+        )
+        coords = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2, 3]}),
+            "data": {"values": np.asarray([[0., 1.], [2., 3.], [4., 5.]]),
+                     "columns": ["x", "y"]},
+        }], artifact_type="dense_matrix", primary_key="doc_id")
+        groups = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2], "category": ["A", "B"]}),
+            primary_key="doc_id", data_fields="category",
+        )
+        base = docs.visualize.scatter(
+            embeddings=coords, with_artifacts=groups,
+            with_columns="category", color="category",
+        )
+        assert sum(len(trace.x) for trace in base.data) == 2
+        filled = docs.visualize.scatter(
+            embeddings=coords, with_artifacts=groups,
+            with_columns="category", color="category",
+            color_na_label="Other",
+        )
+        assert sum(len(trace.x) for trace in filled.data) == 3
+        assert {trace.name for trace in filled.data} == {"A", "B", "Other"}
+        with pytest.raises(ValueError, match="collides"):
+            docs.visualize.scatter(
+                embeddings=coords, with_artifacts=groups,
+                with_columns="category", color="category",
+                color_na_label="A",
+            )
+    finally:
+        project.close()
+
+
+def test_missing_color_label_rejects_numeric_color(tmp_path):
+    project = teal.Project.create(tmp_path / "numeric_color", name="numeric_color")
+    try:
+        docs = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2]}), primary_key="doc_id",
+        )
+        coords = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {"values": np.asarray([[0., 1.], [2., 3.]]),
+                     "columns": ["x", "y"]},
+        }], artifact_type="dense_matrix", primary_key="doc_id")
+        weights = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1]}),
+            "data": {"values": np.asarray([[0.25]]),
+                     "columns": ["weight"]},
+        }], artifact_type="dense_matrix", primary_key="doc_id")
+        with pytest.raises(ValueError, match="categorical"):
+            docs.visualize.scatter(
+                embeddings=coords, with_artifacts=weights,
+                with_columns="weight", color="weight",
+                color_na_label="Other",
+            )
+    finally:
+        project.close()
