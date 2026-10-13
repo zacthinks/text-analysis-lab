@@ -978,9 +978,12 @@ class BaseArtifact(ABC):
         self,
         *,
         metadata_mode: MetadataMode = "none",
+        with_artifacts: Any = None,
     ) -> dict[str, Any]:
-        """Return key/data/metadata column names available to artifact.query(...)."""
-        return self.project.query.query_columns(self, metadata_mode=metadata_mode)
+        """Return key/data/metadata/with column names available to query()."""
+        return self.project.query.query_columns(
+            self, metadata_mode=metadata_mode, with_artifacts=with_artifacts,
+        )
 
     def query(
         self,
@@ -989,6 +992,8 @@ class BaseArtifact(ABC):
         data_columns: ColumnSelect = True,
         metadata_columns: ColumnSelect = False,
         metadata_mode: MetadataMode = "none",
+        with_artifacts: Any = None,
+        with_columns: ColumnSelect = True,
         where: str | None = None,
         order_by: str | Sequence[str] | None = None,
         positions: Sequence[int] | None = None,
@@ -1019,6 +1024,7 @@ class BaseArtifact(ABC):
                 "otherwise rows would be discarded from multi-row batches."
             )
 
+        attached = self.project.query.resolve_with_artifacts(self, with_artifacts)
         catalog_status = self.status
         if (
             catalog_status == "incomplete"
@@ -1036,6 +1042,7 @@ class BaseArtifact(ABC):
                 sample_n=sample_n,
                 sample_frac=sample_frac,
                 random_state=random_state,
+                with_artifacts=attached,
             )
         else:
             resolved_positions = _resolve_query_positions(
@@ -1051,6 +1058,8 @@ class BaseArtifact(ABC):
             "data_columns": data_columns,
             "metadata_columns": metadata_columns,
             "metadata_mode": metadata_mode,
+            "with_artifacts": attached,
+            "with_columns": with_columns,
             "where": where,
             "order_by": order_by,
             "positions": resolved_positions,
@@ -1079,6 +1088,8 @@ class BaseArtifact(ABC):
         limit: int | None,
         form: QueryForm,
         include_position: bool,
+        with_artifacts: Any,
+        with_columns: ColumnSelect,
     ) -> Any:
         if (
             self.data_artifact is None
@@ -1104,6 +1115,8 @@ class BaseArtifact(ABC):
             data_columns=data_columns if include_data_in_query else False,
             metadata_columns=metadata_columns,
             metadata_mode=metadata_mode,
+            with_artifacts=with_artifacts,
+            with_columns=with_columns,
             where=where,
             order_by=order_by,
             limit=limit,
@@ -1170,6 +1183,8 @@ class BaseArtifact(ABC):
         include_position: bool,
         batch_size: int,
         streaming_mode: StreamingMode,
+        with_artifacts: Any,
+        with_columns: ColumnSelect,
     ) -> Iterable[Any]:
         if (
             self.data_artifact is None
@@ -1208,6 +1223,8 @@ class BaseArtifact(ABC):
             data_columns=data_columns if include_data_in_query else False,
             metadata_columns=metadata_columns,
             metadata_mode=metadata_mode,
+            with_artifacts=with_artifacts,
+            with_columns=with_columns,
             where=where,
             order_by=order_by,
             limit=limit,
