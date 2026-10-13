@@ -8,6 +8,18 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+## [0.7.0] - 2026-10-13
+
+### Added
+
 - Opt-in two-pass fitting for the scikit-learn-backed `CountVectorizer` when an unfitted translator receives `Project.translate(..., batch_size=N)`. Each batch uses sklearn preprocessing and unrestricted vocabulary learning; global TF/DF filtering and a frozen vocabulary are applied before sparse matrix output is replayed.
 - Opt-in complete-group, two-pass fitting for `ArtifactCountVectorizer` through `Project.translate(..., batch_by="<key>", batch_size=N)`. Aggregation respects retained primary-key prefixes and n-gram sequence boundaries.
 - Translator-specific regression coverage for whole-versus-batched vocabulary and keyed matrix parity, stop words, stemming, character analyzers, DF thresholds, `max_features` ties, empty batches, checkpoint/resume, and persisted operator reuse.
