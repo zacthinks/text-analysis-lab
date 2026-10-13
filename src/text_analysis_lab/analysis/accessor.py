@@ -99,7 +99,7 @@ class ArtifactAnalysis:
             **metric_kwargs,
         )
 
-    def spectrum(
+    def svd_spectrum(
         self,
         *,
         n_components: int = 10,
@@ -109,9 +109,9 @@ class ArtifactAnalysis:
         n_oversamples: int = 10,
         power_iteration_normalizer: str = "auto",
     ) -> pd.DataFrame:
-        from text_analysis_lab.analysis.spectrum import spectrum
+        from text_analysis_lab.analysis.spectrum import svd_spectrum
 
-        return spectrum(
+        return svd_spectrum(
             self._artifact,
             n_components=n_components,
             algorithm=algorithm,

@@ -151,7 +151,7 @@ def test_persisted_spectrum_scree_is_ephemeral_after_reopen(
         before_artifacts = len(project.list_artifacts())
         before_operations = len(project.list_operations())
 
-        frame = artifact.analysis.spectrum(n_components=2, random_state=42)
+        frame = artifact.analysis.svd_spectrum(n_components=2, random_state=42)
         assert frame["component"].tolist() == [1, 2]
         assert np.isfinite(frame.select_dtypes("number").to_numpy()).all()
         assert 0 < frame["cumulative_energy_ratio"].iloc[-1] <= 1
@@ -172,7 +172,7 @@ def test_persisted_spectrum_scree_is_ephemeral_after_reopen(
         loaded = reopened.get_artifact(artifact_id)
         before_artifacts = len(reopened.list_artifacts())
         before_operations = len(reopened.list_operations())
-        loaded_frame = loaded.analysis.spectrum(n_components=2, random_state=42)
+        loaded_frame = loaded.analysis.svd_spectrum(n_components=2, random_state=42)
         pd.testing.assert_frame_equal(frame, loaded_frame)
         assert len(reopened.list_artifacts()) == before_artifacts
         assert len(reopened.list_operations()) == before_operations

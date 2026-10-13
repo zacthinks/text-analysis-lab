@@ -325,7 +325,7 @@ Browse analysis methods by task (methods may appear in multiple families):
 <details>
 <summary>Matrix Utilities</summary>
 
-- `spectrum`
+- `svd_spectrum`
 - `matrix_summary`
 - `row_summary`
 - `feature_summary`
