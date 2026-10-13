@@ -23,6 +23,7 @@ from text_analysis_lab.analysis.neighbors import nearest_neighbors
 from text_analysis_lab.analysis.polarity import polarity
 from text_analysis_lab.analysis.row_summary import row_summary
 from text_analysis_lab.analysis.summary import summarize
+from text_analysis_lab.analysis.spectrum import spectrum
 from text_analysis_lab.analysis.text_diagnostics import text_diagnostics
 from text_analysis_lab.analysis.valence import valence
 from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -66,6 +67,7 @@ def test_analysis_accessor_signatures_track_canonical_functions() -> None:
         (ArtifactAnalysis.cosine_similarity, cosine_similarity, ()),
         (ArtifactAnalysis.distance, distance, ()),
         (ArtifactAnalysis.matrix_summary, matrix_summary, ()),
+        (ArtifactAnalysis.spectrum, spectrum, ()),
         (ArtifactAnalysis.row_summary, row_summary, ()),
         (ArtifactAnalysis.feature_summary, feature_summary, ()),
         (ArtifactAnalysis.nearest_neighbors, nearest_neighbors, ()),
@@ -131,6 +133,7 @@ def test_accessor_methods_are_not_transparent_wrapped_functions() -> None:
         ArtifactAnalysis.cosine_similarity,
         ArtifactAnalysis.distance,
         ArtifactAnalysis.matrix_summary,
+        ArtifactAnalysis.spectrum,
         ArtifactAnalysis.row_summary,
         ArtifactAnalysis.feature_summary,
         ArtifactAnalysis.nearest_neighbors,
