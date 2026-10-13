@@ -155,3 +155,14 @@ def test_accessor_methods_are_not_transparent_wrapped_functions() -> None:
 
     for method in methods:
         assert not hasattr(method, "__wrapped__")
+
+
+def test_svd_spectrum_uses_explicit_public_name_without_generic_alias() -> None:
+    from text_analysis_lab import analysis
+    from text_analysis_lab.analysis.accessor import ArtifactAnalysis
+
+    assert callable(analysis.svd_spectrum)
+    assert callable(ArtifactAnalysis.svd_spectrum)
+    assert "spectrum" not in analysis.__all__
+    assert not callable(getattr(analysis, "spectrum", None))
+    assert not hasattr(ArtifactAnalysis, "spectrum")
