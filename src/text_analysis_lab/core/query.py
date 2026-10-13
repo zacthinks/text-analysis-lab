@@ -1790,22 +1790,140 @@ class QueryEngine:
             mapping=mapping,
         )
 
+    def resolve_with_artifacts(self, artifact: BaseArtifact, refs: Any) -> tuple[BaseArtifact, ...]:
+        """Resolve singleton/list references once and validate subset-key left joins."""
+        from text_analysis_lab.core.artifact_base import BaseArtifact as Artifact
+
+        if refs is None:
+            return ()
+        items = [refs] if isinstance(refs, (str, Artifact)) else list(refs)
+        result: list[BaseArtifact] = []
+        seen: set[str] = set()
+        for ref in items:
+            right = self.project.get_artifact(ref)
+            if right.status != "complete":
+                raise QueryError(f"with_artifacts source {right.artifact_id!r} must be complete.")
+            right_pk = tuple(str(col) for col in right.primary_key)
+            left_pk = tuple(str(col) for col in artifact.primary_key)
+            if not right_pk or not set(right_pk).issubset(left_pk):
+                raise QueryError(
+                    f"with_artifacts source {right.artifact_id!r} has incompatible "
+                    f"primary key {right_pk!r}; expected a nonempty subset of {left_pk!r}."
+                )
+            if right.artifact_id not in seen:
+                result.append(right)
+                seen.add(right.artifact_id)
+        return tuple(result)
+
+    def build_composed_view_sql(
+        self,
+        artifact: BaseArtifact,
+        *,
+        metadata_mode: MetadataMode,
+        include_data: bool,
+        with_artifacts: Any = None,
+    ) -> ArtifactViewSQL:
+        """Compose explicit relational sources onto the already-resolved caller view."""
+        base = self.build_artifact_view_sql(
+            artifact, metadata_mode=metadata_mode, include_data=include_data
+        )
+        rights = self.resolve_with_artifacts(artifact, with_artifacts)
+        if not rights:
+            return base
+        base_pk = tuple(str(col) for col in artifact.primary_key)
+        ctes = [f"_teal_base AS ({base.sql})"]
+        joins: list[str] = []
+        pending: list[dict[str, str]] = [
+            {
+                "namespace": col.namespace,
+                "base_name": col.base_name,
+                "qualified_name": col.qualified_name,
+                "sql_expr": f"b.{quote_identifier(col.output_name)}",
+                "source_artifact_id": col.source_artifact_id or "",
+            }
+            for col in base.columns
+        ]
+        seen_origins = {
+            (col.source_artifact_id, col.namespace, col.base_name)
+            for col in base.columns if col.source_artifact_id is not None
+        }
+        for index, right in enumerate(rights):
+            right_id = str(right.artifact_id)
+            right_view = self.build_artifact_view_sql(
+                right, metadata_mode="local", include_data=True
+            )
+            # Phase 1A: right-hand matrix values require deferred retrieval (1B).
+            if right.artifact_type in {ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX}:
+                raise QueryError(
+                    f"with_artifacts matrix source {right_id!r} requires "
+                    "the deferred matrix attachment phase (1B)."
+                )
+            alias = f"r{index}"
+            ctes.append(f"_teal_right_{index} AS ({right_view.sql})")
+            left_names = {c.base_name: c.output_name for c in base.columns if c.namespace == "key"}
+            right_names = {c.base_name: c.output_name for c in right_view.columns if c.namespace == "key"}
+            on_clause = " AND ".join(
+                f"b.{quote_identifier(left_names[key])} = {alias}.{quote_identifier(right_names[key])}"
+                for key in right.primary_key
+            )
+            joins.append(f"LEFT JOIN _teal_right_{index} {alias} ON {on_clause}")
+            for col in right_view.columns:
+                if col.namespace not in {"data", "metadata"}:
+                    continue
+                # Never conflate two same-named fields from different owners.
+                origin = (col.source_artifact_id, col.namespace, col.base_name)
+                if col.source_artifact_id is not None and origin in seen_origins:
+                    continue
+                # A self-attached artifact's local metadata remains explicit even
+                # when the caller has metadata_mode='none'.
+                if col.source_artifact_id is not None:
+                    seen_origins.add(origin)
+                pending.append(
+                    {
+                        "namespace": "with",
+                        "base_name": col.base_name,
+                        "qualified_name": (
+                            f"with.{right_id}.{col.namespace}.{col.base_name}"
+                        ),
+                        "sql_expr": f"{alias}.{quote_identifier(col.output_name)}",
+                        "source_artifact_id": col.source_artifact_id or right_id,
+                    }
+                )
+        columns, ambiguous, mapping = _assign_view_output_names(pending)
+        selects = ["b._position AS _position", "b._batch AS _batch", "b._row_offset AS _row_offset"]
+        selects.extend(
+            f"{col.sql_expr} AS {quote_identifier(col.output_name)}" for col in columns
+        )
+        sql = f"WITH {', '.join(ctes)} SELECT {', '.join(selects)} FROM _teal_base b " + " ".join(joins)
+        return ArtifactViewSQL(
+            sql=sql,
+            columns=columns,
+            structural_columns=base.structural_columns,
+            key_columns=tuple(c.output_name for c in columns if c.namespace == "key"),
+            data_columns=tuple(c.output_name for c in columns if c.namespace == "data"),
+            metadata_columns=tuple(c.output_name for c in columns if c.namespace == "metadata"),
+            output_columns=tuple(c.output_name for c in columns),
+            ambiguous_columns=ambiguous,
+            mapping=mapping,
+        )
+
     def query_columns(
         self,
         artifact: BaseArtifact,
         *,
         metadata_mode: MetadataMode = "none",
+        with_artifacts: Any = None,
     ) -> dict[str, Any]:
-        view = self.build_artifact_view_sql(
-            artifact,
-            metadata_mode=metadata_mode,
-            include_data=True,
+        view = self.build_composed_view_sql(
+            artifact, metadata_mode=metadata_mode, include_data=True,
+            with_artifacts=with_artifacts,
         )
         return {
             "structural": list(view.structural_columns),
             "key": list(view.key_columns),
             "data": list(view.data_columns),
             "metadata": list(view.metadata_columns),
+            "with": [col.output_name for col in view.columns if col.namespace == "with"],
             "output": list(view.output_columns),
             "ambiguous": {
                 key: list(value) for key, value in view.ambiguous_columns.items()
@@ -1886,6 +2004,7 @@ class QueryEngine:
         key_columns: ColumnSelect,
         data_columns: ColumnSelect,
         metadata_columns: ColumnSelect,
+        with_columns: ColumnSelect = False,
     ) -> list[str]:
         selected: list[str] = []
         for output_name in self._select_namespace_columns(
@@ -1912,6 +2031,11 @@ class QueryEngine:
         ):
             if output_name not in selected:
                 selected.append(output_name)
+        for output_name in self._select_namespace_columns(
+            view, namespace="with", requested=with_columns, label="with columns",
+        ):
+            if output_name not in selected:
+                selected.append(output_name)
         return selected
 
     def _artifact_select_sql(
@@ -1928,21 +2052,25 @@ class QueryEngine:
         positions: Sequence[int] | None,
         include_position: bool,
         registered: list[str],
+        with_artifacts: Any = None,
+        with_columns: ColumnSelect = True,
     ) -> str:
         _validate_metadata_query_request(
             metadata_mode=metadata_mode,
             metadata_columns=metadata_columns,
         )
-        view = self.build_artifact_view_sql(
+        view = self.build_composed_view_sql(
             artifact,
             metadata_mode=metadata_mode,
             include_data=_columns_requested(data_columns),
+            with_artifacts=with_artifacts,
         )
         selected = self._view_selected_columns(
             view,
             key_columns=key_columns,
             data_columns=data_columns,
             metadata_columns=metadata_columns,
+            with_columns=with_columns if with_artifacts else False,
         )
 
         ctes = [f"artifact_view AS ({view.sql})"]
