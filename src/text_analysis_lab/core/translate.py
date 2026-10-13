@@ -457,11 +457,6 @@ def translate(
             input_request=input_request,
         )
     )
-    if pass_count > 1 and translation_request.workers != 1:
-        raise OperatorError(
-            "Repeated translation passes currently require workers=1; "
-            "parallel pass barriers are deferred."
-        )
     translation_request = replace(translation_request, pass_count=pass_count)
     output_specs = dict(
         translator.output_specs_in_dependency_order(
@@ -615,8 +610,6 @@ def resume_translate(
     effective_workers = _validate_workers(metadata.get("effective_workers"))
     pass_count = _validate_pass_count(request_data.get("pass_count", 1))
     request = replace(request, pass_count=pass_count)
-    if pass_count > 1 and route != "sequential":
-        raise OperatorError("Repeated translation resume currently requires sequential route.")
 
     if not translator.supports_resume(mode=mode, route=route):
         raise OperatorError(
@@ -850,8 +843,9 @@ def _run_repeated_plan(
             route=route, request=request, workers=workers,
         )
         return
-    if route != "sequential":
-        raise OperatorError("Repeated translation currently requires sequential route.")
+    # _run_plan completes and closes each parallel worker pool before the
+    # coordinator invokes the pass-boundary hook. The next pass builds fresh
+    # workers from the updated canonical translator.
     first, committed_unit, terminal = _replay_checkpoint_state(runtime)
     if first >= request.pass_count:
         raise OperatorError("Checkpoint pass index exceeds requested pass count.")
@@ -2192,6 +2186,10 @@ def _handle_and_commit_unit(
             runtime=runtime,
             mode=mode,
             route=route,
+            pass_index=request.pass_index,
+            completed_unit_index=(
+                unit_index if request.pass_count > 1 else None
+            ),
         )
         plan.mark_complete(unit_index)
     except Exception as exc:
