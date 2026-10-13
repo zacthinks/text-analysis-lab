@@ -4,6 +4,8 @@ TeAL uses Semantic Versioning.
 
 Before 1.0:
 
+**Scoped v0.4.1 decision (October 12, 2026):** The user selected 0.4.1 for a backward-compatible, operational `Project.translate(batch_by=...)` enhancement that introduces a new optional public execution argument. This is an explicit exception to the usual minor-release convention for public features, not a general redefinition of TeAL's version policy. See `CHANGELOG.md` and `docs/hierarchy-aware-batching.md`. Neither the merge nor release tag is implied by this note.
+
 - **patch** (`0.x.Y`) — backward-compatible fixes, tests, documentation, and maintenance;
 - **minor** (`0.X.0`) — new public features or meaningful public/API/serialization changes, including breaking pre-1.0 changes;
 - **major** (`1.0.0`) — the first stability commitment. After 1.0, ordinary SemVer major/minor/patch rules apply.
