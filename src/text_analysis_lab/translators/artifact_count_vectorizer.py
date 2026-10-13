@@ -375,6 +375,10 @@ class ArtifactCountVectorizer(BaseTranslator):
         request: TranslationRequest,
     ) -> OutputMap | None:
         _ = mode, request
+        # Cross-batch label identities belong to this operation, not to the
+        # fitted scientific vocabulary. They remain checkpointed until the
+        # terminal callback succeeds, then must not leak into later reuse.
+        self._fit_labels.clear()
         return None
 
     def _register_feature_labels(self, events: pd.DataFrame) -> None:
