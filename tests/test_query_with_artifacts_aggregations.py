@@ -108,7 +108,7 @@ def test_attached_histogram_sql_filter_on_relational_right(tmp_path):
         )
         result = left.visualize.histogram(
             "weight", with_artifacts=right,
-            where="group = 'A'", bins=[0, 2, 4], output="result", batch_size=1,
+            where='"group" = \'A\'', bins=[0, 2, 4], output="result", batch_size=1,
         )
         assert result.observed_count == 2
         assert result.to_frame()["count"].tolist() == [1, 1]
