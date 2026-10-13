@@ -524,6 +524,7 @@ class QueryEngine:
         sample_n: int | None,
         sample_frac: float | None,
         random_state: int | None,
+        with_artifacts: Any = None,
     ) -> list[int]:
         """Sample positions from the filtered eligible population with bounded memory.
 
