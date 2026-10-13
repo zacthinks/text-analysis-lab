@@ -120,7 +120,7 @@ def test_count_vectorizer_fit_translate_and_frozen_transform_match_sklearn_seman
     assert matrix.shape == (3, len(columns))
     assert translator.is_fitted
     assert "cats" in columns
-    assert "chase cats" in columns
+    assert "chase_cats" in columns
     assert payload["keys"]["doc_id"].tolist() == [1, 2, 3]
 
     frozen = CountVectorizer.from_json_state(
