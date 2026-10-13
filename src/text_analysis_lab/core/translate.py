@@ -267,6 +267,39 @@ class _ExecutionPlan:
                 (pass_index,),
             )
 
+    def reconcile_checkpointed_prefix(self, last_unit_index: int | None) -> None:
+        """Trust a published writer/operator checkpoint over lagging SQLite status.
+
+        A checkpoint is committed before its plan-unit completion marker. A
+        crash in that narrow gap must not replay its already-checkpointed unit.
+        This is used by repeated passes only; legacy one-pass behavior is kept.
+        """
+        if last_unit_index is None:
+            last_unit_index = -1
+        count = self.total_count()
+        if last_unit_index < -1 or last_unit_index >= count:
+            raise OperatorError("Checkpoint unit index is outside the saved plan.")
+        with self.con as con:
+            rows = con.execute(
+                "SELECT unit_index, status FROM plan_units ORDER BY unit_index"
+            ).fetchall()
+            if any(
+                row["status"] == "complete" and int(row["unit_index"]) > last_unit_index
+                for row in rows
+            ):
+                raise OperatorError(
+                    "SQLite plan progress is ahead of the recoverable translator/writer "
+                    "checkpoint; refusing potentially inconsistent replay."
+                )
+            if last_unit_index >= 0:
+                con.execute(
+                    """UPDATE plan_units
+                       SET status='complete', error=NULL, assigned_worker=NULL,
+                           completed_at=COALESCE(completed_at, datetime('now'))
+                       WHERE unit_index <= ?""",
+                    (last_unit_index,),
+                )
+
     def reset_running_to_pending(self) -> None:
         """Reset retryable non-complete units before resume.
 
@@ -518,15 +551,9 @@ def translate(
             workers=effective_workers,
         )
 
-        _commit_final_outputs(
-            runtime,
-            translator.finalize_translation(
-                mode=mode,
-                request=replace(
-                    translation_request,
-                    pass_index=translation_request.pass_count - 1,
-                ),
-            ),
+        _finalize_translation_once(
+            translator=translator, runtime=runtime, plan=plan,
+            mode=mode, route=route, request=translation_request,
         )
 
         _serialize_pending_operator_snapshot(project, translator, runtime)
@@ -638,12 +665,9 @@ def resume_translate(
             request=request,
             workers=effective_workers,
         )
-        _commit_final_outputs(
-            runtime,
-            translator.finalize_translation(
-                mode=mode,
-                request=replace(request, pass_index=request.pass_count - 1),
-            ),
+        _finalize_translation_once(
+            translator=translator, runtime=runtime, plan=plan,
+            mode=mode, route=route, request=request,
         )
         _serialize_pending_operator_snapshot(project, translator, runtime)
         _complete_runtime(project, runtime)
@@ -789,12 +813,22 @@ def _validate_pass_index(value: Any) -> int:
     return value
 
 
-def _checkpoint_pass_index(runtime: _Runtime) -> int:
+def _replay_checkpoint_state(runtime: _Runtime) -> tuple[int, int | None, bool]:
+    """Read progress published in the same generation as translator/writer state."""
     path = runtime.operation_temp_dir / "pass.json"
     if not path.exists():
-        return 0
+        return 0, None, False
     data = json.loads(path.read_text(encoding="utf-8"))
-    return _validate_pass_index(data["pass_index"])
+    pass_index = _validate_pass_index(data["pass_index"])
+    raw_unit = data.get("completed_unit_index")
+    if raw_unit is not None and (
+        isinstance(raw_unit, bool) or not isinstance(raw_unit, int) or raw_unit < 0
+    ):
+        raise OperatorError("Invalid completed unit index in pass checkpoint.")
+    terminal = data.get("terminal_finalized", False)
+    if not isinstance(terminal, bool):
+        raise OperatorError("Invalid terminal_finalized marker in pass checkpoint.")
+    return pass_index, raw_unit, terminal
 
 
 def _run_repeated_plan(
@@ -818,14 +852,17 @@ def _run_repeated_plan(
         return
     if route != "sequential":
         raise OperatorError("Repeated translation currently requires sequential route.")
-    first = _checkpoint_pass_index(runtime)
+    first, committed_unit, terminal = _replay_checkpoint_state(runtime)
     if first >= request.pass_count:
         raise OperatorError("Checkpoint pass index exceeds requested pass count.")
+    if terminal and first != request.pass_count - 1:
+        raise OperatorError("Terminal checkpoint must belong to the last pass.")
     for pass_index in range(first, request.pass_count):
-        # A checkpoint can be promoted immediately before the SQLite pass
-        # transition. activate_pass only resets at a *new* pass boundary;
-        # resuming midway through this pass preserves completed units.
+        # A promoted checkpoint may be newer than the SQLite unit/pass marker.
+        # The checkpoint includes *both* scientific/writer state and progress.
         plan.activate_pass(pass_index)
+        if pass_index == first:
+            plan.reconcile_checkpointed_prefix(committed_unit)
         current = replace(request, pass_index=pass_index)
         _run_plan(
             translator=translator, runtime=runtime, plan=plan,
@@ -842,6 +879,38 @@ def _run_repeated_plan(
                 mode=mode, route=route, pass_index=pass_index + 1,
             )
             plan.activate_pass(pass_index + 1)
+
+
+def _finalize_translation_once(
+    *,
+    translator: BaseTranslator,
+    runtime: _Runtime,
+    plan: _ExecutionPlan,
+    mode: TranslationMode,
+    route: RunRoute,
+    request: TranslationRequest,
+) -> None:
+    """Avoid repeating a checkpointed final callback on N-pass recovery."""
+    if request.pass_count > 1:
+        _, _, finalized = _replay_checkpoint_state(runtime)
+        if finalized:
+            return
+    _commit_final_outputs(
+        runtime,
+        translator.finalize_translation(
+            mode=mode,
+            request=replace(request, pass_index=request.pass_count - 1),
+        ),
+    )
+    if request.pass_count > 1:
+        # Publish final callback effects together with writers/operator state.
+        # The output seal/catalog publication may be retried from this state.
+        _save_intermediate_state(
+            translator=translator, runtime=runtime,
+            mode=mode, route=route, pass_index=request.pass_count - 1,
+            completed_unit_index=plan.total_count() - 1 if plan.total_count() else None,
+            terminal_finalized=True,
+        )
 
 
 def _validate_max_outstanding_units(value: Any) -> int | None:
@@ -1940,6 +2009,9 @@ def _run_sequential(
                 mode=mode,
                 route=route,
                 pass_index=request.pass_index,
+                completed_unit_index=(
+                    unit.unit_index if request.pass_count > 1 else None
+                ),
             )
             plan.mark_complete(unit.unit_index)
         except Exception as exc:
@@ -2158,6 +2230,8 @@ def _save_intermediate_state(
     mode: TranslationMode,
     route: RunRoute,
     pass_index: int = 0,
+    completed_unit_index: int | None = None,
+    terminal_finalized: bool = False,
 ) -> None:
     if not runtime.resumable:
         return
@@ -2175,7 +2249,11 @@ def _save_intermediate_state(
         )
         _write_writer_checkpoints(writers_dir, runtime)
         (target / "pass.json").write_text(
-            json.dumps({"pass_index": pass_index}), encoding="utf-8"
+            json.dumps({
+                "pass_index": pass_index,
+                "completed_unit_index": completed_unit_index,
+                "terminal_finalized": terminal_finalized,
+            }), encoding="utf-8"
         )
 
     _replace_directory_with_staging(runtime.operation_temp_dir, write_intermediate)
