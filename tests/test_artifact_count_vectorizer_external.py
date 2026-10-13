@@ -116,25 +116,25 @@ def test_spacy_tokens_subset_to_artifact_count_dtm_with_sentence_bounded_ngrams(
         columns = dtm.get_data_columns()
         matrix = dtm.get_matrix()
         assert sparse.issparse(matrix)
-        assert "alpha beta" in columns
-        assert "gamma delta" in columns
-        assert "beta gamma" not in columns  # sentence boundary
-        assert "beta beta" in columns
+        assert "alpha_beta" in columns
+        assert "gamma_delta" in columns
+        assert "beta_gamma" not in columns  # sentence boundary
+        assert "beta_beta" in columns
         expected = {
             1: {
                 "alpha": 1,
                 "beta": 1,
                 "gamma": 1,
                 "delta": 1,
-                "alpha beta": 1,
-                "gamma delta": 1,
+                "alpha_beta": 1,
+                "gamma_delta": 1,
             },
             2: {
                 "alpha": 1,
                 "beta": 2,
                 "delta": 1,
-                "beta beta": 1,
-                "delta alpha": 1,
+                "beta_beta": 1,
+                "delta_alpha": 1,
             },
         }
         dense = matrix.toarray()
@@ -233,7 +233,7 @@ def test_artifact_count_vectorizer_fit_translate_resume_freezes_vocabulary(
         assert dtm.primary_key == ["document_id"]
         assert dtm.n_rows == 3
         assert sparse.issparse(dtm.get_matrix())
-        assert "alpha beta" in dtm.get_data_columns()
+        assert "alpha_beta" in dtm.get_data_columns()
 
         frozen = project.get_operator(vectorizer.operator_id)
         assert isinstance(frozen, ArtifactCountVectorizer)
