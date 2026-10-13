@@ -390,3 +390,56 @@ def test_grouped_multi_output_writer_and_parallel_workers(tmp_path):
             )
     finally:
         project.close()
+
+
+class _SingleEcho(_Echo):
+    def input_request(self, *, sources, mode, request):
+        return SourceRequest(
+            artifact_type="table", mode="batches",
+            batch_size=request.batch_size or 1, form="single",
+            columns=ColumnRequest(keys=True, data="value", metadata=False),
+        )
+
+    def translate_batch(self, inputs, *, mode, request):
+        batch = inputs["source"]
+        record = batch.data
+        assert isinstance(record, dict)
+        return BatchResult(outputs={"output": {
+            "keys": pd.DataFrame([{key: record[key] for key in batch.primary_key}]),
+            "data": pd.DataFrame([{"value": record["value"]}]),
+        }})
+
+
+def test_grouped_single_form_rejects_potential_multirow_batches_before_execution(tmp_path):
+    from text_analysis_lab import Project
+
+    project = Project.create(tmp_path / "single_reject", name="single_reject")
+    try:
+        source, _ = _source(project)
+        for batch_by, batch_size in [("document", 1), ("token", 2)]:
+            with pytest.raises(OperatorError, match="form='single'"):
+                project.translate(
+                    _SingleEcho(), source, batch_by=batch_by, batch_size=batch_size,
+                )
+        assert project.catalog.list_operations() == []
+    finally:
+        project.close()
+
+
+def test_grouped_single_form_preserves_each_row_at_leaf_size_one(tmp_path):
+    from text_analysis_lab import Project
+
+    project = Project.create(tmp_path / "single_safe", name="single_safe")
+    try:
+        source, expected = _source(project)
+        output = project.translate(
+            _SingleEcho(), source, batch_by="token", batch_size=1,
+        )["output"]
+        actual = output.query(key_columns=True, data_columns="value", form="table")
+        fields = ["collection", "document", "token", "value"]
+        assert output.n_rows == len(expected)
+        assert sorted(map(tuple, actual[fields].to_numpy())) == sorted(
+            map(tuple, expected[fields].to_numpy())
+        )
+    finally:
+        project.close()
