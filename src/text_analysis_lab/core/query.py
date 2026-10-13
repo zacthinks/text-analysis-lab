@@ -1883,12 +1883,6 @@ class QueryEngine:
                 for key in right.primary_key
             )
             joins.append(f"LEFT JOIN _teal_right_{index} {alias} ON {on_clause}")
-            if is_matrix:
-                # Right positions are nullable, unlike matrix zeros. They stay
-                # internal until deferred features have been materialized.
-                joins.append(
-                    f"__TEAL_POSITION__{index}__"
-                )
             for col in right_view.columns:
                 if col.namespace not in {"data", "metadata"}:
                     continue
@@ -1933,16 +1927,13 @@ class QueryEngine:
             f"{col.sql_expr} AS {quote_identifier(col.output_name)}"
             for col in columns if col.deferred_feature_name is None
         )
-        clean_joins: list[str] = []
-        for join in joins:
-            if join.startswith("__TEAL_POSITION__"):
-                index = int(join[len("__TEAL_POSITION__"):-2])
+        for index, right in enumerate(rights):
+            if right.artifact_type in {ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX}:
                 selects.append(
-                    f"r{index}._position AS {quote_identifier(f'_teal_with_position_{index}')}"
+                    f"r{index}._position AS "
+                    f"{quote_identifier(f'_teal_with_position_{index}')}"
                 )
-            else:
-                clean_joins.append(join)
-        sql = f"WITH {', '.join(ctes)} SELECT {', '.join(selects)} FROM _teal_base b " + " ".join(clean_joins)
+        sql = f"WITH {', '.join(ctes)} SELECT {', '.join(selects)} FROM _teal_base b " + " ".join(joins)
         return ArtifactViewSQL(
             sql=sql,
             columns=columns,
@@ -1954,6 +1945,66 @@ class QueryEngine:
             ambiguous_columns=ambiguous,
             mapping=mapping,
         )
+
+    def deferred_columns(
+        self,
+        artifact: BaseArtifact,
+        *,
+        metadata_mode: MetadataMode,
+        include_data: bool,
+        with_artifacts: Any,
+        with_columns: ColumnSelect,
+    ) -> list[ViewColumn]:
+        if not with_artifacts or not _columns_requested(with_columns):
+            return []
+        view = self.build_composed_view_sql(
+            artifact, metadata_mode=metadata_mode, include_data=include_data,
+            with_artifacts=with_artifacts,
+        )
+        selected = self._select_namespace_columns(
+            view, namespace="with", requested=with_columns, label="with columns",
+        )
+        return [
+            c for c in view.columns
+            if c.output_name in selected and c.deferred_feature_name is not None
+        ]
+
+    def materialize_deferred_columns(
+        self, frame: pd.DataFrame, fields: Sequence[ViewColumn],
+    ) -> pd.DataFrame:
+        if not fields:
+            return frame
+        result = frame.copy()
+        grouped: dict[tuple[str, str], list[ViewColumn]] = {}
+        for field in fields:
+            assert field.deferred_artifact_id is not None
+            assert field.deferred_position_column is not None
+            grouped.setdefault(
+                (field.deferred_artifact_id, field.deferred_position_column), []
+            ).append(field)
+        for (artifact_id, handle), group in grouped.items():
+            positions = result[handle]
+            matched_idx = [i for i, value in enumerate(positions) if not pd.isna(value)]
+            names = [str(field.deferred_feature_name) for field in group]
+            # Store missing in a nullable tabular column, not sparse numeric zero.
+            values = pd.DataFrame({name: [np.nan] * len(result) for name in names})
+            if matched_idx:
+                source = self.project.get_artifact(artifact_id)
+                matched_positions = [int(positions.iloc[i]) for i in matched_idx]
+                native = source._data_native_for_positions(
+                    matched_positions, data_columns=names,
+                )
+                if hasattr(native, "toarray"):
+                    native = native.toarray()
+                array = np.asarray(native)
+                for j, name in enumerate(names):
+                    values.iloc[matched_idx, j] = array[:, j]
+            for field in group:
+                result[field.output_name] = values[
+                    str(field.deferred_feature_name)
+                ].to_numpy()
+            result = result.drop(columns=[handle])
+        return result
 
     def query_columns(
         self,
