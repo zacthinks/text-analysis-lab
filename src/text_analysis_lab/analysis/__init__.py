@@ -34,7 +34,7 @@ from text_analysis_lab.analysis.polarity_scores import (
 )
 from text_analysis_lab.analysis.row_summary import row_summary
 from text_analysis_lab.analysis.top_features import top_features
-from text_analysis_lab.analysis.spectrum import spectrum
+from text_analysis_lab.analysis.spectrum import svd_spectrum
 from text_analysis_lab.analysis.summary import ArtifactSummary, summarize
 from text_analysis_lab.analysis.text_diagnostics import TextDiagnosticsResult, text_diagnostics
 from text_analysis_lab.analysis.valence import valence
@@ -72,7 +72,7 @@ __all__ = [
     "polarity_total_difference",
     "row_summary",
     "summarize",
-    "spectrum",
+    "svd_spectrum",
     "top_features",
     "text_diagnostics",
     "valence",
