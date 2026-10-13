@@ -38,8 +38,20 @@ class _MixedProbe(BaseTranslator):
         self.events = []
         self.fit = []
 
+    @property
+    def requires_fit(self):
+        return True
+
+    @property
+    def is_fitted(self):
+        return len(self.fit) > 0
+
+    @property
+    def supports_fit_translate(self):
+        return True
+
     def supports_resume(self, *, mode, route):
-        return route == "sequential"
+        return mode == "fit_translate" and route == "sequential"
 
     def translation_passes(self, *, sources, mode, request, input_request):
         return 2
@@ -83,11 +95,37 @@ class _MixedProbe(BaseTranslator):
         return None
 
     def to_json_state(self):
-        return {}
+        # Keep scientific fitted state in the frozen operator, not just a
+        # transient operation checkpoint.
+        return {"fit": list(self.fit)}
 
     @classmethod
     def from_json_state(cls, state):
-        return cls()
+        obj = cls()
+        obj.fit = list(state.get("fit", []))
+        return obj
+
+    def save_intermediate_state(self, intermediate_dir, *, operator_id, mode, route):
+        target = Path(intermediate_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "state.json").write_text(json.dumps({
+            "fit": self.fit,
+            "events": self.events,
+        }), encoding="utf-8")
+
+    @classmethod
+    def load_intermediate_state(cls, intermediate_dir, *, operator_id, mode, route):
+        data = json.loads(
+            (Path(intermediate_dir) / "state.json").read_text(encoding="utf-8")
+        )
+        obj = cls(operator_id=operator_id)
+        obj.fit = list(data["fit"])
+        obj.events = [
+            ("batch", event[1], event[2], tuple(event[3]), tuple(event[4]))
+            if event[0] == "batch" else tuple(event)
+            for event in data["events"]
+        ]
+        return obj
 
 
 def test_mixed_multisource_plan_repeats_identically_and_writes_two_outputs(tmp_path):
@@ -107,6 +145,7 @@ def test_mixed_multisource_plan_repeats_identically_and_writes_two_outputs(tmp_p
         assert [e for e in probe.events if e[0] == "barrier"] == [("barrier", 0)]
         assert probe.events[-1] == ("final", 1)
         assert probe.fit == list("abcde")
+        assert probe.is_fitted
         assert set(outputs) == {"first", "second"}
         assert all(a.n_rows == 5 for a in outputs.values())
         assert all(a.query(key_columns=False, data_columns="value", form="table")["value"].tolist() == list("abcde") for a in outputs.values())
@@ -137,11 +176,27 @@ class _ParallelProbe(BaseTranslator):
         self.worker_states = []
 
     @property
+    def requires_fit(self):
+        return True
+
+    @property
+    def is_fitted(self):
+        return self.fitted
+
+    @property
+    def supports_fit_translate(self):
+        return True
+
+    @property
+    def supports_parallel_fit_translate(self):
+        return True
+
+    @property
     def supports_parallel_translate(self):
         return True
 
     def supports_resume(self, *, mode, route):
-        return route in {"sequential", "parallel"}
+        return mode in {"fit_translate", "translate"} and route in {"sequential", "parallel"}
 
     def translation_passes(self, *, sources, mode, request, input_request):
         return 2
@@ -215,6 +270,9 @@ def test_parallel_replay_creates_fresh_workers_only_after_complete_barrier(tmp_p
         source = _source(project, "art_parallel", list(range(5)), list("abcde"))
         probe = _ParallelProbe()
         output = project.translate(probe, source, workers=2, max_outstanding_units=2)["output"]
+        # The procedure begins unfitted, so the existing fit_translate path
+        # does not freeze its scientific state before the pass-one barrier.
+        assert probe.is_fitted
         assert output.n_rows == 5
         assert probe.worker_states == [(0, False), (1, True)]
         assert [e for e in probe.events if e[0] == "handle"] == [
