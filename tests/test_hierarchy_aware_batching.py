@@ -164,7 +164,9 @@ def test_project_grouped_batches_preserve_rows_and_are_reopenable(tmp_path):
             project.translate(_Echo(min_level="document"), source, batch_size=2, batch_by="token")
         with pytest.raises(OperatorError, match="requires batch_by"):
             project.translate(_Echo(min_level="document"), source, batch_size=2)
-        with pytest.raises(OperatorError, match="full_artifact"):
+        # ArtifactCountVectorizer now supports grouped batching, but a
+        # document-level batch cannot split a collection-level output group.
+        with pytest.raises(OperatorError, match="finer"):
             from text_analysis_lab.translators import ArtifactCountVectorizer
             project.translate(
                 ArtifactCountVectorizer(field="value", group_by=("collection",)),
