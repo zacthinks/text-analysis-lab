@@ -213,6 +213,7 @@ Translators span preprocessing, linguistic processing, representations, statisti
 <details>
 <summary>Matrix Utilities</summary>
 
+- `ArgMax`
 - `MatrixNormalizer`
 - `MatrixRowAggregator`
 - `MatrixTranspose`
