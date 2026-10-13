@@ -15,6 +15,7 @@ from text_analysis_lab.analysis._tabular_utils import (
     batch_query_columns,
     batch_with_columns,
     resolve_tabular_fields,
+    resolve_batch_output_names,
 )
 
 if TYPE_CHECKING:
@@ -130,6 +131,9 @@ def histogram(
         raise ValueError("output must be 'plot', 'data', or 'result'.")
     resolved = resolve_tabular_fields(artifact, field, *([] if by is None else [by]),
                                       with_artifacts=with_artifacts, with_columns=with_columns)
+    resolved = resolve_batch_output_names(
+        artifact, resolved, with_artifacts=with_artifacts,
+    )
     value_field = resolved[0]
     group_field = None if by is None else resolved[1]
     if isinstance(bins, int):
@@ -211,7 +215,9 @@ def _iter_values(
     batch_size: int,
 ):
     fields = (value_field,) if group_field is None else (value_field, group_field)
-    data_columns, metadata_columns = batch_query_columns(fields)
+    data_columns, metadata_columns = batch_query_columns(
+        fields, qualified=with_artifacts is not None,
+    )
     query_kwargs = dict(
         batch_size=batch_size,
         key_columns=False,
