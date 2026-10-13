@@ -114,3 +114,49 @@ def test_attached_histogram_sql_filter_on_relational_right(tmp_path):
         assert result.to_frame()["count"].tolist() == [1, 1]
     finally:
         project.close()
+
+
+def test_qualified_attached_collisions_use_narrow_output_names(tmp_path):
+    project = teal.Project.create(tmp_path / "collision", name="collision")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3],
+                          "score": [100, 200, 300],
+                          "kind": ["A", "B", "A"]}),
+            primary_key="doc_id", data_fields=["score", "kind"],
+        )
+        right = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2],
+                          "score": [1, 2],
+                          "kind": ["X", "Y"]}),
+            primary_key="doc_id", data_fields=["score", "kind"],
+        )
+        fields = left.query_columns(with_artifacts=right)["columns"]
+        score = next(x["qualified_name"] for x in fields
+                     if x["namespace"] == "with" and x["base_name"] == "score")
+        kind = next(x["qualified_name"] for x in fields
+                    if x["namespace"] == "with" and x["base_name"] == "kind")
+        hist = left.visualize.histogram(
+            score, with_artifacts=right, bins=[0, 1.5, 3],
+            batch_size=1, output="result",
+        )
+        assert hist.observed_count == 2
+        assert hist.missing_count == 1
+        assert hist.to_frame()["count"].tolist() == [1, 1]
+        ct = left.analysis.crosstab(
+            "kind", kind, with_artifacts=right, batch_size=1,
+        )
+        assert ct.loc["A", "X"] == 1
+        assert ct.loc["B", "Y"] == 1
+        ct_both = left.analysis.crosstab(
+            kind, score, with_artifacts=right, batch_size=1,
+        )
+        assert ct_both.loc["X", 1] == 1
+        assert ct_both.loc["Y", 2] == 1
+        with pytest.raises(ArtifactError, match="ambiguous"):
+            left.visualize.histogram(
+                score, with_artifacts=right,
+                with_columns=["score"], output="result",
+            )
+    finally:
+        project.close()
