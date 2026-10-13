@@ -2174,6 +2174,8 @@ class QueryEngine:
         limit: int | None = None,
         positions: Sequence[int] | None = None,
         include_position: bool = False,
+        with_artifacts: Any = None,
+        with_columns: ColumnSelect = True,
     ) -> pd.DataFrame:
         registered: list[str] = []
         try:
@@ -2189,6 +2191,8 @@ class QueryEngine:
                 positions=positions,
                 include_position=include_position,
                 registered=registered,
+                with_artifacts=with_artifacts,
+                with_columns=with_columns,
             )
             frame = self.con.execute(sql).fetchdf()
         except MissingDependencyError:
@@ -2221,6 +2225,8 @@ class QueryEngine:
         include_position: bool = False,
         batch_size: int = 100_000,
         streaming_mode: StreamingMode = "auto",
+        with_artifacts: Any = None,
+        with_columns: ColumnSelect = True,
     ) -> Iterable[pd.DataFrame]:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive.")
@@ -2241,6 +2247,8 @@ class QueryEngine:
                 positions=positions,
                 include_position=True,
                 registered=registered,
+                with_artifacts=with_artifacts,
+                with_columns=with_columns,
             )
 
             def clean(frame: pd.DataFrame) -> pd.DataFrame:
