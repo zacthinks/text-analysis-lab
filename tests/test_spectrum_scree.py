@@ -105,3 +105,78 @@ def test_scree_rejects_missing_or_misleading_data():
         visualization.scree(data.assign(cumulative_energy_ratio=[.4, 1.0]))
     with pytest.raises(ValueError, match="consecutive"):
         visualization.scree(data.assign(component=[0, 1]))
+
+
+def test_duplicate_sparse_coordinates_use_logical_frobenius_energy():
+    """Duplicate CSR entries must be summed before computing matrix energy."""
+    # Logical diag(2, 1, 1); the first cell is stored as 1 + 1.
+    duplicate_csr = sparse.csr_matrix(
+        (
+            np.array([1.0, 1.0, 1.0, 1.0]),
+            np.array([0, 0, 1, 2]),
+            np.array([0, 2, 3, 4]),
+        ),
+        shape=(3, 3),
+    )
+    assert not duplicate_csr.has_canonical_format
+    original_data = duplicate_csr.data.copy()
+    original_indices = duplicate_csr.indices.copy()
+    source = Matrix(duplicate_csr, is_sparse=True)
+
+    result = source.analysis.spectrum(n_components=2, random_state=0)
+    np.testing.assert_allclose(result["singular_value"], [2, 1], atol=1e-6)
+    np.testing.assert_allclose(result["energy_ratio"], [4 / 6, 1 / 6], atol=1e-6)
+    np.testing.assert_allclose(
+        result["cumulative_energy_ratio"], [4 / 6, 5 / 6], atol=1e-6
+    )
+    assert result["cumulative_energy_ratio"].iloc[-1] < 1
+
+    # The analysis must never rewrite the input's sparse storage.
+    assert not duplicate_csr.has_canonical_format
+    np.testing.assert_array_equal(duplicate_csr.data, original_data)
+    np.testing.assert_array_equal(duplicate_csr.indices, original_indices)
+
+    pytest.importorskip("plotly")
+    figure = visualization.scree(result)
+    np.testing.assert_allclose(figure.data[0].y, [4 / 6, 1 / 6], atol=1e-6)
+    np.testing.assert_allclose(figure.data[1].y, [4 / 6, 5 / 6], atol=1e-6)
+
+
+@pytest.mark.parametrize("is_sparse", [False, True])
+def test_nonzero_constant_row_matrix_has_energy_but_no_explained_variance(is_sparse):
+    source = Matrix(np.tile([3.0, 4.0, 0.0], (5, 1)), is_sparse=is_sparse)
+    result = source.analysis.spectrum(n_components=2, random_state=0)
+    assert result["energy_ratio"].iloc[0] == pytest.approx(1.0, abs=1e-8)
+    np.testing.assert_allclose(result["explained_variance_ratio"], [0.0, 0.0], atol=1e-8)
+    assert np.isfinite(result.select_dtypes("number").to_numpy()).all()
+
+
+def test_spectrum_arpack_rank_limit_and_energy():
+    source = Matrix(np.diag([5.0, 3.0, 1.0]))
+    result = source.analysis.spectrum(n_components=2, algorithm="arpack", random_state=0)
+    np.testing.assert_allclose(result["singular_value"], [5, 3], atol=1e-6)
+    np.testing.assert_allclose(result["energy_ratio"], [25 / 35, 9 / 35], atol=1e-6)
+    with pytest.raises(ValueError, match="arpack limit"):
+        source.analysis.spectrum(n_components=3, algorithm="arpack")
+
+
+def test_scree_without_plotly_reports_optional_dependency(monkeypatch):
+    import builtins
+
+    from text_analysis_lab.core.errors import MissingDependencyError
+
+    original_import = builtins.__import__
+
+    def missing_plotly(name, *args, **kwargs):
+        if name == "plotly.graph_objects":
+            raise ImportError("Plotly intentionally hidden")
+        return original_import(name, *args, **kwargs)
+
+    frame = pd.DataFrame({
+        "component": [1],
+        "energy_ratio": [0.5],
+        "cumulative_energy_ratio": [0.5],
+    })
+    monkeypatch.setattr(builtins, "__import__", missing_plotly)
+    with pytest.raises(MissingDependencyError, match="plotly"):
+        visualization.scree(frame)
