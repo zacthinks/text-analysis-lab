@@ -1798,10 +1798,23 @@ class QueryEngine:
 
         if refs is None:
             return ()
-        items = [refs] if isinstance(refs, (str, Artifact)) else list(refs)
+        if isinstance(refs, (str, Artifact)):
+            items = [refs]
+        elif isinstance(refs, Sequence):
+            items = list(refs)
+        else:
+            raise QueryError(
+                "with_artifacts must be an artifact, ID, alias, or a sequence of "
+                "artifact references."
+            )
         result: list[BaseArtifact] = []
         seen: set[str] = set()
         for ref in items:
+            if not isinstance(ref, (str, Artifact)):
+                raise QueryError(
+                    "Each with_artifacts entry must be an artifact, ID, or alias; "
+                    f"received {type(ref).__name__}."
+                )
             right = self.project.get_artifact(ref)
             if right.status != "complete":
                 raise QueryError(f"with_artifacts source {right.artifact_id!r} must be complete.")
@@ -1832,16 +1845,15 @@ class QueryEngine:
         rights = self.resolve_with_artifacts(artifact, with_artifacts)
         if not rights:
             return base
-        base_pk = tuple(str(col) for col in artifact.primary_key)
         ctes = [f"_teal_base AS ({base.sql})"]
         joins: list[str] = []
-        pending: list[dict[str, str]] = [
+        pending: list[dict[str, str | None]] = [
             {
                 "namespace": col.namespace,
                 "base_name": col.base_name,
                 "qualified_name": col.qualified_name,
                 "sql_expr": f"b.{quote_identifier(col.output_name)}",
-                "source_artifact_id": col.source_artifact_id or "",
+                "source_artifact_id": col.source_artifact_id,
             }
             for col in base.columns
         ]
@@ -1888,10 +1900,12 @@ class QueryEngine:
                             f"with.{right_id}.{col.namespace}.{col.base_name}"
                         ),
                         "sql_expr": f"{alias}.{quote_identifier(col.output_name)}",
-                        "source_artifact_id": col.source_artifact_id or right_id,
+                        "source_artifact_id": col.source_artifact_id,
                     }
                 )
-        columns, ambiguous, mapping = _assign_view_output_names(pending)
+        columns, ambiguous, mapping = _assign_view_output_names(
+            pending  # type: ignore[arg-type]
+        )
         selects = ["b._position AS _position", "b._batch AS _batch", "b._row_offset AS _row_offset"]
         selects.extend(
             f"{col.sql_expr} AS {quote_identifier(col.output_name)}" for col in columns
