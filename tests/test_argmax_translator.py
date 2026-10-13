@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 from scipy import sparse
 
+from text_analysis_lab.core.errors import ArtifactError
 from text_analysis_lab.core.operator import InputBatch, TranslationRequest
 from text_analysis_lab.translators import ArgMax
 
@@ -50,7 +51,7 @@ def test_sparse_does_not_densify(monkeypatch):
         raise AssertionError("Sparse ArgMax may not densify")
     monkeypatch.setattr(sparse.csr_matrix, "toarray", reject)
     matrix = sparse.csr_matrix(([3.], ([0], [9_999])), shape=(2, 10_000))
-    names = [f"f_{i:07d}" for i in range(1_000_000)]
+    names = [f"f_{i:07d}" for i in range(10_000)]
     result = ArgMax().translate(matrix, features=names)
     assert result["max_feature"].iloc[0] == "f_0009999"
     assert pd.isna(result["max_feature"].iloc[1])
@@ -63,7 +64,7 @@ def test_sparse_does_not_densify(monkeypatch):
     sparse.csr_matrix(([np.inf], ([0], [0])), shape=(1, 2)),
 ])
 def test_invalid_values_rejected(values):
-    with pytest.raises((ValueError, TypeError), match="finite numeric"):
+    with pytest.raises(ArtifactError, match="finite numeric"):
         ArgMax().translate(_named(values, names=("a", "b")))
 
 
