@@ -16,7 +16,7 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
-## [0.4.1] - 2026-10-12
+## [0.5.0] - 2026-10-12
 
 ### Added
 
@@ -37,7 +37,7 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 - The first grouped batching implementation applies to single-source `mode="batches"` requests. Translators requesting `mode="full_artifact"` still use their existing behavior; grouping requests against them are rejected. A single exceptionally large group may still require substantial memory.
 - `ArtifactCountVectorizer` does **not** yet fit or transform in multiple batches; its two-pass refactor is deferred.
-- **Versioning exception:** this narrowly scoped, backward-compatible *execution-only* API extension is released as user-selected **0.4.1**, rather than TeAL's usual pre-1.0 minor-version convention for new public APIs. No existing translator scientific semantics or positional request constructors are intentionally changed.
+- This is a focused **minor release** under TeAL's existing policy because it adds a new optional public execution mode and translator constraint; release numbers indicate API evolution, not the magnitude of the implementation. No existing translator scientific semantics or positional request constructors are intentionally changed.
 
 ## [0.4.0] - 2026-10-11
 
