@@ -30,7 +30,7 @@ class Matrix:
 def test_spectrum_matches_exact_diagonal_energy(is_sparse):
     x = np.diag([5.0, 3.0, 1.0])
     source = Matrix(x, is_sparse=is_sparse)
-    result = source.analysis.spectrum(n_components=2, random_state=0)
+    result = source.analysis.svd_spectrum(n_components=2, random_state=0)
     assert result.component.tolist() == [1, 2]
     np.testing.assert_allclose(result.singular_value, [5, 3], atol=1e-6)
     np.testing.assert_allclose(result.energy_ratio, [25 / 35, 9 / 35], atol=1e-6)
@@ -38,14 +38,14 @@ def test_spectrum_matches_exact_diagonal_energy(is_sparse):
     assert result.cumulative_energy_ratio.iloc[-1] < 1
     assert source.accesses == 1
     pd.testing.assert_frame_equal(
-        result, analysis.spectrum(source, n_components=2, random_state=0)
+        result, analysis.svd_spectrum(source, n_components=2, random_state=0)
     )
 
 
 @pytest.mark.parametrize("is_sparse", [False, True])
 def test_energy_differs_from_explained_variance_on_uncentered_matrix(is_sparse):
     matrix = Matrix([[10, 0, 0], [10, 1, 0], [10, 0, 1], [10, 0, 0]], is_sparse=is_sparse)
-    result = analysis.spectrum(matrix, n_components=2)
+    result = analysis.svd_spectrum(matrix, n_components=2)
     assert result.energy_ratio.iloc[0] > result.explained_variance_ratio.iloc[0]
     assert result.cumulative_energy_ratio.iloc[-1] <= 1
     assert result.cumulative_explained_variance_ratio.iloc[-1] <= 1
@@ -53,7 +53,7 @@ def test_energy_differs_from_explained_variance_on_uncentered_matrix(is_sparse):
 
 @pytest.mark.parametrize("is_sparse", [False, True])
 def test_zero_matrix_has_finite_zero_ratios(is_sparse):
-    result = analysis.spectrum(Matrix(np.zeros((4, 3)), is_sparse=is_sparse), n_components=2)
+    result = analysis.svd_spectrum(Matrix(np.zeros((4, 3)), is_sparse=is_sparse), n_components=2)
     assert np.isfinite(result.select_dtypes("number").to_numpy()).all()
     assert result.energy_ratio.tolist() == [0, 0]
     assert result.explained_variance_ratio.tolist() == [0, 0]
@@ -62,16 +62,16 @@ def test_zero_matrix_has_finite_zero_ratios(is_sparse):
 @pytest.mark.parametrize("value", [0, -1, 1.1, True])
 def test_reject_bad_component_counts(value):
     with pytest.raises((TypeError, ValueError)):
-        analysis.spectrum(Matrix(np.eye(3)), n_components=value)
+        analysis.svd_spectrum(Matrix(np.eye(3)), n_components=value)
 
 
 def test_reject_invalid_input_shapes_and_values():
     with pytest.raises(ValueError, match="exceeds"):
-        analysis.spectrum(Matrix(np.eye(3)), n_components=4)
+        analysis.svd_spectrum(Matrix(np.eye(3)), n_components=4)
     with pytest.raises(ValueError, match="finite"):
-        analysis.spectrum(Matrix([[1, 0, 0], [np.nan, 1, 0], [0, 0, 2]]), n_components=2)
+        analysis.svd_spectrum(Matrix([[1, 0, 0], [np.nan, 1, 0], [0, 0, 2]]), n_components=2)
     with pytest.raises(ValueError, match="two rows"):
-        analysis.spectrum(Matrix([[1, 2, 3]]), n_components=1)
+        analysis.svd_spectrum(Matrix([[1, 2, 3]]), n_components=1)
 
 
 def test_scree_combines_individual_bars_and_red_cumulative_line():
@@ -123,7 +123,7 @@ def test_duplicate_sparse_coordinates_use_logical_frobenius_energy():
     original_indices = duplicate_csr.indices.copy()
     source = Matrix(duplicate_csr, is_sparse=True)
 
-    result = source.analysis.spectrum(n_components=2, random_state=0)
+    result = source.analysis.svd_spectrum(n_components=2, random_state=0)
     np.testing.assert_allclose(result["singular_value"], [2, 1], atol=1e-6)
     np.testing.assert_allclose(result["energy_ratio"], [4 / 6, 1 / 6], atol=1e-6)
     np.testing.assert_allclose(
@@ -145,7 +145,7 @@ def test_duplicate_sparse_coordinates_use_logical_frobenius_energy():
 @pytest.mark.parametrize("is_sparse", [False, True])
 def test_nonzero_constant_row_matrix_has_energy_but_no_explained_variance(is_sparse):
     source = Matrix(np.tile([3.0, 4.0, 0.0], (5, 1)), is_sparse=is_sparse)
-    result = source.analysis.spectrum(n_components=2, random_state=0)
+    result = source.analysis.svd_spectrum(n_components=2, random_state=0)
     assert result["energy_ratio"].iloc[0] == pytest.approx(1.0, abs=1e-8)
     np.testing.assert_allclose(result["explained_variance_ratio"], [0.0, 0.0], atol=1e-8)
     assert np.isfinite(result.select_dtypes("number").to_numpy()).all()
@@ -153,11 +153,11 @@ def test_nonzero_constant_row_matrix_has_energy_but_no_explained_variance(is_spa
 
 def test_spectrum_arpack_rank_limit_and_energy():
     source = Matrix(np.diag([5.0, 3.0, 1.0]))
-    result = source.analysis.spectrum(n_components=2, algorithm="arpack", random_state=0)
+    result = source.analysis.svd_spectrum(n_components=2, algorithm="arpack", random_state=0)
     np.testing.assert_allclose(result["singular_value"], [5, 3], atol=1e-6)
     np.testing.assert_allclose(result["energy_ratio"], [25 / 35, 9 / 35], atol=1e-6)
     with pytest.raises(ValueError, match="arpack limit"):
-        source.analysis.spectrum(n_components=3, algorithm="arpack")
+        source.analysis.svd_spectrum(n_components=3, algorithm="arpack")
 
 
 def test_scree_without_plotly_reports_optional_dependency(monkeypatch):
