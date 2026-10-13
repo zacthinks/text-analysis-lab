@@ -32,6 +32,8 @@ def scatter(
     data_columns: ColumnSelect = True,
     metadata_columns: ColumnSelect = False,
     metadata_mode: MetadataMode = "none",
+    with_artifacts: Any = None,
+    with_columns: ColumnSelect = True,
     where: str | None = None,
     order_by: str | Sequence[str] | None = None,
     positions: Sequence[int] | None = None,
@@ -51,6 +53,10 @@ def scatter(
     normal :meth:`BaseArtifact.query` vocabulary, including column selection,
     filtering, sampling, ordering, positions, and limits. The selected document
     keys are then used to fetch only the matching embedding rows.
+
+    Explicit ``with_artifacts`` sources contribute selected ``with_columns`` fields
+    for color and hover, using the calling artifact's key grain. Attached matrix
+    features can be selected but not used in SQL predicates.
 
     ``color`` and ``hover_fields`` must refer to fields that were selected by
     ``key_columns``, ``data_columns``, and ``metadata_columns``. Metadata therefore
@@ -100,6 +106,8 @@ def scatter(
         data_columns=data_columns,
         metadata_columns=metadata_columns,
         metadata_mode=metadata_mode,
+        with_artifacts=with_artifacts,
+        with_columns=with_columns,
         where=where,
         order_by=order_by,
         positions=positions,
@@ -126,6 +134,7 @@ def scatter(
             str(color),
             selected_columns=selected_columns,
             metadata_mode=metadata_mode,
+            with_artifacts=with_artifacts,
         )
     resolved_hover = [
         _resolve_selected_field(
@@ -133,6 +142,7 @@ def scatter(
             field,
             selected_columns=selected_columns,
             metadata_mode=metadata_mode,
+            with_artifacts=with_artifacts,
         )
         for field in _normalize_hover_fields(hover_fields)
     ]
@@ -269,8 +279,9 @@ def _resolve_selected_field(
     *,
     selected_columns: Sequence[str],
     metadata_mode: MetadataMode,
+    with_artifacts: Any = None,
 ) -> str:
-    """Resolve a key/data/metadata name, but only among selected output columns."""
+    """Resolve a selected key/data/metadata/attached field by canonical name."""
     name = str(field)
     if not name:
         raise ValueError("Scatter field names must be non-empty strings.")
@@ -278,11 +289,17 @@ def _resolve_selected_field(
     if name in selected:
         return name
 
-    info = artifact.query_columns(metadata_mode=metadata_mode)
+    info = (
+        artifact.query_columns(metadata_mode=metadata_mode)
+        if with_artifacts is None
+        else artifact.query_columns(
+            metadata_mode=metadata_mode, with_artifacts=with_artifacts,
+        )
+    )
     candidates = [
         column
         for column in info["columns"]
-        if str(column["namespace"]) in {"key", "data", "metadata"}
+        if str(column["namespace"]) in {"key", "data", "metadata", "with"}
         and str(column["output_name"]) in selected
         and name
         in {
@@ -303,7 +320,7 @@ def _resolve_selected_field(
 
     raise ArtifactError(
         f"Scatter field {name!r} was not selected. Choose it with key_columns, "
-        "data_columns, or metadata_columns (and metadata_mode for metadata) "
+        "data_columns, metadata_columns, or with_columns (and relevant sources) "
         f"before using it as color or hover data. Selected columns: {sorted(selected)}."
     )
 
