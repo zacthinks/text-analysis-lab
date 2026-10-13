@@ -277,23 +277,6 @@ Translators span preprocessing, linguistic processing, representations, statisti
 
 Translation supports ordinary row batches, complete primary-key groups, and opt-in repeated passes over a saved input plan.
 
-For scalable document-term matrices, `CountVectorizer` fits on the full source by default; passing `batch_size` opts into two-pass batched vocabulary learning and sparse output. `ArtifactCountVectorizer` counts fields from hierarchical token tables; passing `batch_by` opts into complete-group two-pass fitting without splitting an output group. Already-fitted vectorizers can transform in batches without fitting again.
-
-```python
-# Documents: one text per keyed row.
-dtm = project.translate(tr.CountVectorizer(ngram_range=(1, 2)),
-                        documents, batch_size=1000)["output"]
-
-# Tokens: one row per token, aggregated to document-level features.
-token_dtm = project.translate(
-    tr.ArtifactCountVectorizer(field="lemma", group_by="document_id",
-                               ngram_range=(1, 2)),
-    tokens, batch_by="document_id", batch_size=100,
-)["output"]
-```
-
-Both vectorizers display word n-grams with underscores by default (for example, `new_york`) and accept a custom `ngram_separator`. Existing saved fitted operators retain their original feature-label convention.
-
 ## Analyses
 
 Analyses inspect Artifacts and return in-memory results without adding a new Artifact to the project. Use them to explore and compare results before choosing what to save.
