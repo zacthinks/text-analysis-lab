@@ -257,3 +257,90 @@ def test_multiple_attached_matrices_qualified_collision_and_nulls(tmp_path):
                        for col in result.columns)
     finally:
         project.close()
+
+
+
+def test_noncanonical_sparse_duplicates_match_every_output_and_reopen(tmp_path):
+    """Duplicate stored CSR coordinates sum in native/table/records/single."""
+    location = tmp_path / "noncanonical_project"
+    project = teal.Project.create(location, name="noncanonical")
+    artifact_id = None
+    right_id = None
+    try:
+        # The first feature has two stored entries in row zero: 1 + 2 = 3.
+        # Row one has an implicit zero in that feature.
+        raw = sparse.csr_matrix(
+            (np.asarray([1, 2, 4], dtype="int64"),
+             np.asarray([0, 0, 1]),
+             np.asarray([0, 2, 3])),
+            shape=(2, 2),
+        )
+        assert not raw.has_canonical_format
+        caller = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {"values": raw, "columns": ["feature0", "feature1"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+        attached = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {"values": raw, "columns": ["topic0", "topic1"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+        artifact_id, right_id = caller.artifact_id, attached.artifact_id
+
+        def check(left, right):
+            native = left.query(with_artifacts=right, with_columns="topic0",
+                                form="native")
+            assert native["matrix"].toarray().tolist() == [[3, 0], [0, 4]]
+            table = left.query(with_artifacts=right, with_columns="topic0",
+                               data_columns=["feature0"], form="table")
+            assert table["feature0"].tolist() == [3, 0]
+            assert table["topic0"].tolist() == [3, 0]
+            records = left.query(with_artifacts=right, with_columns="topic0",
+                                 data_columns=["feature0"], form="records")
+            assert [row["feature0"] for row in records] == [3, 0]
+            assert [row["topic0"] for row in records] == [3, 0]
+            single = left.query(with_artifacts=right, with_columns="topic0",
+                                data_columns=["feature0"], positions=[0],
+                                form="single")
+            assert single["feature0"] == 3
+            assert single["topic0"] == 3
+            batches = list(left.query(with_artifacts=right, with_columns="topic0",
+                                      data_columns=["feature0"], form="records",
+                                      iter_batches=True, batch_size=1))
+            assert [row[0]["feature0"] for row in batches] == [3, 0]
+            projected = left.query(with_artifacts=right, with_columns="topic1",
+                                   data_columns=["feature1"], form="table")
+            assert projected["feature1"].tolist() == [0, 4]
+            assert projected["topic1"].tolist() == [0, 4]
+
+        check(caller, attached)
+        assert not raw.has_canonical_format
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(location)
+    try:
+        check(reopened.get_artifact(artifact_id), reopened.get_artifact(right_id))
+    finally:
+        reopened.close()
+
+
+def test_noncanonical_sparse_join_missing_still_null(tmp_path):
+    project = teal.Project.create(tmp_path / "missing_duplicate", name="missing")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3]}), primary_key="doc_id"
+        )
+        raw = sparse.csr_matrix(
+            (np.asarray([1, 2], dtype="int64"), np.asarray([0, 0]),
+             np.asarray([0, 2])), shape=(1, 1),
+        )
+        right = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1]}),
+            "data": {"values": raw, "columns": ["topic"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+        result = left.query(with_artifacts=right, with_columns="topic", form="table")
+        assert result["topic"].iloc[0] == 3
+        assert pd.isna(result["topic"].iloc[1])
+        assert pd.isna(result["topic"].iloc[2])
+    finally:
+        project.close()
