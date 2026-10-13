@@ -57,11 +57,18 @@ def test_streaming_matches_whole_artifact_science(tmp_path, ngram_range, batch_s
             streaming, source, batch_by="document", batch_size=batch_size
         )["output"]
         assert output.get_data_columns() == reference.get_data_columns()
-        assert (output.get_matrix() != reference.get_matrix()).nnz == 0
         assert output.primary_key == reference.primary_key
-        assert output.query(key_columns=True, data_columns=False, form="table").equals(
-            reference.query(key_columns=True, data_columns=False, form="table")
-        )
+        # Compare keyed rows, not physical positions: complete-group batching
+        # may legitimately change row order for interleaved groups.
+        def keyed_counts(artifact):
+            keys = artifact.query(
+                key_columns=True, data_columns=False, form="table"
+            )
+            return {
+                tuple(row): tuple(artifact.get_matrix().getrow(i).toarray().ravel())
+                for i, row in enumerate(keys.to_numpy())
+            }
+        assert keyed_counts(output) == keyed_counts(reference)
         assert streaming.is_fitted
         op_id = str(project.list_operations()[-1]["operation_id"])
         assert project.get_operator(streaming.operator_id).vocabulary_ == streaming.vocabulary_
@@ -103,3 +110,48 @@ def test_grouping_finer_than_output_grain_is_rejected(tmp_path):
             )
     finally:
         project.close()
+
+
+def test_cross_batch_ngram_collision_is_rejected_for_fitted_reuse(tmp_path):
+    """An atomic new_york must not alias the two-token new_york bigram."""
+    project = Project.create(tmp_path / "collision", name="collision")
+    try:
+        rows = pd.DataFrame({
+            "doc": [1, 2, 2],
+            "sent": [0, 0, 0],
+            "token": [0, 0, 1],
+            "lemma": ["new_york", "new", "york"],
+        })
+        writer = create_artifact_writer(
+            artifact_type="table", artifact_dir=project.storage.artifact_dir("art_collision"),
+            artifact_id="art_collision", label="tokens", lineage_mode="new_key",
+            basis_artifact_ids=(),
+        )
+        writer.write({
+            "keys": rows[["doc", "sent", "token"]],
+            "data": rows[["lemma"]],
+        })
+        writer.finalize()
+        project.catalog.register_artifact(
+            artifact_id="art_collision", artifact_type="table", label="tokens",
+            lineage_mode="new_key", status="complete", basis_artifact_ids=(),
+        )
+        source = project.get_artifact("art_collision")
+        fitted = ArtifactCountVectorizer(
+            field="lemma", group_by="doc", ngram_range=(1, 2),
+            vocabulary={"new_york": 0, "new": 1, "york": 2},
+        )
+        with pytest.raises(Exception, match="ambiguous"):
+            project.translate(fitted, source, batch_by="doc", batch_size=1)
+    finally:
+        project.close()
+
+
+def test_custom_separator_remains_configurable():
+    translator = ArtifactCountVectorizer(
+        field="lemma", group_by="doc", ngram_range=(1, 2),
+        ngram_separator="__",
+    )
+    assert translator.ngram_separator == "__"
+    restored = ArtifactCountVectorizer.from_json_state(translator.to_json_state())
+    assert restored.ngram_separator == "__"
