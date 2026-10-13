@@ -20,6 +20,7 @@ from text_analysis_lab.analysis.feature_summary import feature_summary
 from text_analysis_lab.analysis.generalized_difference import (
     GeneralizedDifferenceResult,
     generalized_difference,
+    generalized_difference_by,
 )
 from text_analysis_lab.analysis.matrix_summary import MatrixSummary, matrix_summary
 from text_analysis_lab.analysis.neighbors import nearest_neighbors
@@ -34,6 +35,7 @@ from text_analysis_lab.analysis.polarity_scores import (
 from text_analysis_lab.analysis.row_summary import row_summary
 from text_analysis_lab.analysis.top_features import top_features
 from text_analysis_lab.analysis.summary import ArtifactSummary, summarize
+from text_analysis_lab.analysis.text_diagnostics import TextDiagnosticsResult, text_diagnostics
 from text_analysis_lab.analysis.valence import valence
 from text_analysis_lab.core.kwic import KWICResult, keyword_in_context
 
@@ -46,6 +48,7 @@ __all__ = [
     "ArtifactSummary",
     "ClassificationEvaluation",
     "GeneralizedDifferenceResult",
+    "TextDiagnosticsResult",
     "KWICResult",
     "MatrixSummary",
     "classification",
@@ -56,6 +59,7 @@ __all__ = [
     "distance",
     "feature_summary",
     "generalized_difference",
+    "generalized_difference_by",
     "kwic",
     "matrix_summary",
     "nearest_neighbors",
@@ -68,5 +72,6 @@ __all__ = [
     "row_summary",
     "summarize",
     "top_features",
+    "text_diagnostics",
     "valence",
 ]
