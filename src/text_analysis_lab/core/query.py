@@ -87,6 +87,10 @@ class ViewColumn:
     output_name: str
     sql_expr: str
     source_artifact_id: str | None = None
+    # A matrix feature is a selectable output field, but never a SQL column.
+    deferred_artifact_id: str | None = None
+    deferred_feature_name: str | None = None
+    deferred_position_column: str | None = None
 
 
 @dataclass(frozen=True)
@@ -160,7 +164,7 @@ def _validate_metadata_query_request(
 
 
 def _assign_view_output_names(
-    pending: Sequence[dict[str, str]],
+    pending: Sequence[dict[str, Any]],
 ) -> tuple[tuple[ViewColumn, ...], dict[str, tuple[str, ...]], dict[str, str]]:
     names, ambiguous = resolve_names(
         [column["base_name"] for column in pending],
@@ -1866,12 +1870,10 @@ class QueryEngine:
             right_view = self.build_artifact_view_sql(
                 right, metadata_mode="local", include_data=True
             )
-            # Phase 1A: right-hand matrix values require deferred retrieval (1B).
-            if right.artifact_type in {ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX}:
-                raise QueryError(
-                    f"with_artifacts matrix source {right_id!r} requires "
-                    "the deferred matrix attachment phase (1B)."
-                )
+            is_matrix = right.artifact_type in {
+                ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX
+            }
+            position_name = f"_teal_with_position_{index}"
             alias = f"r{index}"
             ctes.append(f"_teal_right_{index} AS ({right_view.sql})")
             left_names = {c.base_name: c.output_name for c in base.columns if c.namespace == "key"}
@@ -1881,6 +1883,12 @@ class QueryEngine:
                 for key in right.primary_key
             )
             joins.append(f"LEFT JOIN _teal_right_{index} {alias} ON {on_clause}")
+            if is_matrix:
+                # Right positions are nullable, unlike matrix zeros. They stay
+                # internal until deferred features have been materialized.
+                joins.append(
+                    f"__TEAL_POSITION__{index}__"
+                )
             for col in right_view.columns:
                 if col.namespace not in {"data", "metadata"}:
                     continue
@@ -1903,14 +1911,38 @@ class QueryEngine:
                         "source_artifact_id": col.source_artifact_id,
                     }
                 )
+            if is_matrix and right_id != str(artifact.artifact_id):
+                for feature in right.get_data_columns():
+                    pending.append(
+                        {
+                            "namespace": "with",
+                            "base_name": str(feature),
+                            "qualified_name": f"with.{right_id}.data.{feature}",
+                            "sql_expr": "",
+                            "source_artifact_id": right_id,
+                            "deferred_artifact_id": right_id,
+                            "deferred_feature_name": str(feature),
+                            "deferred_position_column": position_name,
+                        }
+                    )
         columns, ambiguous, mapping = _assign_view_output_names(
             pending  # type: ignore[arg-type]
         )
         selects = ["b._position AS _position", "b._batch AS _batch", "b._row_offset AS _row_offset"]
         selects.extend(
-            f"{col.sql_expr} AS {quote_identifier(col.output_name)}" for col in columns
+            f"{col.sql_expr} AS {quote_identifier(col.output_name)}"
+            for col in columns if col.deferred_feature_name is None
         )
-        sql = f"WITH {', '.join(ctes)} SELECT {', '.join(selects)} FROM _teal_base b " + " ".join(joins)
+        clean_joins: list[str] = []
+        for join in joins:
+            if join.startswith("__TEAL_POSITION__"):
+                index = int(join[len("__TEAL_POSITION__"):-2])
+                selects.append(
+                    f"r{index}._position AS {quote_identifier(f'_teal_with_position_{index}')}"
+                )
+            else:
+                clean_joins.append(join)
+        sql = f"WITH {', '.join(ctes)} SELECT {', '.join(selects)} FROM _teal_base b " + " ".join(clean_joins)
         return ArtifactViewSQL(
             sql=sql,
             columns=columns,
@@ -1951,6 +1983,7 @@ class QueryEngine:
                     "qualified_name": column.qualified_name,
                     "output_name": column.output_name,
                     "source_artifact_id": column.source_artifact_id,
+                    "sql_addressable": column.deferred_feature_name is None,
                 }
                 for column in view.columns
             ],
@@ -2109,7 +2142,17 @@ class QueryEngine:
 
         if include_position:
             select_exprs.append("v._position AS _position")
+        selected_handles: set[str] = set()
         for col in selected:
+            field = next(c for c in view.columns if c.output_name == col)
+            if field.deferred_feature_name is not None:
+                handle = field.deferred_position_column
+                if handle is not None and handle not in selected_handles:
+                    select_exprs.append(
+                        f"v.{quote_identifier(handle)} AS {quote_identifier(handle)}"
+                    )
+                    selected_handles.add(handle)
+                continue
             select_exprs.append(f"v.{quote_identifier(col)} AS {quote_identifier(col)}")
         if not select_exprs:
             select_exprs.append("v._position AS _position")
