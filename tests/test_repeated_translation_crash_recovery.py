@@ -154,12 +154,6 @@ def test_repeat_recovery_preserves_checkpointed_terminal_callback_once(
     project = Project.create(path, name="terminal")
     source = _source(project)
 
-    class _TerminalOutput(_ReplayProbe):
-        def finalize_translation(self, *, mode, request):
-            super().finalize_translation(mode=mode, request=request)
-            # A final output from terminal callback must not be added twice.
-            return None
-
     original_complete = runner._complete_runtime
     marker = {"attempts": 0}
 
@@ -172,15 +166,14 @@ def test_repeat_recovery_preserves_checkpointed_terminal_callback_once(
     monkeypatch.setattr(runner, "_complete_runtime", fail_after_terminal)
     try:
         with pytest.raises(RuntimeError, match="after terminal callback"):
-            project.translate(_TerminalOutput(2), source)
+            project.translate(_ReplayProbe(2), source)
         operation_id = str(project.list_operations()[-1]["operation_id"])
         temp = project.storage.operation_temp_dir(operation_id)
         assert json.loads((temp / "pass.json").read_text())["terminal_finalized"] is True
-        state = json.loads((temp / "operator" / "probe.json").read_text()) if (
-            temp / "operator" / "probe.json"
-        ).exists() else None
-        if state:
-            assert len([e for e in state["events"] if e[0] == "final"]) == 1
+        saved = list(temp.rglob("probe.json"))
+        assert len(saved) == 1
+        state = json.loads(saved[0].read_text())
+        assert len([e for e in state["events"] if e[0] == "final"]) == 1
     finally:
         project.close()
     monkeypatch.undo()
