@@ -197,6 +197,39 @@ def test_resume_second_pass_reuses_saved_assignments_and_fit_checkpoint(tmp_path
         reopened.close()
 
 
+def test_durable_pass_cursor_does_not_reset_midpass_completed_units(tmp_path):
+    operation_dir = tmp_path / "sqlite_pass_cursor"
+    plan = _ExecutionPlan(operation_dir)
+    try:
+        from text_analysis_lab.core.translate import _PlanUnit, _SourcePlan
+        plan.initialize([
+            _PlanUnit(i, {"source": _SourcePlan(
+                "source", "art", "batches", i, 3, i, i + 1
+            )})
+            for i in range(3)
+        ])
+        plan.mark_complete(0)
+        plan.mark_complete(1)
+        plan.mark_complete(2)
+        assert plan.complete_count() == 3
+        plan.activate_pass(1)
+        assert plan.complete_count() == 0
+        plan.mark_complete(0)
+    finally:
+        plan.close()
+
+    reopened = _ExecutionPlan(operation_dir)
+    try:
+        # Retry after a failure in pass 2, *not* a pass transition.
+        reopened.activate_pass(1)
+        assert reopened.complete_count() == 1
+        assert [unit.unit_index for unit in reopened.iter_pending()] == [1, 2]
+        with pytest.raises(OperatorError, match="mismatch"):
+            reopened.activate_pass(3)
+    finally:
+        reopened.close()
+
+
 @pytest.mark.parametrize("invalid", [0, -1, True, 1.5, "2"])
 def test_invalid_pass_counts_rejected_before_operation_registration(tmp_path, invalid):
     project = Project.create(tmp_path / "project", name="invalid_passes")
