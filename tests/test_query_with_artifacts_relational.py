@@ -132,7 +132,7 @@ def test_self_attachment_and_local_metadata(tmp_path):
         assert info["with"] == ["group"]
         assert info["data"] == ["score"]
         frame = source.query(
-            with_artifacts=source, with_columns=True, where="group = 'a'",
+            with_artifacts=source, with_columns=True, where='"group" = \'a\'',
             metadata_mode="none", form="table",
         )
         assert frame["doc_id"].tolist() == [0, 2]
