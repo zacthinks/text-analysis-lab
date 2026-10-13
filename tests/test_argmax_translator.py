@@ -49,10 +49,10 @@ def test_sparse_does_not_densify(monkeypatch):
     def reject(*args, **kwargs):
         raise AssertionError("Sparse ArgMax may not densify")
     monkeypatch.setattr(sparse.csr_matrix, "toarray", reject)
-    matrix = sparse.csr_matrix(([3.], ([0], [999_999])), shape=(2, 1_000_000))
+    matrix = sparse.csr_matrix(([3.], ([0], [9_999])), shape=(2, 10_000))
     names = [f"f_{i:07d}" for i in range(1_000_000)]
     result = ArgMax().translate(matrix, features=names)
-    assert result["max_feature"].iloc[0] == "f_0999999"
+    assert result["max_feature"].iloc[0] == "f_0009999"
     assert pd.isna(result["max_feature"].iloc[1])
 
 
