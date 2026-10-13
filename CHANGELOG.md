@@ -8,6 +8,11 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Added
 
+- `ArgMax()` translator for dense or sparse named matrices, producing a preserved-key table of each row's `max_feature` and `max_value`; deterministic feature-name ties, unassigned all-zero rows, and sparse implicit-zero handling (PR #48).
+- Ephemeral `svd_spectrum()` matrix diagnostics and reusable standalone `visualization.scree(...)` plots for component energy and explained variance (PRs #44–#45).
+- Query-time `with_artifacts` / `with_columns` composition of explicitly selected keyed table, JSONL, and matrix features without publishing a joined Artifact, including native and streaming output support (PRs #43, #46, #47).
+- Scatter-plot color and hover attachments via `with_artifacts` and `with_columns` (PR #49).
+
 ### Changed
 
 ### Fixed
