@@ -4,6 +4,7 @@ from text_analysis_lab.translators._hf_utils import (
     ContextWindowExceededError,
     TransformerResourceError,
 )
+from text_analysis_lab.translators.argmax import ArgMax
 from text_analysis_lab.translators.artifact_count_vectorizer import (
     ArtifactCountVectorizer,
 )
@@ -62,6 +63,7 @@ from text_analysis_lab.translators.word_sense_disambiguator import (
 )
 
 __all__ = [
+    "ArgMax",
     "CONTEXTUAL_EMBEDDINGS_LABEL",
     "DBSCAN",
     "HDBSCAN",
