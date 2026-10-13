@@ -62,6 +62,9 @@ def test_sparse_does_not_densify(monkeypatch):
     np.array([[np.inf, 1.]]),
     np.array([["bad", "value"]]),
     sparse.csr_matrix(([np.inf], ([0], [0])), shape=(1, 2)),
+    np.array([[1. + 2.j, 0. + 0.j]]),
+    np.array([[0. + 0.j, 0. + 0.j]]),
+    sparse.csr_matrix(np.array([[1. + 2.j, 0. + 0.j]])),
 ])
 def test_invalid_values_rejected(values):
     with pytest.raises(ArtifactError, match="finite numeric"):
@@ -189,3 +192,50 @@ def test_real_project_batches_reopen_and_frozen_reuse(tmp_path, sparse_input):
         )
     finally:
         reopened.close()
+
+
+def test_real_lda_model_output_to_argmax_project(tmp_path):
+    """An actual model-generated document-topic artifact feeds persistent ArgMax."""
+    import text_analysis_lab as teal
+    from text_analysis_lab.translators import LDA
+
+    project = teal.Project.create(tmp_path / "lda_argmax", name="lda_argmax")
+    try:
+        counts = _register_matrix(
+            project,
+            "lda_argmax_counts",
+            sparse.csr_matrix([
+                [5, 0, 1, 0],
+                [0, 3, 0, 4],
+                [3, 1, 2, 0],
+            ]),
+            ["apple", "banana", "cherry", "date"],
+        )
+        fitted = project.translate(LDA(n_components=2, max_iter=4, random_state=7), counts)
+        mixtures = fitted["output"]
+        assert mixtures.artifact_type.value == "dense_matrix"
+        feature_names = mixtures.get_data_columns()
+        assert feature_names == ["topic_0", "topic_1"]
+        values = np.asarray(mixtures.get_matrix())
+        assert values.shape == (3, 2)
+        np.testing.assert_allclose(values.sum(axis=1), np.ones(3))
+
+        result = project.translate(ArgMax(), mixtures, batch_size=1)["output"]
+        assert result.artifact_type.value == "table"
+        assert result.primary_key == ["doc_id"]
+        assert result.descriptor["lineage"]["lineage_mode"] == "preserved_key"
+        frame = result.query(
+            key_columns=True, data_columns=True,
+            metadata_columns=False, metadata_mode="none",
+        )
+        assert frame["doc_id"].tolist() == [19, 11, 37]
+        selected = np.argmax(values, axis=1)
+        assert frame["max_feature"].tolist() == [
+            feature_names[int(index)] for index in selected
+        ]
+        np.testing.assert_allclose(
+            frame["max_value"].to_numpy(dtype=float),
+            values[np.arange(len(selected)), selected],
+        )
+    finally:
+        project.close()
