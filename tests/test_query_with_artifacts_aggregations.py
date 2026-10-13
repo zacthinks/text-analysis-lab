@@ -10,7 +10,7 @@ pytest.importorskip("duckdb")
 pytest.importorskip("pyarrow")
 
 import text_analysis_lab as teal
-from text_analysis_lab.core.errors import ArtifactError
+from text_analysis_lab.core.errors import ArtifactError, QueryError
 
 
 def test_attached_histogram_and_crosstab_across_batch_boundaries(tmp_path):
@@ -155,7 +155,7 @@ def test_qualified_attached_collisions_use_narrow_output_names(tmp_path):
         )
         assert ct_both.loc["X", 1] == 1
         assert ct_both.loc["Y", 2] == 1
-        with pytest.raises(ArtifactError, match="ambiguous"):
+        with pytest.raises(QueryError, match="ambiguous"):
             left.visualize.histogram(
                 score, with_artifacts=right,
                 with_columns=["score"], output="result",
