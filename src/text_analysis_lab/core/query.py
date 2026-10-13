@@ -87,6 +87,10 @@ class ViewColumn:
     output_name: str
     sql_expr: str
     source_artifact_id: str | None = None
+    # A matrix feature is a selectable output field, but never a SQL column.
+    deferred_artifact_id: str | None = None
+    deferred_feature_name: str | None = None
+    deferred_position_column: str | None = None
 
 
 @dataclass(frozen=True)
@@ -160,7 +164,7 @@ def _validate_metadata_query_request(
 
 
 def _assign_view_output_names(
-    pending: Sequence[dict[str, str]],
+    pending: Sequence[dict[str, Any]],
 ) -> tuple[tuple[ViewColumn, ...], dict[str, tuple[str, ...]], dict[str, str]]:
     names, ambiguous = resolve_names(
         [column["base_name"] for column in pending],
@@ -1866,12 +1870,10 @@ class QueryEngine:
             right_view = self.build_artifact_view_sql(
                 right, metadata_mode="local", include_data=True
             )
-            # Phase 1A: right-hand matrix values require deferred retrieval (1B).
-            if right.artifact_type in {ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX}:
-                raise QueryError(
-                    f"with_artifacts matrix source {right_id!r} requires "
-                    "the deferred matrix attachment phase (1B)."
-                )
+            is_matrix = right.artifact_type in {
+                ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX
+            }
+            position_name = f"_teal_with_position_{index}"
             alias = f"r{index}"
             ctes.append(f"_teal_right_{index} AS ({right_view.sql})")
             left_names = {c.base_name: c.output_name for c in base.columns if c.namespace == "key"}
@@ -1903,13 +1905,34 @@ class QueryEngine:
                         "source_artifact_id": col.source_artifact_id,
                     }
                 )
+            if is_matrix and right_id != str(artifact.artifact_id):
+                for feature in right.get_data_columns():
+                    pending.append(
+                        {
+                            "namespace": "with",
+                            "base_name": str(feature),
+                            "qualified_name": f"with.{right_id}.data.{feature}",
+                            "sql_expr": "",
+                            "source_artifact_id": right_id,
+                            "deferred_artifact_id": right_id,
+                            "deferred_feature_name": str(feature),
+                            "deferred_position_column": position_name,
+                        }
+                    )
         columns, ambiguous, mapping = _assign_view_output_names(
             pending  # type: ignore[arg-type]
         )
         selects = ["b._position AS _position", "b._batch AS _batch", "b._row_offset AS _row_offset"]
         selects.extend(
-            f"{col.sql_expr} AS {quote_identifier(col.output_name)}" for col in columns
+            f"{col.sql_expr} AS {quote_identifier(col.output_name)}"
+            for col in columns if col.deferred_feature_name is None
         )
+        for index, right in enumerate(rights):
+            if right.artifact_type in {ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX}:
+                selects.append(
+                    f"r{index}._position AS "
+                    f"{quote_identifier(f'_teal_with_position_{index}')}"
+                )
         sql = f"WITH {', '.join(ctes)} SELECT {', '.join(selects)} FROM _teal_base b " + " ".join(joins)
         return ArtifactViewSQL(
             sql=sql,
@@ -1922,6 +1945,101 @@ class QueryEngine:
             ambiguous_columns=ambiguous,
             mapping=mapping,
         )
+
+    def deferred_columns(
+        self,
+        artifact: BaseArtifact,
+        *,
+        metadata_mode: MetadataMode,
+        include_data: bool,
+        with_artifacts: Any,
+        with_columns: ColumnSelect,
+    ) -> list[ViewColumn]:
+        if not with_artifacts or not _columns_requested(with_columns):
+            return []
+        view = self.build_composed_view_sql(
+            artifact, metadata_mode=metadata_mode, include_data=include_data,
+            with_artifacts=with_artifacts,
+        )
+        selected = self._select_namespace_columns(
+            view, namespace="with", requested=with_columns, label="with columns",
+        )
+        return [
+            c for c in view.columns
+            if c.output_name in selected and c.deferred_feature_name is not None
+        ]
+
+    def materialize_deferred_columns(
+        self, frame: pd.DataFrame, fields: Sequence[ViewColumn],
+    ) -> pd.DataFrame:
+        if not fields:
+            return frame
+        result = frame.copy()
+        grouped: dict[tuple[str, str], list[ViewColumn]] = {}
+        for field in fields:
+            assert field.deferred_artifact_id is not None
+            assert field.deferred_position_column is not None
+            grouped.setdefault(
+                (field.deferred_artifact_id, field.deferred_position_column), []
+            ).append(field)
+        for (artifact_id, handle), group in grouped.items():
+            positions = result[handle]
+            matched_idx = [i for i, value in enumerate(positions) if not pd.isna(value)]
+            names = [str(field.deferred_feature_name) for field in group]
+            array: np.ndarray | None = None
+            if matched_idx:
+                source = self.project.get_artifact(artifact_id)
+                matched_positions = [int(positions.iloc[i]) for i in matched_idx]
+                native = source._data_native_for_positions(
+                    matched_positions, data_columns=names,
+                )
+                if hasattr(native, "toarray"):
+                    native = native.toarray()
+                array = np.asarray(native)
+
+            for index, field in enumerate(group):
+                if array is None:
+                    # Every right-hand row is absent; do not manufacture zeros.
+                    result[field.output_name] = pd.Series(
+                        pd.NA, index=result.index, dtype="object"
+                    )
+                    continue
+
+                feature_values = array[:, index]
+                if len(matched_idx) == len(result):
+                    # Keep the source dtype, including exact int64/uint64 values.
+                    result[field.output_name] = feature_values
+                    continue
+
+                # An unmatched key needs a null, while a matched sparse zero
+                # remains zero. Floating NaN placeholders would corrupt large
+                # integers, so use Pandas nullable integer/boolean dtypes.
+                kind = feature_values.dtype.kind
+                if kind in {"i", "u"}:
+                    prefix = "Int" if kind == "i" else "UInt"
+                    nullable_dtype = f"{prefix}{feature_values.dtype.itemsize * 8}"
+                    column = pd.Series(
+                        pd.array([pd.NA] * len(result), dtype=nullable_dtype),
+                        index=result.index,
+                    )
+                elif kind == "b":
+                    column = pd.Series(
+                        pd.array([pd.NA] * len(result), dtype="boolean"),
+                        index=result.index,
+                    )
+                elif kind in {"f", "c"}:
+                    column = pd.Series(
+                        np.full(len(result), np.nan, dtype=feature_values.dtype),
+                        index=result.index,
+                    )
+                else:
+                    column = pd.Series(
+                        pd.NA, index=result.index, dtype="object"
+                    )
+                column.iloc[matched_idx] = feature_values
+                result[field.output_name] = column
+            result = result.drop(columns=[handle])
+        return result
 
     def query_columns(
         self,
@@ -1951,6 +2069,7 @@ class QueryEngine:
                     "qualified_name": column.qualified_name,
                     "output_name": column.output_name,
                     "source_artifact_id": column.source_artifact_id,
+                    "sql_addressable": column.deferred_feature_name is None,
                 }
                 for column in view.columns
             ],
@@ -2109,7 +2228,17 @@ class QueryEngine:
 
         if include_position:
             select_exprs.append("v._position AS _position")
+        selected_handles: set[str] = set()
         for col in selected:
+            field = next(c for c in view.columns if c.output_name == col)
+            if field.deferred_feature_name is not None:
+                handle = field.deferred_position_column
+                if handle is not None and handle not in selected_handles:
+                    select_exprs.append(
+                        f"v.{quote_identifier(handle)} AS {quote_identifier(handle)}"
+                    )
+                    selected_handles.add(handle)
+                continue
             select_exprs.append(f"v.{quote_identifier(col)} AS {quote_identifier(col)}")
         if not select_exprs:
             select_exprs.append("v._position AS _position")

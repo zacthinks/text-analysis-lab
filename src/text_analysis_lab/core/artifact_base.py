@@ -1108,6 +1108,19 @@ class BaseArtifact(ABC):
             and not include_data_in_query
         )
         internal_position = include_position or needs_external_data
+        # Ordinary queries need no attachment planning; retain the established
+        # query path (including callers with lightweight query-engine doubles).
+        deferred = (
+            self.project.query.deferred_columns(
+                self,
+                metadata_mode=metadata_mode,
+                include_data=include_data_in_query,
+                with_artifacts=with_artifacts,
+                with_columns=with_columns,
+            )
+            if with_artifacts and _columns_requested(with_columns)
+            else []
+        )
 
         info = self.project.query.artifact_query(
             self,
@@ -1123,6 +1136,9 @@ class BaseArtifact(ABC):
             positions=positions,
             include_position=internal_position,
         )
+
+        if deferred:
+            info = self.project.query.materialize_deferred_columns(info, deferred)
 
         if not needs_external_data:
             return self._format_query_frame(
@@ -1203,6 +1219,19 @@ class BaseArtifact(ABC):
             and not include_data_in_query
         )
         internal_position = include_position or needs_external_data
+        # Ordinary queries need no attachment planning; retain the established
+        # query path (including callers with lightweight query-engine doubles).
+        deferred = (
+            self.project.query.deferred_columns(
+                self,
+                metadata_mode=metadata_mode,
+                include_data=include_data_in_query,
+                with_artifacts=with_artifacts,
+                with_columns=with_columns,
+            )
+            if with_artifacts and _columns_requested(with_columns)
+            else []
+        )
 
         # External representation data (for example sparse/dense matrices) are
         # loaded after each query batch. Those loads may execute additional
@@ -1214,7 +1243,7 @@ class BaseArtifact(ABC):
         # remain eligible for Arrow streaming because they are included directly
         # in the DuckDB relation and require no nested query.
         effective_streaming_mode: StreamingMode = (
-            "paged" if needs_external_data else streaming_mode
+            "paged" if (needs_external_data or deferred) else streaming_mode
         )
 
         for info in self.project.query.artifact_query_batches(
@@ -1233,6 +1262,8 @@ class BaseArtifact(ABC):
             batch_size=batch_size,
             streaming_mode=effective_streaming_mode,
         ):
+            if deferred:
+                info = self.project.query.materialize_deferred_columns(info, deferred)
             if not needs_external_data:
                 yield self._format_query_frame(
                     info,
