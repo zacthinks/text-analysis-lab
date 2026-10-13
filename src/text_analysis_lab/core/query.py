@@ -1986,8 +1986,7 @@ class QueryEngine:
             positions = result[handle]
             matched_idx = [i for i, value in enumerate(positions) if not pd.isna(value)]
             names = [str(field.deferred_feature_name) for field in group]
-            # Store missing in a nullable tabular column, not sparse numeric zero.
-            values = pd.DataFrame({name: [np.nan] * len(result) for name in names})
+            array: np.ndarray | None = None
             if matched_idx:
                 source = self.project.get_artifact(artifact_id)
                 matched_positions = [int(positions.iloc[i]) for i in matched_idx]
@@ -1997,12 +1996,48 @@ class QueryEngine:
                 if hasattr(native, "toarray"):
                     native = native.toarray()
                 array = np.asarray(native)
-                for j, name in enumerate(names):
-                    values.iloc[matched_idx, j] = array[:, j]
-            for field in group:
-                result[field.output_name] = values[
-                    str(field.deferred_feature_name)
-                ].to_numpy()
+
+            for index, field in enumerate(group):
+                if array is None:
+                    # Every right-hand row is absent; do not manufacture zeros.
+                    result[field.output_name] = pd.Series(
+                        pd.NA, index=result.index, dtype="object"
+                    )
+                    continue
+
+                feature_values = array[:, index]
+                if len(matched_idx) == len(result):
+                    # Keep the source dtype, including exact int64/uint64 values.
+                    result[field.output_name] = feature_values
+                    continue
+
+                # An unmatched key needs a null, while a matched sparse zero
+                # remains zero. Floating NaN placeholders would corrupt large
+                # integers, so use Pandas nullable integer/boolean dtypes.
+                kind = feature_values.dtype.kind
+                if kind in {"i", "u"}:
+                    prefix = "Int" if kind == "i" else "UInt"
+                    nullable_dtype = f"{prefix}{feature_values.dtype.itemsize * 8}"
+                    column = pd.Series(
+                        pd.array([pd.NA] * len(result), dtype=nullable_dtype),
+                        index=result.index,
+                    )
+                elif kind == "b":
+                    column = pd.Series(
+                        pd.array([pd.NA] * len(result), dtype="boolean"),
+                        index=result.index,
+                    )
+                elif kind in {"f", "c"}:
+                    column = pd.Series(
+                        np.full(len(result), np.nan, dtype=feature_values.dtype),
+                        index=result.index,
+                    )
+                else:
+                    column = pd.Series(
+                        pd.NA, index=result.index, dtype="object"
+                    )
+                column.iloc[matched_idx] = feature_values
+                result[field.output_name] = column
             result = result.drop(columns=[handle])
         return result
 
