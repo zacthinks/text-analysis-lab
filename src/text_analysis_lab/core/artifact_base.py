@@ -1108,10 +1108,18 @@ class BaseArtifact(ABC):
             and not include_data_in_query
         )
         internal_position = include_position or needs_external_data
-        deferred = self.project.query.deferred_columns(
-            self, metadata_mode=metadata_mode,
-            include_data=include_data_in_query,
-            with_artifacts=with_artifacts, with_columns=with_columns,
+        # Ordinary queries need no attachment planning; retain the established
+        # query path (including callers with lightweight query-engine doubles).
+        deferred = (
+            self.project.query.deferred_columns(
+                self,
+                metadata_mode=metadata_mode,
+                include_data=include_data_in_query,
+                with_artifacts=with_artifacts,
+                with_columns=with_columns,
+            )
+            if with_artifacts and _columns_requested(with_columns)
+            else []
         )
 
         info = self.project.query.artifact_query(
@@ -1210,10 +1218,18 @@ class BaseArtifact(ABC):
             and not include_data_in_query
         )
         internal_position = include_position or needs_external_data
-        deferred = self.project.query.deferred_columns(
-            self, metadata_mode=metadata_mode,
-            include_data=include_data_in_query,
-            with_artifacts=with_artifacts, with_columns=with_columns,
+        # Ordinary queries need no attachment planning; retain the established
+        # query path (including callers with lightweight query-engine doubles).
+        deferred = (
+            self.project.query.deferred_columns(
+                self,
+                metadata_mode=metadata_mode,
+                include_data=include_data_in_query,
+                with_artifacts=with_artifacts,
+                with_columns=with_columns,
+            )
+            if with_artifacts and _columns_requested(with_columns)
+            else []
         )
 
         # External representation data (for example sparse/dense matrices) are
