@@ -8,13 +8,22 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Added
 
+- Opt-in two-pass fitting for the scikit-learn-backed `CountVectorizer` when an unfitted translator receives `Project.translate(..., batch_size=N)`. Each batch uses sklearn preprocessing and unrestricted vocabulary learning; global TF/DF filtering and a frozen vocabulary are applied before sparse matrix output is replayed.
+- Opt-in complete-group, two-pass fitting for `ArtifactCountVectorizer` through `Project.translate(..., batch_by="<key>", batch_size=N)`. Aggregation respects retained primary-key prefixes and n-gram sequence boundaries.
+- Translator-specific regression coverage for whole-versus-batched vocabulary and keyed matrix parity, stop words, stemming, character analyzers, DF thresholds, `max_features` ties, empty batches, checkpoint/resume, and persisted operator reuse.
+
 ### Changed
+
+- Both count vectorizers now default to underscore-separated displayed word n-gram labels (for example, `new_york`) and support a configurable `ngram_separator`. The sklearn-backed vectorizer keeps its internal sklearn vocabulary strings unchanged; previously saved operators retain their earlier separator convention.
+- Whole-artifact fitting remains the default when no batching opt-in is supplied. Fitted `CountVectorizer` reuse continues to transform in one pass; `ArtifactCountVectorizer` grouped batches are constrained not to split their output groups.
 
 ### Fixed
 
-### Deprecated
+- Prevent ambiguous artifact-token n-gram labels from silently combining distinct features across batches, including fitted one-pass reuse. Operation-local collision tracking is cleared after successful finalization.
 
-### Removed
+### Notes
+
+- Both batched fitting modes retain corpus-wide feature statistics in memory and checkpoint them for recovery. A single large batch or an exceptionally large distinct-feature vocabulary can still require substantial memory.
 
 ## [0.6.0] - 2026-10-12
 
