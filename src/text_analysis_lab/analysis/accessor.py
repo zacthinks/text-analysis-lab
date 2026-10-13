@@ -99,6 +99,28 @@ class ArtifactAnalysis:
             **metric_kwargs,
         )
 
+    def spectrum(
+        self,
+        *,
+        n_components: int = 10,
+        algorithm: str = "randomized",
+        n_iter: int = 5,
+        random_state: int | None = 42,
+        n_oversamples: int = 10,
+        power_iteration_normalizer: str = "auto",
+    ) -> pd.DataFrame:
+        from text_analysis_lab.analysis.spectrum import spectrum
+
+        return spectrum(
+            self._artifact,
+            n_components=n_components,
+            algorithm=algorithm,
+            n_iter=n_iter,
+            random_state=random_state,
+            n_oversamples=n_oversamples,
+            power_iteration_normalizer=power_iteration_normalizer,
+        )
+
     def matrix_summary(
         self,
         *,

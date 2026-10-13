@@ -136,3 +136,45 @@ def test_real_matrix_analytics_round_trip(tmp_path: Path, artifact_type: str) ->
         ) == pytest.approx(2.0 / math.sqrt(10.0))
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize("artifact_type", ["sparse_matrix", "dense_matrix"])
+def test_persisted_spectrum_scree_is_ephemeral_after_reopen(
+    tmp_path: Path, artifact_type: str
+) -> None:
+    """Spectrum works through stored matrix readers, without catalog mutation."""
+    project_path = tmp_path / f"spectrum_{artifact_type}"
+    project = teal.Project.create(project_path, name=f"spectrum_{artifact_type}")
+    try:
+        artifact = _register_matrix(project, artifact_type=artifact_type)
+        artifact_id = artifact.artifact_id
+        before_artifacts = len(project.list_artifacts())
+        before_operations = len(project.list_operations())
+
+        frame = artifact.analysis.spectrum(n_components=2, random_state=42)
+        assert frame["component"].tolist() == [1, 2]
+        assert np.isfinite(frame.select_dtypes("number").to_numpy()).all()
+        assert 0 < frame["cumulative_energy_ratio"].iloc[-1] <= 1
+        assert len(project.list_artifacts()) == before_artifacts
+        assert len(project.list_operations()) == before_operations
+
+        pytest.importorskip("plotly")
+        fig = teal.visualization.scree(frame)
+        np.testing.assert_allclose(fig.data[0].y, frame["energy_ratio"].to_numpy())
+        np.testing.assert_allclose(
+            fig.data[1].y, frame["cumulative_energy_ratio"].to_numpy()
+        )
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(project_path)
+    try:
+        loaded = reopened.get_artifact(artifact_id)
+        before_artifacts = len(reopened.list_artifacts())
+        before_operations = len(reopened.list_operations())
+        loaded_frame = loaded.analysis.spectrum(n_components=2, random_state=42)
+        pd.testing.assert_frame_equal(frame, loaded_frame)
+        assert len(reopened.list_artifacts()) == before_artifacts
+        assert len(reopened.list_operations()) == before_operations
+    finally:
+        reopened.close()
