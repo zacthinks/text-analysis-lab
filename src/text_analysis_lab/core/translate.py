@@ -18,7 +18,7 @@ import tempfile
 import time
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, get_args
 
@@ -232,6 +232,41 @@ class _ExecutionPlan:
                         ),
                     )
 
+    def activate_pass(self, pass_index: int) -> None:
+        """Reconcile the committed checkpoint's pass index with SQLite.
+
+        Only a *new* pass resets the unit statuses. Reopening midway through
+        the current pass must retain completed units.
+        """
+        with self.con as con:
+            con.execute(
+                """CREATE TABLE IF NOT EXISTS plan_pass_state (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    current_pass INTEGER NOT NULL
+                )"""
+            )
+            con.execute(
+                "INSERT OR IGNORE INTO plan_pass_state(id, current_pass) VALUES (1, 0)"
+            )
+            stored = int(con.execute(
+                "SELECT current_pass FROM plan_pass_state WHERE id=1"
+            ).fetchone()[0])
+            if stored == pass_index:
+                return
+            if stored + 1 != pass_index:
+                raise OperatorError(
+                    f"Pass checkpoint/index mismatch: SQLite={stored}, "
+                    f"checkpoint={pass_index}."
+                )
+            con.execute(
+                """UPDATE plan_units SET status='pending', assigned_worker=NULL,
+                   started_at=NULL, completed_at=NULL, error=NULL"""
+            )
+            con.execute(
+                "UPDATE plan_pass_state SET current_pass=? WHERE id=1",
+                (pass_index,),
+            )
+
     def reset_running_to_pending(self) -> None:
         """Reset retryable non-complete units before resume.
 
@@ -383,6 +418,18 @@ def translate(
     )
     _validate_source_bindings(source_bindings, input_request)
     _validate_batch_hierarchy(source_bindings, input_request, translation_request)
+    pass_count = _validate_pass_count(
+        translator.translation_passes(
+            sources=source_bindings, mode=mode, request=translation_request,
+            input_request=input_request,
+        )
+    )
+    if pass_count > 1 and translation_request.workers != 1:
+        raise OperatorError(
+            "Repeated translation passes currently require workers=1; "
+            "parallel pass barriers are deferred."
+        )
+    translation_request = replace(translation_request, pass_count=pass_count)
     output_specs = dict(
         translator.output_specs_in_dependency_order(
             sources=source_bindings,
@@ -459,7 +506,7 @@ def translate(
         )
         if mode == "translate":
             _serialize_pending_operator_snapshot(project, translator, runtime)
-        _run_plan(
+        _run_repeated_plan(
             translator=translator,
             runtime=runtime,
             plan=plan,
@@ -475,7 +522,10 @@ def translate(
             runtime,
             translator.finalize_translation(
                 mode=mode,
-                request=translation_request,
+                request=replace(
+                    translation_request,
+                    pass_index=translation_request.pass_count - 1,
+                ),
             ),
         )
 
@@ -536,6 +586,10 @@ def resume_translate(
         )
     )
     effective_workers = _validate_workers(metadata.get("effective_workers"))
+    pass_count = _validate_pass_count(request_data.get("pass_count", 1))
+    request = replace(request, pass_count=pass_count)
+    if pass_count > 1 and route != "sequential":
+        raise OperatorError("Repeated translation resume currently requires sequential route.")
 
     if not translator.supports_resume(mode=mode, route=route):
         raise OperatorError(
@@ -573,7 +627,7 @@ def resume_translate(
     try:
         if mode == "translate":
             _serialize_pending_operator_snapshot(project, translator, runtime)
-        _run_plan(
+        _run_repeated_plan(
             translator=translator,
             runtime=runtime,
             plan=plan,
@@ -586,7 +640,10 @@ def resume_translate(
         )
         _commit_final_outputs(
             runtime,
-            translator.finalize_translation(mode=mode, request=request),
+            translator.finalize_translation(
+                mode=mode,
+                request=replace(request, pass_index=request.pass_count - 1),
+            ),
         )
         _serialize_pending_operator_snapshot(project, translator, runtime)
         _complete_runtime(project, runtime)
@@ -626,6 +683,8 @@ def _validate_translation_request(request: TranslationRequest) -> TranslationReq
         workers=_validate_workers(request.workers),
         batch_size=_validate_batch_size(request.batch_size),
         batch_by=_validate_batch_by(request.batch_by),
+        pass_index=_validate_pass_index(request.pass_index),
+        pass_count=_validate_pass_count(request.pass_count),
         max_outstanding_units=_validate_max_outstanding_units(
             request.max_outstanding_units
         ),
@@ -716,6 +775,73 @@ def _validate_batch_hierarchy(
                         "rows. Grouped form='single' requires batch_by at the "
                         "finest primary-key level and an effective batch_size=1."
                     )
+
+
+def _validate_pass_count(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise OperatorError("translation pass count must be a positive integer.")
+    return value
+
+
+def _validate_pass_index(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise OperatorError("translation pass index must be a nonnegative integer.")
+    return value
+
+
+def _checkpoint_pass_index(runtime: _Runtime) -> int:
+    path = runtime.operation_temp_dir / "pass.json"
+    if not path.exists():
+        return 0
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return _validate_pass_index(data["pass_index"])
+
+
+def _run_repeated_plan(
+    *,
+    translator: BaseTranslator,
+    runtime: _Runtime,
+    plan: _ExecutionPlan,
+    sources: Mapping[str, BaseArtifact],
+    input_request: InputRequest,
+    mode: TranslationMode,
+    route: RunRoute,
+    request: TranslationRequest,
+    workers: int,
+) -> None:
+    if request.pass_count == 1:
+        _run_plan(
+            translator=translator, runtime=runtime, plan=plan,
+            sources=sources, input_request=input_request, mode=mode,
+            route=route, request=request, workers=workers,
+        )
+        return
+    if route != "sequential":
+        raise OperatorError("Repeated translation currently requires sequential route.")
+    first = _checkpoint_pass_index(runtime)
+    if first >= request.pass_count:
+        raise OperatorError("Checkpoint pass index exceeds requested pass count.")
+    for pass_index in range(first, request.pass_count):
+        # A checkpoint can be promoted immediately before the SQLite pass
+        # transition. activate_pass only resets at a *new* pass boundary;
+        # resuming midway through this pass preserves completed units.
+        plan.activate_pass(pass_index)
+        current = replace(request, pass_index=pass_index)
+        _run_plan(
+            translator=translator, runtime=runtime, plan=plan,
+            sources=sources, input_request=input_request, mode=mode,
+            route=route, request=current, workers=workers,
+        )
+        if pass_index + 1 < request.pass_count:
+            _commit_outputs(
+                runtime,
+                translator.complete_translation_pass(mode=mode, request=current),
+            )
+            _save_intermediate_state(
+                translator=translator, runtime=runtime,
+                mode=mode, route=route, pass_index=pass_index + 1,
+            )
+            plan.activate_pass(pass_index + 1)
 
 
 def _validate_max_outstanding_units(value: Any) -> int | None:
@@ -1813,6 +1939,7 @@ def _run_sequential(
                 runtime=runtime,
                 mode=mode,
                 route=route,
+                pass_index=request.pass_index,
             )
             plan.mark_complete(unit.unit_index)
         except Exception as exc:
@@ -2030,6 +2157,7 @@ def _save_intermediate_state(
     runtime: _Runtime,
     mode: TranslationMode,
     route: RunRoute,
+    pass_index: int = 0,
 ) -> None:
     if not runtime.resumable:
         return
@@ -2046,6 +2174,9 @@ def _save_intermediate_state(
             route=route,
         )
         _write_writer_checkpoints(writers_dir, runtime)
+        (target / "pass.json").write_text(
+            json.dumps({"pass_index": pass_index}), encoding="utf-8"
+        )
 
     _replace_directory_with_staging(runtime.operation_temp_dir, write_intermediate)
 
@@ -2347,6 +2478,7 @@ def _save_operation_metadata(
         "status": "incomplete",
         "resumable": runtime.resumable,
         "request": {
+            "pass_count": request.pass_count,
             "workers": request.workers,
             "batch_size": request.batch_size,
             "batch_by": request.batch_by,

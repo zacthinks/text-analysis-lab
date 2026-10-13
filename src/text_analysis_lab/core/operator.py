@@ -100,6 +100,9 @@ class TranslationRequest:
     params: Mapping[str, Any] = field(default_factory=dict)
     # Append after legacy fields to preserve positional TranslationRequest calls.
     batch_by: str | None = None
+    # Execution-only context; append to preserve historical positional calls.
+    pass_index: int = 0
+    pass_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -893,6 +896,37 @@ class BaseTranslator(BaseOperator):
         ``serialize_operation_params(...)`` changes runtime value types.
         """
         return dict(params)
+
+    def translation_passes(
+        self,
+        *,
+        sources: Mapping[str, BaseArtifact],
+        mode: TranslationMode,
+        request: TranslationRequest,
+        input_request: InputRequest,
+    ) -> int:
+        """Number of identical saved source-plan traversals for this operation.
+
+        Override per execution when repeated materialization is necessary. The
+        runner, not the translator, advances the durable pass boundary. Existing
+        translators retain precisely one pass without overriding this hook.
+        """
+        _ = sources, mode, request, input_request
+        return 1
+
+    def complete_translation_pass(
+        self,
+        *,
+        mode: TranslationMode,
+        request: TranslationRequest,
+    ) -> OutputMap | None:
+        """Nonterminal pass barrier; called only if another pass follows.
+
+        The translator may finalize pass-local scientific state and optionally
+        return writer-ready outputs. finalize_translation remains terminal.
+        """
+        _ = mode, request
+        return None
 
     @abstractmethod
     def input_request(
