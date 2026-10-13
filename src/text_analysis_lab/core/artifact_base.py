@@ -1138,8 +1138,7 @@ class BaseArtifact(ABC):
         )
 
         if deferred:
-            if deferred:
-                info = self.project.query.materialize_deferred_columns(info, deferred)
+            info = self.project.query.materialize_deferred_columns(info, deferred)
 
         if not needs_external_data:
             return self._format_query_frame(
@@ -1263,7 +1262,8 @@ class BaseArtifact(ABC):
             batch_size=batch_size,
             streaming_mode=effective_streaming_mode,
         ):
-            info = self.project.query.materialize_deferred_columns(info, deferred)
+            if deferred:
+                info = self.project.query.materialize_deferred_columns(info, deferred)
             if not needs_external_data:
                 yield self._format_query_frame(
                     info,
