@@ -160,11 +160,11 @@ result = outputs["output"]
 
 Built-in translators include text cleaning and diagnostics, spaCy decomposition, count vectorization, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, Word2Vec, sentence/contextual transformer encoding, dictionary coding, fitted prediction, linguistic models, function mapping, and external API/model paths.
 
-Translation supports ordinary row batches, complete primary-key groups, and opt-in repeated passes over a saved input plan. For grouping examples and translator-author guidance, see the [batching guide](docs/hierarchy-aware-batching.md).
+Translation supports ordinary row batches, complete primary-key groups, and opt-in repeated passes over a saved input plan.
 
 ## Clustering
 
-TeAL includes clustering methods for numeric matrix Artifacts, covering centroid-, medoid-, density-, hierarchical-, spectral-, and mixture-based approaches. Results preserve source keys and lineage; methods with prediction support can apply fitted state to compatible data. See the [clustering guide](docs/clustering.md) for supported methods, requirements, and limitations.
+TeAL includes clustering methods for numeric matrix Artifacts, covering centroid-, medoid-, density-, hierarchical-, spectral-, and mixture-based approaches. Results preserve source keys and lineage; methods with prediction support can apply fitted state to compatible data.
 
 ## Project Center
 
