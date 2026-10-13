@@ -1137,7 +1137,9 @@ class BaseArtifact(ABC):
             include_position=internal_position,
         )
 
-        info = self.project.query.materialize_deferred_columns(info, deferred)
+        if deferred:
+            if deferred:
+                info = self.project.query.materialize_deferred_columns(info, deferred)
 
         if not needs_external_data:
             return self._format_query_frame(
