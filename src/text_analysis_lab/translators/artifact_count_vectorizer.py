@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -101,6 +102,12 @@ class ArtifactCountVectorizer(BaseTranslator):
         self.vocabulary_: dict[str, int] | None = (
             None if vocabulary is None else _normalize_vocabulary(vocabulary)
         )
+        # Ephemeral, resumable corpus statistics for grouped two-pass fitting.
+        # Memory grows with distinct features, not source rows or documents.
+        self._fit_tf: Counter[tuple[str, str]] = Counter()
+        self._fit_df: Counter[tuple[str, str]] = Counter()
+        self._fit_labels: dict[str, str] = {}
+        self._fit_group_count = 0
 
     @property
     def requires_fit(self) -> bool:
@@ -116,9 +123,9 @@ class ArtifactCountVectorizer(BaseTranslator):
 
     @property
     def supports_parallel_translate(self) -> bool:
-        # Aggregation can combine many finer rows into one output row and n-grams
-        # may span arbitrary physical source batches. Keep one canonical full-
-        # artifact pass until TeAL has group-aware partition planning.
+        # Intentionally keep this first streaming implementation sequential.
+        # The group-aware plan is safe to partition, but parallel workers for
+        # fitting would require a separate reduction of global statistics.
         return False
 
     def supports_resume(self, *, mode: TranslationMode, route: RunRoute) -> bool:
@@ -215,22 +222,33 @@ class ArtifactCountVectorizer(BaseTranslator):
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> SourceRequest:
-        _ = mode, request
+        _ = mode
         source = _single_source(sources)
         if source.artifact_type.value != "table":
             raise OperatorError(
                 "ArtifactCountVectorizer requires a table artifact source."
             )
         self._validate_source_key(source.primary_key)
+        grouped = request.batch_by is not None
         return SourceRequest(
             artifact_type="table",
-            mode="full_artifact",
+            mode="batches" if grouped else "full_artifact",
             columns=ColumnRequest(keys=True, data=self.field, metadata=False),
-            batch_size=None,
+            batch_size=(request.batch_size or 100) if grouped else None,
             form="table",
             metadata_mode="none",
             include_position=False,
+            min_batch_by=self.group_by[-1] if grouped else None,
         )
+
+    def translation_passes(
+        self, *, sources: Mapping[str, BaseArtifact], mode: TranslationMode,
+        request: TranslationRequest, input_request: Mapping[str, SourceRequest],
+    ) -> int:
+        _ = sources, input_request
+        # The existing whole-artifact fit_transform remains the default.
+        # Explicit complete-group batching requests a two-pass global fit.
+        return 2 if mode == "fit_translate" and request.batch_by is not None else 1
 
     def translate_batch(
         self,
@@ -239,7 +257,6 @@ class ArtifactCountVectorizer(BaseTranslator):
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> BatchResult:
-        _ = request
         packet = _single_input(inputs)
         frame = _require_frame(packet.data)
         source_key = tuple(str(name) for name in packet.primary_key)
@@ -262,17 +279,30 @@ class ArtifactCountVectorizer(BaseTranslator):
         )
 
         if mode == "fit_translate":
-            if self.is_fitted:
-                raise OperatorError(
-                    "fit_translate received an already fitted ArtifactCountVectorizer."
+            if request.pass_count > 1:
+                if request.pass_index == 0:
+                    if self.is_fitted:
+                        raise OperatorError(
+                            "First fit pass received an already fitted ArtifactCountVectorizer."
+                        )
+                    self._accumulate_fit_events(group_keys, events)
+                    return BatchResult()
+                if not self.is_fitted:
+                    raise OperatorNotFittedError(
+                        "ArtifactCountVectorizer vocabulary was not finalized at the pass boundary."
+                    )
+            else:
+                if self.is_fitted:
+                    raise OperatorError(
+                        "fit_translate received an already fitted ArtifactCountVectorizer."
+                    )
+                self.vocabulary_ = _fit_vocabulary(
+                    events,
+                    n_groups=len(group_keys),
+                    min_df=self.min_df,
+                    max_df=self.max_df,
+                    max_features=self.max_features,
                 )
-            self.vocabulary_ = _fit_vocabulary(
-                events,
-                n_groups=len(group_keys),
-                min_df=self.min_df,
-                max_df=self.max_df,
-                max_features=self.max_features,
-            )
         elif mode == "translate":
             if not self.is_fitted:
                 raise OperatorNotFittedError(
@@ -307,6 +337,33 @@ class ArtifactCountVectorizer(BaseTranslator):
         _ = batch_index, mode, request
         return result.outputs
 
+    def complete_translation_pass(
+        self, *, mode: TranslationMode, request: TranslationRequest,
+    ) -> OutputMap | None:
+        if mode == "fit_translate" and request.pass_count > 1 and request.pass_index == 0:
+            if self.is_fitted:
+                raise OperatorError("ArtifactCountVectorizer first pass already finalized.")
+            stats = pd.DataFrame(
+                [
+                    (key, label, self._fit_df[(key, label)], count)
+                    for (key, label), count in self._fit_tf.items()
+                ],
+                columns=[
+                    "_feature_key", "_feature_label",
+                    "document_frequency", "term_frequency",
+                ],
+            )
+            self.vocabulary_ = _fit_vocabulary_from_stats(
+                stats, n_groups=self._fit_group_count,
+                min_df=self.min_df, max_df=self.max_df,
+                max_features=self.max_features,
+            )
+            self._fit_tf.clear()
+            self._fit_df.clear()
+            self._fit_labels.clear()
+            self._fit_group_count = 0
+        return None
+
     def finalize_translation(
         self,
         *,
@@ -315,6 +372,33 @@ class ArtifactCountVectorizer(BaseTranslator):
     ) -> OutputMap | None:
         _ = mode, request
         return None
+
+    def _accumulate_fit_events(
+        self, group_keys: pd.DataFrame, events: pd.DataFrame,
+    ) -> None:
+        # Each complete group belongs to exactly one grouped plan unit.
+        # DF counts unique groups within a unit; TF retains all occurrences.
+        self._fit_group_count += len(group_keys)
+        if events.empty:
+            return
+        counts = (
+            events.groupby(
+                ["_group_id", "_feature_key", "_feature_label"], sort=False
+            ).size().reset_index(name="term_count")
+        )
+        for _, key, label, count in counts.itertuples(index=False, name=None):
+            key, label = str(key), str(label)
+            previous = self._fit_labels.get(label)
+            if previous is not None and previous != key:
+                raise ArtifactError(
+                    "ArtifactCountVectorizer n-gram labels are ambiguous because atomic "
+                    f"field values contain the display separator {self.ngram_separator!r}. "
+                    f"Example(s): {[label]}. Choose a different ngram_separator."
+                )
+            self._fit_labels[label] = key
+            pair = (key, label)
+            self._fit_tf[pair] += int(count)
+            self._fit_df[pair] += 1
 
     def to_json_state(self, *, include_vocabulary: bool = False) -> dict[str, Any]:
         state: dict[str, Any] = {
@@ -383,6 +467,20 @@ class ArtifactCountVectorizer(BaseTranslator):
         state = self.to_json_state(include_vocabulary=False)
         state["operator_id"] = operator_id
         state["assets"] = dict(self.save_assets(intermediate_dir))
+        state["fit_group_count"] = self._fit_group_count
+        if self._fit_tf:
+            stats_file = "fit_statistics.parquet"
+            pd.DataFrame(
+                [
+                    (key, label, self._fit_df[(key, label)], count)
+                    for (key, label), count in self._fit_tf.items()
+                ],
+                columns=[
+                    "feature_key", "feature_label",
+                    "document_frequency", "term_frequency",
+                ],
+            ).to_parquet(intermediate_dir / stats_file, index=False)
+            state["fit_stats_file"] = stats_file
         (intermediate_dir / "state.json").write_text(
             json.dumps(state, indent=2, sort_keys=True), encoding="utf-8"
         )
@@ -407,6 +505,17 @@ class ArtifactCountVectorizer(BaseTranslator):
                 "ArtifactCountVectorizer intermediate assets must be a mapping."
             )
         obj.load_assets(intermediate_dir, assets)
+        obj._fit_group_count = int(state.get("fit_group_count", 0))
+        stats_file = state.get("fit_stats_file")
+        if stats_file:
+            stats = pd.read_parquet(intermediate_dir / str(stats_file))
+            for key, label, df, tf in stats[
+                ["feature_key", "feature_label", "document_frequency", "term_frequency"]
+            ].itertuples(index=False, name=None):
+                pair = (str(key), str(label))
+                obj._fit_tf[pair] = int(tf)
+                obj._fit_df[pair] = int(df)
+                obj._fit_labels[str(label)] = str(key)
         obj.operator_id = operator_id
         return obj
 
@@ -624,6 +733,18 @@ def _fit_vocabulary(
         )
         .reset_index()
     )
+    return _fit_vocabulary_from_stats(
+        stats, n_groups=n_groups, min_df=min_df,
+        max_df=max_df, max_features=max_features,
+    )
+
+
+def _fit_vocabulary_from_stats(
+    stats: pd.DataFrame, *, n_groups: int,
+    min_df: float, max_df: float, max_features: int | None,
+) -> dict[str, int]:
+    if stats.empty:
+        raise ArtifactError("ArtifactCountVectorizer found no countable field values.")
     min_count = _resolve_min_df(min_df, n_groups)
     max_count = _resolve_max_df(max_df, n_groups)
     if max_count < min_count:
