@@ -213,3 +213,47 @@ def test_attached_matrix_where_order_positions_and_no_hidden_handles(tmp_path):
         assert len(hidden) == 3
     finally:
         project.close()
+
+
+
+def test_multiple_attached_matrices_qualified_collision_and_nulls(tmp_path):
+    """Distinct matrix owners sharing a feature name remain independently selectable."""
+    project = teal.Project.create(tmp_path / "collisions", name="collisions")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3]}), primary_key="doc_id"
+        )
+        dense = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {"values": np.asarray([[2.5], [float("nan")]]),
+                     "columns": ["score"]},
+        }], artifact_type="dense_matrix", primary_key="doc_id")
+        sparse_right = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [2, 3]}),
+            "data": {"values": sparse.csr_matrix([[0], [7]]),
+                     "columns": ["score"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+        choices = left.query_columns(with_artifacts=[dense, sparse_right])
+        fields = [col for col in choices["columns"]
+                  if col["namespace"] == "with" and col["base_name"] == "score"]
+        assert len(fields) == 2
+        names = [col["qualified_name"] for col in fields]
+        assert len(set(names)) == 2
+        with pytest.raises(QueryError, match="ambiguous"):
+            left.query(with_artifacts=[dense, sparse_right], with_columns="score")
+        result = left.query(
+            with_artifacts=[dense, sparse_right],
+            with_columns=names,
+            form="table",
+        )
+        dense_col, sparse_col = [col["output_name"] for col in fields]
+        assert result[dense_col].iloc[0] == 2.5
+        assert pd.isna(result[dense_col].iloc[1])  # Matched source NaN
+        assert pd.isna(result[dense_col].iloc[2])  # No right match
+        assert pd.isna(result[sparse_col].iloc[0])  # No right match
+        assert result[sparse_col].iloc[1] == 0      # Matched implicit sparse zero
+        assert result[sparse_col].iloc[2] == 7
+        assert not any(col.startswith("_teal_with_position")
+                       for col in result.columns)
+    finally:
+        project.close()
