@@ -55,6 +55,11 @@ def spectrum(
             f"of {limit} for matrix shape {matrix.shape}."
         )
     if sparse.issparse(matrix):
+        # Stored sparse entries need not be unique: duplicate coordinates
+        # contribute *after summation* to the logical matrix's Frobenius norm.
+        # Canonicalize a copy so the input Artifact/matrix remains untouched.
+        matrix = matrix.tocsr(copy=True)
+        matrix.sum_duplicates()
         values = matrix.data
         total_energy = float(np.sum(np.square(values.astype(float)), dtype=float))
     else:
