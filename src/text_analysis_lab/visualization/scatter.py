@@ -26,12 +26,15 @@ def scatter(
     *,
     embeddings: BaseArtifact,
     color: str | None = None,
+    color_na_label: str | None = None,
     hover_fields: str | Sequence[str] | None = None,
     include_coordinates: bool = False,
     key_columns: ColumnSelect = True,
     data_columns: ColumnSelect = True,
     metadata_columns: ColumnSelect = False,
     metadata_mode: MetadataMode = "none",
+    with_artifacts: Any = None,
+    with_columns: ColumnSelect = True,
     where: str | None = None,
     order_by: str | Sequence[str] | None = None,
     positions: Sequence[int] | None = None,
@@ -51,6 +54,16 @@ def scatter(
     normal :meth:`BaseArtifact.query` vocabulary, including column selection,
     filtering, sampling, ordering, positions, and limits. The selected document
     keys are then used to fetch only the matching embedding rows.
+
+    Explicit ``with_artifacts`` sources contribute selected ``with_columns`` fields
+    for color and hover, using the calling artifact's key grain. Attached matrix
+    features can be selected but not used in SQL predicates.
+
+    For categorical ``color`` values, set ``color_na_label`` (for example,
+    ``"Other"``) to keep observations with missing colors visible as a separate
+    legend category. The default ``None`` retains Plotly's usual omission of
+    missing categorical color values. Numeric color scales are not converted
+    to categorical scales by this option.
 
     ``color`` and ``hover_fields`` must refer to fields that were selected by
     ``key_columns``, ``data_columns``, and ``metadata_columns``. Metadata therefore
@@ -100,6 +113,8 @@ def scatter(
         data_columns=data_columns,
         metadata_columns=metadata_columns,
         metadata_mode=metadata_mode,
+        with_artifacts=with_artifacts,
+        with_columns=with_columns,
         where=where,
         order_by=order_by,
         positions=positions,
@@ -126,6 +141,7 @@ def scatter(
             str(color),
             selected_columns=selected_columns,
             metadata_mode=metadata_mode,
+            with_artifacts=with_artifacts,
         )
     resolved_hover = [
         _resolve_selected_field(
@@ -133,6 +149,7 @@ def scatter(
             field,
             selected_columns=selected_columns,
             metadata_mode=metadata_mode,
+            with_artifacts=with_artifacts,
         )
         for field in _normalize_hover_fields(hover_fields)
     ]
@@ -189,6 +206,29 @@ def scatter(
         ).to_numpy()
     except (TypeError, ValueError) as exc:
         raise ArtifactError("scatter() embedding coordinates must be numeric.") from exc
+
+    if color_na_label is not None:
+        if not isinstance(color_na_label, str) or not color_na_label.strip():
+            raise ValueError("color_na_label must be a non-empty string or None.")
+        if resolved_color is None:
+            raise ValueError("color_na_label requires a selected color field.")
+        colors = plot_frame[resolved_color]
+        if pd.api.types.is_numeric_dtype(colors):
+            raise ValueError(
+                "color_na_label is for categorical color fields only; "
+                "numeric color scales are preserved."
+            )
+        missing = colors.isna()
+        if missing.any():
+            if colors[~missing].eq(color_na_label).any():
+                raise ValueError(
+                    f"color_na_label {color_na_label!r} collides with an "
+                    "existing color category; choose a distinct label."
+                )
+            # Only the transient plotting frame changes, not the artifact.
+            plot_frame[resolved_color] = colors.astype(object).where(
+                ~missing, color_na_label
+            )
 
     hover_data: dict[str, bool] = {
         _INTERNAL_X: include_coordinates,
@@ -269,8 +309,9 @@ def _resolve_selected_field(
     *,
     selected_columns: Sequence[str],
     metadata_mode: MetadataMode,
+    with_artifacts: Any = None,
 ) -> str:
-    """Resolve a key/data/metadata name, but only among selected output columns."""
+    """Resolve a selected key/data/metadata/attached field by canonical name."""
     name = str(field)
     if not name:
         raise ValueError("Scatter field names must be non-empty strings.")
@@ -278,11 +319,17 @@ def _resolve_selected_field(
     if name in selected:
         return name
 
-    info = artifact.query_columns(metadata_mode=metadata_mode)
+    info = (
+        artifact.query_columns(metadata_mode=metadata_mode)
+        if with_artifacts is None
+        else artifact.query_columns(
+            metadata_mode=metadata_mode, with_artifacts=with_artifacts,
+        )
+    )
     candidates = [
         column
         for column in info["columns"]
-        if str(column["namespace"]) in {"key", "data", "metadata"}
+        if str(column["namespace"]) in {"key", "data", "metadata", "with"}
         and str(column["output_name"]) in selected
         and name
         in {
@@ -303,7 +350,7 @@ def _resolve_selected_field(
 
     raise ArtifactError(
         f"Scatter field {name!r} was not selected. Choose it with key_columns, "
-        "data_columns, or metadata_columns (and metadata_mode for metadata) "
+        "data_columns, metadata_columns, or with_columns (and relevant sources) "
         f"before using it as color or hover data. Selected columns: {sorted(selected)}."
     )
 
