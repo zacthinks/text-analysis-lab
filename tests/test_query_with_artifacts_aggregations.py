@@ -162,3 +162,41 @@ def test_qualified_attached_collisions_use_narrow_output_names(tmp_path):
             )
     finally:
         project.close()
+
+
+def test_attached_metadata_collision_uses_projected_output_names(tmp_path):
+    project = teal.Project.create(tmp_path / "metadata_collision", name="metadata_collision")
+    try:
+        left = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2, 3]}),
+            "metadata": pd.DataFrame({"cohort": ["caller_A", "caller_B", "caller_C"]}),
+            "data": pd.DataFrame({"value": [100, 200, 300]}),
+        }], artifact_type="table", primary_key="doc_id")
+        right = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "metadata": pd.DataFrame({"cohort": ["right_A", "right_B"]}),
+            "data": pd.DataFrame({"value": [1, 2]}),
+        }], artifact_type="table", primary_key="doc_id")
+        fields = left.query_columns(metadata_mode="full", with_artifacts=right)["columns"]
+        rhs_cohort = next(col["qualified_name"] for col in fields
+                          if col["namespace"] == "with"
+                          and col["base_name"] == "cohort")
+        rhs_value = next(col["qualified_name"] for col in fields
+                         if col["namespace"] == "with"
+                         and col["base_name"] == "value")
+        hist = left.visualize.histogram(
+            rhs_value, by=rhs_cohort, with_artifacts=right,
+            bins=[0, 1.5, 3], batch_size=1, output="result",
+        )
+        assert hist.observed_count == 2
+        assert hist.missing_count == 1
+        out = hist.to_frame()
+        assert out.loc[out[rhs_cohort] == "right_A", "count"].tolist() == [1, 0]
+        assert out.loc[out[rhs_cohort] == "right_B", "count"].tolist() == [0, 1]
+        table = left.analysis.crosstab(
+            rhs_cohort, rhs_value, with_artifacts=right, batch_size=1,
+        )
+        assert table.loc["right_A", 1] == 1
+        assert table.loc["right_B", 2] == 1
+    finally:
+        project.close()
