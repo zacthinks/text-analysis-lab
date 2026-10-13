@@ -16,6 +16,26 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
+## [0.6.0] - 2026-10-12
+
+### Added
+
+- Optional multi-pass `BaseTranslator.translation_passes(...)` negotiation with a default of one, a nonterminal `complete_translation_pass(...)` callback, and `TranslationRequest.pass_index/pass_count` execution context.
+- Repeat traversal of one saved translation plan for sequential and supported parallel routes. Each pass must fully drain its canonical results and checkpoint before subsequent workers are created.
+- Durable pass/unit checkpoint reconciliation and terminal callback checkpointing for resumable repeated translation; compatibility with old one-pass operation descriptors.
+- Regression tests for pass barriers, repeated grouped/multi-source plans, existing one-pass behavior, interrupted resume, and multi-output publication.
+
+### Changed
+
+- Parallel repeated-pass execution creates new worker translators from the updated canonical state after each pass barrier.
+- The release changes the public translator execution protocol without changing default one-pass semantics or frozen scientific-state restrictions.
+
+### Notes
+
+- Repeated passes reread source artifacts and use the same stored source-unit assignments; no all-batches memory cache is introduced. A very large individual batch can still exceed memory.
+- Crash recovery does not provide transactional exactly-once side effects outside TeAL's checkpoint/writer guarantees.
+- `CountVectorizer` and `ArtifactCountVectorizer` have not yet been converted to a batched multi-pass fitting algorithm.
+
 ## [0.5.0] - 2026-10-12
 
 ### Added
