@@ -146,3 +146,201 @@ def test_attached_matrix_large_integer_precision(tmp_path, representation, has_m
             assert result["big_count"].dtype == np.dtype("int64")
     finally:
         project.close()
+
+
+@pytest.mark.parametrize("caller_type", ["dense_matrix", "sparse_matrix"])
+def test_sparse_caller_record_forms_preserve_implicit_zero(tmp_path, caller_type):
+    """Records and single agree with native/table scalar values for sparse zeros."""
+    project = teal.Project.create(tmp_path / "zero_records", name="zero_records")
+    try:
+        payload = np.asarray([[0, 5], [7, 0]], dtype="int64")
+        if caller_type == "sparse_matrix":
+            payload = sparse.csr_matrix(payload)
+        left = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {"values": payload, "columns": ["f0", "f1"]},
+        }], artifact_type=caller_type, primary_key="doc_id")
+        right = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {"values": sparse.csr_matrix([[0], [3]]),
+                     "columns": ["topic"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+
+        records = left.query(with_artifacts=right, with_columns="topic",
+                             form="records")
+        table = left.query(with_artifacts=right, with_columns="topic",
+                           form="table")
+        assert records[0]["f0"] == 0
+        assert records[1]["f1"] == 0
+        assert records[0]["topic"] == 0
+        assert records[0]["f0"] == table["f0"].iloc[0]
+        assert records[1]["f1"] == table["f1"].iloc[1]
+        single = left.query(with_artifacts=right, with_columns="topic",
+                            positions=[0], form="single")
+        assert single["f0"] == 0
+        assert single["topic"] == 0
+        batches = list(left.query(with_artifacts=right, with_columns="topic",
+                                  form="records", iter_batches=True, batch_size=1))
+        assert batches[0][0]["f0"] == 0
+        assert batches[1][0]["f1"] == 0
+    finally:
+        project.close()
+
+
+def test_attached_matrix_where_order_positions_and_no_hidden_handles(tmp_path):
+    project = teal.Project.create(tmp_path / "aligned", name="aligned")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3], "sort": [3, 1, 2]}),
+            primary_key="doc_id", data_fields="sort",
+        )
+        right = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "metadata": pd.DataFrame({"rank": [10, 20]}),
+            "data": {"values": sparse.csr_matrix([[0], [8]]),
+                     "columns": ["topic"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+        result = left.query(with_artifacts=right, with_columns="topic",
+                            where="rank >= 10", order_by="rank DESC",
+                            positions=[0, 1, 2], limit=1, key_columns=False,
+                            data_columns=False, form="table")
+        assert len(result) == 1
+        assert result["topic"].tolist() == [8]
+        assert not any(col.startswith("_teal_with_position") for col in result.columns)
+        hidden = left.query(with_artifacts=right, with_columns=False,
+                            data_columns=False, form="records")
+        assert all("topic" not in row for row in hidden)
+        assert len(hidden) == 3
+    finally:
+        project.close()
+
+
+
+def test_multiple_attached_matrices_qualified_collision_and_nulls(tmp_path):
+    """Distinct matrix owners sharing a feature name remain independently selectable."""
+    project = teal.Project.create(tmp_path / "collisions", name="collisions")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3]}), primary_key="doc_id"
+        )
+        dense = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {"values": np.asarray([[2.5], [float("nan")]]),
+                     "columns": ["score"]},
+        }], artifact_type="dense_matrix", primary_key="doc_id")
+        sparse_right = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [2, 3]}),
+            "data": {"values": sparse.csr_matrix([[0], [7]]),
+                     "columns": ["score"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+        choices = left.query_columns(with_artifacts=[dense, sparse_right])
+        fields = [col for col in choices["columns"]
+                  if col["namespace"] == "with" and col["base_name"] == "score"]
+        assert len(fields) == 2
+        names = [col["qualified_name"] for col in fields]
+        assert len(set(names)) == 2
+        with pytest.raises(QueryError, match="ambiguous"):
+            left.query(with_artifacts=[dense, sparse_right], with_columns="score")
+        result = left.query(
+            with_artifacts=[dense, sparse_right],
+            with_columns=names,
+            form="table",
+        )
+        dense_col, sparse_col = [col["output_name"] for col in fields]
+        assert result[dense_col].iloc[0] == 2.5
+        assert pd.isna(result[dense_col].iloc[1])  # Matched source NaN
+        assert pd.isna(result[dense_col].iloc[2])  # No right match
+        assert pd.isna(result[sparse_col].iloc[0])  # No right match
+        assert result[sparse_col].iloc[1] == 0      # Matched implicit sparse zero
+        assert result[sparse_col].iloc[2] == 7
+        assert not any(col.startswith("_teal_with_position")
+                       for col in result.columns)
+    finally:
+        project.close()
+
+
+
+def test_noncanonical_sparse_duplicates_match_every_output_and_reopen(tmp_path):
+    """Duplicate stored CSR coordinates sum in native/table/records/single."""
+    location = tmp_path / "noncanonical_project"
+    project = teal.Project.create(location, name="noncanonical")
+    artifact_id = None
+    right_id = None
+    try:
+        # The first feature has two stored entries in row zero: 1 + 2 = 3.
+        # Row one has an implicit zero in that feature.
+        raw = sparse.csr_matrix(
+            (np.asarray([1, 2, 4], dtype="int64"),
+             np.asarray([0, 0, 1]),
+             np.asarray([0, 2, 3])),
+            shape=(2, 2),
+        )
+        assert not raw.has_canonical_format
+        caller = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {"values": raw, "columns": ["feature0", "feature1"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+        attached = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {"values": raw, "columns": ["topic0", "topic1"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+        artifact_id, right_id = caller.artifact_id, attached.artifact_id
+
+        def check(left, right):
+            native = left.query(with_artifacts=right, with_columns="topic0",
+                                form="native")
+            assert native["matrix"].toarray().tolist() == [[3, 0], [0, 4]]
+            table = left.query(with_artifacts=right, with_columns="topic0",
+                               data_columns=["feature0"], form="table")
+            assert table["feature0"].tolist() == [3, 0]
+            assert table["topic0"].tolist() == [3, 0]
+            records = left.query(with_artifacts=right, with_columns="topic0",
+                                 data_columns=["feature0"], form="records")
+            assert [row["feature0"] for row in records] == [3, 0]
+            assert [row["topic0"] for row in records] == [3, 0]
+            single = left.query(with_artifacts=right, with_columns="topic0",
+                                data_columns=["feature0"], positions=[0],
+                                form="single")
+            assert single["feature0"] == 3
+            assert single["topic0"] == 3
+            batches = list(left.query(with_artifacts=right, with_columns="topic0",
+                                      data_columns=["feature0"], form="records",
+                                      iter_batches=True, batch_size=1))
+            assert [row[0]["feature0"] for row in batches] == [3, 0]
+            projected = left.query(with_artifacts=right, with_columns="topic1",
+                                   data_columns=["feature1"], form="table")
+            assert projected["feature1"].tolist() == [0, 4]
+            assert projected["topic1"].tolist() == [0, 4]
+
+        check(caller, attached)
+        assert not raw.has_canonical_format
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(location)
+    try:
+        check(reopened.get_artifact(artifact_id), reopened.get_artifact(right_id))
+    finally:
+        reopened.close()
+
+
+def test_noncanonical_sparse_join_missing_still_null(tmp_path):
+    project = teal.Project.create(tmp_path / "missing_duplicate", name="missing")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3]}), primary_key="doc_id"
+        )
+        raw = sparse.csr_matrix(
+            (np.asarray([1, 2], dtype="int64"), np.asarray([0, 0]),
+             np.asarray([0, 2])), shape=(1, 1),
+        )
+        right = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1]}),
+            "data": {"values": raw, "columns": ["topic"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+        result = left.query(with_artifacts=right, with_columns="topic", form="table")
+        assert result["topic"].iloc[0] == 3
+        assert pd.isna(result["topic"].iloc[1])
+        assert pd.isna(result["topic"].iloc[2])
+    finally:
+        project.close()

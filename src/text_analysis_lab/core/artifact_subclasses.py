@@ -689,6 +689,20 @@ class _MatrixArtifact(BaseArtifact):
             column_indices=physical_indices,
         )
 
+    @staticmethod
+    def _canonical_sparse_for_tabular_output(
+        matrix: scipy_sparse.spmatrix,
+    ) -> scipy_sparse.csr_matrix:
+        """Sum duplicate CSR coordinates for scalar outputs without changing native data.
+
+        SciPy sparse matrices may validly store duplicate coordinates. Native
+        arithmetic sums them, but Pandas sparse conversion and dict construction
+        can otherwise report an arbitrary stored value instead of the sum.
+        """
+        csr = matrix.tocsr(copy=True)
+        csr.sum_duplicates()
+        return csr
+
     def _data_frame_for_positions(
         self,
         positions: Sequence[int],
@@ -698,8 +712,9 @@ class _MatrixArtifact(BaseArtifact):
         selected, _ = self._physical_column_indices(data_columns)
         matrix = self._data_native_for_positions(positions, data_columns=data_columns)
         if self.artifact_type == ArtifactType.SPARSE_MATRIX:
+            canonical = self._canonical_sparse_for_tabular_output(matrix)
             return pd.DataFrame.sparse.from_spmatrix(
-                matrix,
+                canonical,
                 columns=selected,
             ).reset_index(drop=True)
         return pd.DataFrame(matrix, columns=selected).reset_index(drop=True)
@@ -713,18 +728,25 @@ class _MatrixArtifact(BaseArtifact):
         selected, _ = self._physical_column_indices(data_columns)
         matrix = self._data_native_for_positions(positions, data_columns=data_columns)
         if self.artifact_type == ArtifactType.SPARSE_MATRIX:
-            csr = matrix.tocsr()
+            csr = self._canonical_sparse_for_tabular_output(matrix)
             records: list[dict[str, Any]] = []
+            # Records are dense scalar projections: a stored sparse zero and
+            # an implicit sparse zero have identical numerical meaning. The
+            # previous nonzero-only dictionaries were subsequently merged
+            # with .get(), turning implicit zeros into None.
+            zero = csr.dtype.type(0).item()
             for row_index in range(int(csr.shape[0])):
                 row = csr.getrow(row_index)
-                records.append(
-                    {
-                        selected[int(col_index)]: (
-                            value.item() if hasattr(value, "item") else value
-                        )
-                        for col_index, value in zip(row.indices, row.data, strict=True)
-                    }
-                )
+                stored = {
+                    int(col_index): (
+                        value.item() if hasattr(value, "item") else value
+                    )
+                    for col_index, value in zip(row.indices, row.data, strict=True)
+                }
+                records.append({
+                    name: stored.get(index, zero)
+                    for index, name in enumerate(selected)
+                })
             return records
         dense = np.asarray(matrix)
         return [
