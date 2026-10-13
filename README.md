@@ -1,14 +1,12 @@
 # Text Analysis Lab (TeAL)
 
-**Current development release: 0.5.0 · Python 3.11+ · MIT**
+**Python 3.11+ · MIT License**
 
 Text Analysis Lab (TeAL) is an end-to-end project environment for computer-assisted text analysis. It is designed to support transparent, intentional, rigorous, and reproducible multi-stage work: importing and restructuring corpora, building representations, exploring patterns, developing and validating measures, and carrying results into downstream analysis while preserving the relationships among those stages.
 
 A TeAL `Project` owns durable, keyed `Artifacts` and records the lineage, operations, operator state, metadata, and methodological notes that connect them. The aim is to make complex text-analysis workflows easier to inspect, extend, rerun, and report without manually reconstructing how each intermediate object was produced.
 
 For the broader motivation, architecture, and current project overview, see the [TeAL website](https://zacthinks.github.io/teal/).
-
-> **Development status:** TeAL is still pre-1.0. The public API is usable and broadly tested, but interfaces may continue to change.
 
 ## What TeAL supports
 
@@ -36,7 +34,7 @@ TeAL keeps corpus-scale transformations inside the project whenever possible. Sm
 
 ## Installation
 
-TeAL is currently installed directly from GitHub.
+Install TeAL directly from GitHub.
 
 ### With `uv`
 
@@ -131,27 +129,6 @@ project = teal.Project.open("demo.teal")
 documents = project.get_artifact("documents")
 ```
 
-## Complete-group translation batching (v0.5.0)
-
-`Project.translate()` can batch complete groups identified by **one** existing primary-key level instead of a fixed number of physical source rows:
-
-```python
-# Example: token_table.primary_key is
-# ("collection_id", "document_id", "token_id")
-results = project.translate(
-    my_translator,  # a translator that accepts batched source input
-    token_table,
-    batch_size=10,
-    batch_by="document_id",  # ten complete document-key groups per batch
-)
-```
-
-`batch_by="document_id"` selects the full key prefix `("collection_id", "document_id")` internally. TeAL does not interpret key names or infer a scientifically meaningful aggregation level. The caller chooses the **execution** batch level; a translator may declare the finest permissible level with `SourceRequest(min_batch_by="document_id")`, which TeAL validates without silently promoting finer requests. If `batch_by` is omitted, existing ordinary row batching remains the default.
-
-Group batches follow first-occurrence order across groups, then original artifact row order within each group. This can differ from the overall physical row order for interleaved groups. Grouped requests currently support **one source** with `SourceRequest(mode="batches")`, not `mode="full_artifact"`. If a translator asks for `form="single"`, grouped batching is accepted only at the finest key with one row per batch, preventing silent row loss. Entire groups are kept together, so extremely large individual groups can still require substantial memory.
-
-**This does not make `ArtifactCountVectorizer` two-pass or batched:** its global vocabulary fit remains a separate future refactor. For examples and translator-author guidance, see [Hierarchy-aware batching](docs/hierarchy-aware-batching.md).
-
 ## Core project model
 
 A TeAL project is a graph, not a single linear pipeline.
@@ -183,26 +160,7 @@ result = outputs["output"]
 
 Built-in translators include text cleaning and diagnostics, spaCy decomposition, count vectorization, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, Word2Vec, sentence/contextual transformer encoding, dictionary coding, fitted prediction, linguistic models, function mapping, and external API/model paths.
 
-## Clustering numeric matrix artifacts
-
-TeAL supports ten unsupervised clustering translators, including KMeans,
-MiniBatchKMeans, KMedoids, SphericalKMeans, DBSCAN, HDBSCAN, OPTICS,
-AgglomerativeClustering, GaussianMixture and SpectralClustering.
-Their output Artifacts preserve the input primary keys and lineage.
-Most emit sparse hard-membership matrices; GaussianMixture emits dense
-posterior responsibilities instead. Density noise is an all-zero row,
-never an invented noise cluster.
-
-Clustering fits consume the full researcher-chosen input artifact, not an
-automatically sampled subset. Reusable models (KMeans, MiniBatchKMeans,
-KMedoids, SphericalKMeans and GaussianMixture) can apply their frozen
-state to new compatible rows in execution batches. DBSCAN, HDBSCAN,
-OPTICS, agglomerative and spectral clustering are fit-only.
-KMedoids uses an **optional** GPL-3.0-or-later Rust FasterPAM dependency,
-installed with `text-analysis-lab[kmedoids]`.
-For accepted source types, metric constraints, memory costs, and
-scientific/backend provenance see [clustering documentation](docs/clustering.md).
-
+Translation supports ordinary row batches, complete primary-key groups, and opt-in repeated passes over a saved input plan.
 
 ## Project Center
 
@@ -253,15 +211,9 @@ Analyses performed outside TeAL can still be registered as project Artifacts.
 
 Use `Project.from_keyed_frame(...)` when external measurements attach new columns to an existing key universe. Use `Project.register_external(...)` when you need more explicit control over provenance and structural basis.
 
-## Upgrading older projects
-
-Projects created before TeAL's strict frozen-operator format may need an explicit compatibility upgrade before their historical transformations can participate in current Pipeline replay. TeAL only upgrades operators it can prove are exact migrations and leaves ambiguous historical state untouched.
-
-Use `project.upgrade_legacy_operators(dry_run=True)` to inspect a project before applying changes. See [docs/UPGRADING.md](docs/UPGRADING.md) for the full procedure and guarantees.
-
 ## Development and testing
 
-For contributors working on TeAL itself:
+To contribute or run the test suite:
 
 ```bash
 git clone https://github.com/zacthinks/text-analysis-lab.git
@@ -270,6 +222,8 @@ uv sync --all-extras
 uv run ruff check .
 uv run pytest -q -rs
 ```
+
+For release history and version-specific changes, see the [changelog](CHANGELOG.md).
 
 ## License
 
