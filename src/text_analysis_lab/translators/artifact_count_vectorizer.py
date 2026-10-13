@@ -70,7 +70,7 @@ class ArtifactCountVectorizer(BaseTranslator):
         max_features: int | None = None,
         binary: bool = False,
         drop_empty: bool = True,
-        ngram_separator: str = " ",
+        ngram_separator: str = "_",
         vocabulary: Mapping[str, int] | None = None,
         operator_id: str | None = None,
     ) -> None:
@@ -277,6 +277,10 @@ class ArtifactCountVectorizer(BaseTranslator):
             drop_empty=self.drop_empty,
             ngram_separator=self.ngram_separator,
         )
+        # _build_feature_events catches collisions inside a single packet.
+        # This additionally rejects ambiguous labels across *different*
+        # grouped batches, including in fitted one-pass translations.
+        self._register_feature_labels(events)
 
         if mode == "fit_translate":
             if request.pass_count > 1:
@@ -373,6 +377,22 @@ class ArtifactCountVectorizer(BaseTranslator):
         _ = mode, request
         return None
 
+    def _register_feature_labels(self, events: pd.DataFrame) -> None:
+        if events.empty:
+            return
+        for key, label in events[
+            ["_feature_key", "_feature_label"]
+        ].drop_duplicates().itertuples(index=False, name=None):
+            key, label = str(key), str(label)
+            previous = self._fit_labels.get(label)
+            if previous is not None and previous != key:
+                raise ArtifactError(
+                    "ArtifactCountVectorizer n-gram labels are ambiguous because atomic "
+                    f"field values contain the display separator {self.ngram_separator!r}. "
+                    f"Example(s): {[label]}. Choose a different ngram_separator."
+                )
+            self._fit_labels[label] = key
+
     def _accumulate_fit_events(
         self, group_keys: pd.DataFrame, events: pd.DataFrame,
     ) -> None:
@@ -387,16 +407,7 @@ class ArtifactCountVectorizer(BaseTranslator):
             ).size().reset_index(name="term_count")
         )
         for _, key, label, count in counts.itertuples(index=False, name=None):
-            key, label = str(key), str(label)
-            previous = self._fit_labels.get(label)
-            if previous is not None and previous != key:
-                raise ArtifactError(
-                    "ArtifactCountVectorizer n-gram labels are ambiguous because atomic "
-                    f"field values contain the display separator {self.ngram_separator!r}. "
-                    f"Example(s): {[label]}. Choose a different ngram_separator."
-                )
-            self._fit_labels[label] = key
-            pair = (key, label)
+            pair = (str(key), str(label))
             self._fit_tf[pair] += int(count)
             self._fit_df[pair] += 1
 
@@ -468,6 +479,11 @@ class ArtifactCountVectorizer(BaseTranslator):
         state["operator_id"] = operator_id
         state["assets"] = dict(self.save_assets(intermediate_dir))
         state["fit_group_count"] = self._fit_group_count
+        # When fitting, the statistics file already encodes label identities.
+        # For fitted batched reuse, retain the same cross-batch collision
+        # detection across interrupted/resumed operations.
+        if self._fit_labels and not self._fit_tf:
+            state["observed_feature_labels"] = self._fit_labels
         if self._fit_tf:
             stats_file = "fit_statistics.parquet"
             pd.DataFrame(
@@ -506,6 +522,10 @@ class ArtifactCountVectorizer(BaseTranslator):
             )
         obj.load_assets(intermediate_dir, assets)
         obj._fit_group_count = int(state.get("fit_group_count", 0))
+        obj._fit_labels = {
+            str(label): str(key)
+            for label, key in state.get("observed_feature_labels", {}).items()
+        }
         stats_file = state.get("fit_stats_file")
         if stats_file:
             stats = pd.read_parquet(intermediate_dir / str(stats_file))
