@@ -178,5 +178,5 @@ def test_scree_without_plotly_reports_optional_dependency(monkeypatch):
         "cumulative_energy_ratio": [0.5],
     })
     monkeypatch.setattr(builtins, "__import__", missing_plotly)
-    with pytest.raises(MissingDependencyError, match="plotly"):
+    with pytest.raises(MissingDependencyError, match="Plotly"):
         visualization.scree(frame)
