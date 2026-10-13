@@ -81,6 +81,8 @@ class SourceRequest:
     form: QueryForm = "native"
     metadata_mode: MetadataMode = "none"
     include_position: bool = False
+    # Append new fields to preserve legacy positional SourceRequest calls.
+    min_batch_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,8 @@ class TranslationRequest:
     batch_size: int | None = None
     max_outstanding_units: int | None = None
     params: Mapping[str, Any] = field(default_factory=dict)
+    # Append after legacy fields to preserve positional TranslationRequest calls.
+    batch_by: str | None = None
 
 
 @dataclass(frozen=True)

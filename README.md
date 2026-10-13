@@ -1,6 +1,6 @@
 # Text Analysis Lab (TeAL)
 
-**Current development release: 0.4.0 · Python 3.11+ · MIT**
+**Current development release: 0.5.0 · Python 3.11+ · MIT**
 
 Text Analysis Lab (TeAL) is an end-to-end project environment for computer-assisted text analysis. It is designed to support transparent, intentional, rigorous, and reproducible multi-stage work: importing and restructuring corpora, building representations, exploring patterns, developing and validating measures, and carrying results into downstream analysis while preserving the relationships among those stages.
 
@@ -130,6 +130,27 @@ Artifacts are written directly into the project. Reopen the project later and re
 project = teal.Project.open("demo.teal")
 documents = project.get_artifact("documents")
 ```
+
+## Complete-group translation batching (v0.5.0)
+
+`Project.translate()` can batch complete groups identified by **one** existing primary-key level instead of a fixed number of physical source rows:
+
+```python
+# Example: token_table.primary_key is
+# ("collection_id", "document_id", "token_id")
+results = project.translate(
+    my_translator,  # a translator that accepts batched source input
+    token_table,
+    batch_size=10,
+    batch_by="document_id",  # ten complete document-key groups per batch
+)
+```
+
+`batch_by="document_id"` selects the full key prefix `("collection_id", "document_id")` internally. TeAL does not interpret key names or infer a scientifically meaningful aggregation level. The caller chooses the **execution** batch level; a translator may declare the finest permissible level with `SourceRequest(min_batch_by="document_id")`, which TeAL validates without silently promoting finer requests. If `batch_by` is omitted, existing ordinary row batching remains the default.
+
+Group batches follow first-occurrence order across groups, then original artifact row order within each group. This can differ from the overall physical row order for interleaved groups. Grouped requests currently support **one source** with `SourceRequest(mode="batches")`, not `mode="full_artifact"`. If a translator asks for `form="single"`, grouped batching is accepted only at the finest key with one row per batch, preventing silent row loss. Entire groups are kept together, so extremely large individual groups can still require substantial memory.
+
+**This does not make `ArtifactCountVectorizer` two-pass or batched:** its global vocabulary fit remains a separate future refactor. For examples and translator-author guidance, see [Hierarchy-aware batching](docs/hierarchy-aware-batching.md).
 
 ## Core project model
 

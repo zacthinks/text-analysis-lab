@@ -106,6 +106,7 @@ class _SourcePlan:
     source_batch_count: int
     start_position: int | None = None
     stop_position: int | None = None
+    group_keys_json: str | None = None
 
 
 @dataclass(frozen=True)
@@ -182,11 +183,15 @@ class _ExecutionPlan:
                     source_batch_count INTEGER NOT NULL,
                     start_position INTEGER,
                     stop_position INTEGER,
+                    group_keys_json TEXT,
                     PRIMARY KEY (unit_index, source_label),
                     FOREIGN KEY (unit_index) REFERENCES plan_units(unit_index)
                 );
                 """
             )
+            columns = {row["name"] for row in con.execute("PRAGMA table_info(plan_sources)")}
+            if "group_keys_json" not in columns:
+                con.execute("ALTER TABLE plan_sources ADD COLUMN group_keys_json TEXT")
 
     def initialize(self, units: Iterable[_PlanUnit]) -> None:
         with self.con as con:
@@ -210,8 +215,9 @@ class _ExecutionPlan:
                             source_batch_index,
                             source_batch_count,
                             start_position,
-                            stop_position
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            stop_position,
+                            group_keys_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             int(unit.unit_index),
@@ -222,6 +228,7 @@ class _ExecutionPlan:
                             source.source_batch_count,
                             source.start_position,
                             source.stop_position,
+                            source.group_keys_json,
                         ),
                     )
 
@@ -281,6 +288,7 @@ class _ExecutionPlan:
                 stop_position=(
                     None if row["stop_position"] is None else int(row["stop_position"])
                 ),
+                group_keys_json=row["group_keys_json"],
             )
             for row in rows
         }
@@ -340,6 +348,7 @@ def translate(
     *,
     workers: int = 1,
     batch_size: int | None = None,
+    batch_by: str | None = None,
     max_outstanding_units: int | None = None,
     memo: str | None = None,
     alias: AliasSpec = None,
@@ -359,6 +368,7 @@ def translate(
         TranslationRequest(
             workers=workers,
             batch_size=batch_size,
+            batch_by=batch_by,
             max_outstanding_units=max_outstanding_units,
             params=operation_params,
         )
@@ -372,6 +382,7 @@ def translate(
         )
     )
     _validate_source_bindings(source_bindings, input_request)
+    _validate_batch_hierarchy(source_bindings, input_request, translation_request)
     output_specs = dict(
         translator.output_specs_in_dependency_order(
             sources=source_bindings,
@@ -430,6 +441,7 @@ def translate(
             runtime=runtime,
             sources=source_bindings,
             input_request=input_request,
+            request=translation_request,
         )
         translator.initialize_translation(
             mode=mode,
@@ -518,6 +530,7 @@ def resume_translate(
         TranslationRequest(
             workers=request_data.get("workers", 1),
             batch_size=request_data.get("batch_size"),
+            batch_by=request_data.get("batch_by"),
             max_outstanding_units=request_data.get("max_outstanding_units"),
             params=restored_params,
         )
@@ -612,6 +625,7 @@ def _validate_translation_request(request: TranslationRequest) -> TranslationReq
     return TranslationRequest(
         workers=_validate_workers(request.workers),
         batch_size=_validate_batch_size(request.batch_size),
+        batch_by=_validate_batch_by(request.batch_by),
         max_outstanding_units=_validate_max_outstanding_units(
             request.max_outstanding_units
         ),
@@ -633,6 +647,75 @@ def _validate_batch_size(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise OperatorError("batch_size must be a positive integer or None.")
     return value
+
+
+def _validate_batch_by(value: Any) -> str | None:
+    if value is not None and (not isinstance(value, str) or not value):
+        raise OperatorError("batch_by must be a non-empty key name or None.")
+    return value
+
+
+def _batch_prefix(source: BaseArtifact, level: str) -> tuple[str, ...]:
+    keys = tuple(str(k) for k in source.primary_key)
+    if level not in keys:
+        raise OperatorError(
+            f"batch_by level {level!r} is not in source primary key {keys}."
+        )
+    return keys[:keys.index(level) + 1]
+
+
+def _validate_batch_hierarchy(
+    sources: Mapping[str, BaseArtifact],
+    input_request: InputRequest,
+    request: TranslationRequest,
+) -> None:
+    if request.batch_by is not None and len(input_request) != 1:
+        raise OperatorError("Grouped batch_by currently requires exactly one source.")
+    for label, spec in input_request.items():
+        source = sources[label]
+        if spec.min_batch_by is not None:
+            required = _batch_prefix(source, spec.min_batch_by)
+            if spec.mode == "batches":
+                if request.batch_by is None:
+                    if required != tuple(str(k) for k in source.primary_key):
+                        raise OperatorError(
+                            f"Source {label!r} requires batch_by={spec.min_batch_by!r}; "
+                            "ordinary row batching cannot preserve the required group."
+                        )
+                else:
+                    selected = _batch_prefix(source, request.batch_by)
+                    if required[:len(selected)] != selected:
+                        raise OperatorError(
+                            f"batch_by={request.batch_by!r} is finer than required "
+                            f"min_batch_by={spec.min_batch_by!r}."
+                        )
+        if request.batch_by is not None:
+            if spec.mode != "batches":
+                raise OperatorError(
+                    f"batch_by={request.batch_by!r} cannot be honored for "
+                    f"source {label!r} requesting full_artifact."
+                )
+            selected = _batch_prefix(source, request.batch_by)
+            if spec.form == "single":
+                effective_size = (
+                    request.batch_size
+                    if request.batch_size is not None
+                    else spec.batch_size
+                )
+                # A full primary key uniquely identifies one source row. Any
+                # coarser key or more than one group may produce a multi-row
+                # packet, and artifact.query(form="single") would drop rows.
+                if (
+                    selected != tuple(str(k) for k in source.primary_key)
+                    or effective_size != 1
+                ):
+                    raise OperatorError(
+                        f"Source {label!r} requests form='single', but "
+                        f"batch_by={request.batch_by!r} with "
+                        f"batch_size={effective_size!r} could contain multiple "
+                        "rows. Grouped form='single' requires batch_by at the "
+                        "finest primary-key level and an effective batch_size=1."
+                    )
 
 
 def _validate_max_outstanding_units(value: Any) -> int | None:
@@ -658,7 +741,9 @@ def _validate_run_route(route: str) -> RunRoute:
 def _warn_batch_size_adjustments(
     request: TranslationRequest, input_request: InputRequest
 ) -> None:
-    if request.batch_size is None:
+    if request.batch_size is None or request.batch_by is not None:
+        # With grouped batching the caller's requested count takes precedence:
+        # the translator's row-batch preference is not the effective group size.
         return
 
     batched = {
@@ -767,6 +852,10 @@ def _validate_source_request(label: str, request: SourceRequest) -> None:
     _validate_column_select(label, "key", request.columns.keys)
     _validate_column_select(label, "data", request.columns.data)
     _validate_column_select(label, "metadata", request.columns.metadata)
+    if request.min_batch_by is not None and (
+        not isinstance(request.min_batch_by, str) or not request.min_batch_by
+    ):
+        raise OperatorError("min_batch_by must be a non-empty key name or None.")
     if not isinstance(request.include_position, bool):
         raise OperatorError(
             f"Input source {label!r} include_position must be a boolean."
@@ -936,16 +1025,37 @@ def _create_execution_plan(
     runtime: _Runtime,
     sources: Mapping[str, BaseArtifact],
     input_request: InputRequest,
+    request: TranslationRequest,
 ) -> _ExecutionPlan:
     plan = _ExecutionPlan(runtime.operation_dir)
-    units = tuple(_build_plan_units(sources, input_request))
+    units = _build_plan_units(sources, input_request, request)
     plan.initialize(units)
     return plan
 
 
 def _build_plan_units(
-    sources: Mapping[str, BaseArtifact], input_request: InputRequest
+    sources: Mapping[str, BaseArtifact],
+    input_request: InputRequest,
+    request: TranslationRequest,
 ) -> Iterable[_PlanUnit]:
+    if request.batch_by is not None:
+        # Grouped input is single-source by contract. Yield each plan unit to
+        # SQLite as it is discovered; never retain every group in Python.
+        label, source_request = next(iter(input_request.items()))
+        artifact = sources[label]
+        if source_request.batch_size is None and request.batch_size is None:
+            raise OperatorError("Grouped batching requires an effective batch_size.")
+        for i, plan_source in enumerate(
+            _iter_group_source_plans(
+                artifact=artifact,
+                label=label,
+                level=request.batch_by,
+                batch_size=int(request.batch_size or source_request.batch_size),
+            )
+        ):
+            yield _PlanUnit(unit_index=i, sources={label: plan_source})
+        return
+
     planned_sources: dict[str, list[_SourcePlan]] = {}
 
     for label, source_request in input_request.items():
@@ -989,6 +1099,61 @@ def _build_plan_units(
         }
         if unit_sources:
             yield _PlanUnit(unit_index=unit_index, sources=unit_sources)
+
+
+def _iter_group_source_plans(
+    *,
+    artifact: BaseArtifact,
+    label: str,
+    level: str,
+    batch_size: int,
+) -> Iterable[_SourcePlan]:
+    """Stream complete key-group assignments into durable plan units.
+
+    Only the current batch of key tuples is held in Python. SQLite receives
+    each generated unit immediately through _ExecutionPlan.initialize().
+    """
+    from text_analysis_lab.core.utils import quote_identifier
+
+    prefix = _batch_prefix(artifact, level)
+    view = artifact.project.query.build_artifact_view_sql(
+        artifact, metadata_mode="none", include_data=False
+    )
+    columns = ", ".join(f"base.{quote_identifier(k)}" for k in prefix)
+    # Synthetic names must not collide with *any* opaque primary-key label.
+    first_alias = "__teal_group_first_position"
+    while first_alias in artifact.primary_key:
+        first_alias += "_"
+    grouped_sql = (
+        f"SELECT {columns}, MIN(base._position) AS {quote_identifier(first_alias)} "
+        f"FROM ({view.sql}) AS base GROUP BY {columns}"
+    )
+    con = artifact.project.query.con
+    n_groups = int(
+        con.execute(f"SELECT COUNT(*) FROM ({grouped_sql}) AS grouped").fetchone()[0]
+    )
+    batch_count = (n_groups + batch_size - 1) // batch_size
+    projected = ", ".join(f"grouped.{quote_identifier(k)}" for k in prefix)
+    cursor = con.execute(
+        f"SELECT {projected} FROM ({grouped_sql}) AS grouped "
+        f"ORDER BY grouped.{quote_identifier(first_alias)}"
+    )
+    for i in range(batch_count):
+        rows = cursor.fetchmany(batch_size)
+        if not rows:
+            raise OperatorError("Grouped source plan ended before expected group count.")
+        yield _SourcePlan(
+            source_label=label,
+            artifact_id=artifact.artifact_id,
+            mode="batches",
+            source_batch_index=i,
+            source_batch_count=batch_count,
+            group_keys_json=json.dumps(
+                [list(map(int, row[:len(prefix)])) for row in rows]
+            ),
+        )
+    if cursor.fetchone() is not None:
+        raise OperatorError("Grouped source plan exceeded expected group count.")
 
 
 def _position_slices_for_source(
@@ -1036,7 +1201,11 @@ def _materialize_source_plan(
     artifact: BaseArtifact,
     request: SourceRequest,
 ) -> InputBatch:
-    if source_plan.mode == "full_artifact":
+    if source_plan.group_keys_json is not None:
+        data = _query_group_source(
+            artifact, request, json.loads(source_plan.group_keys_json)
+        )
+    elif source_plan.mode == "full_artifact":
         data = _query_source(artifact, request, where=None)
     else:
         if source_plan.start_position is None or source_plan.stop_position is None:
@@ -1073,6 +1242,54 @@ def _position_range_where(*, start: int, stop: int) -> str:
             f"Invalid planned position slice: start={start_value}, stop={stop_value}."
         )
     return f"_position >= {start_value} AND _position < {stop_value}"
+
+
+def _query_group_source(
+    artifact: BaseArtifact,
+    request: SourceRequest,
+    groups: list[list[int]],
+) -> Any:
+    from text_analysis_lab.core.utils import quote_identifier
+
+    if not groups:
+        raise OperatorError("Grouped batch has no groups.")
+    keys = list(artifact.primary_key[:len(groups[0])])
+    if any(len(group) != len(keys) for group in groups):
+        raise OperatorError("Inconsistent grouped batch key widths.")
+    values = ", ".join(
+        "(" + ", ".join(str(int(v)) for v in group) + f", {i})"
+        for i, group in enumerate(groups)
+    )
+    # Assign private value-table aliases unrelated to user primary-key names.
+    internal = [f"__teal_key_{i}" for i in range(len(keys))]
+    ordinal = "__teal_batch_ordinal"
+    while ordinal in internal:
+        ordinal += "_"
+    names = ", ".join([*(quote_identifier(k) for k in internal), quote_identifier(ordinal)])
+    join = " AND ".join(
+        f"base.{quote_identifier(k)} = g.{quote_identifier(alias)}"
+        for k, alias in zip(keys, internal)
+    )
+    order = "base._position"
+    view = artifact.project.query.build_artifact_view_sql(
+        artifact, metadata_mode="none", include_data=False
+    )
+    sql = (
+        f"SELECT base._position FROM ({view.sql}) AS base "
+        f"JOIN (VALUES {values}) AS g({names}) ON {join} "
+        f"ORDER BY g.{quote_identifier(ordinal)}, {order}"
+    )
+    positions = [int(row[0]) for row in artifact.project.query.con.execute(sql).fetchall()]
+    return artifact.query(
+        key_columns=request.columns.keys,
+        data_columns=request.columns.data,
+        metadata_columns=request.columns.metadata,
+        metadata_mode=request.metadata_mode,
+        positions=positions,
+        form=request.form,
+        iter_batches=False,
+        include_position=request.include_position,
+    )
 
 
 def _query_source(
@@ -2132,6 +2349,7 @@ def _save_operation_metadata(
         "request": {
             "workers": request.workers,
             "batch_size": request.batch_size,
+            "batch_by": request.batch_by,
             "max_outstanding_units": request.max_outstanding_units,
             "params": dict(serialized_operation_params),
         },
@@ -2251,6 +2469,7 @@ def _source_request_to_dict(request: SourceRequest) -> dict[str, Any]:
         "mode": request.mode,
         "columns": _column_request_to_dict(request.columns),
         "batch_size": request.batch_size,
+        "min_batch_by": request.min_batch_by,
         "form": request.form,
         "metadata_mode": request.metadata_mode,
         "include_position": request.include_position,
@@ -2264,6 +2483,7 @@ def _source_request_from_dict(data: Mapping[str, Any]) -> SourceRequest:
         mode=data["mode"],
         columns=_column_request_from_dict(data["columns"]),
         batch_size=cast(int | None, raw_batch_size),
+        min_batch_by=data.get("min_batch_by"),
         form=data["form"],
         metadata_mode=data["metadata_mode"],
         include_position=bool(data["include_position"]),

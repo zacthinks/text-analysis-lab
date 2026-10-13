@@ -16,6 +16,29 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
+## [0.5.0] - 2026-10-12
+
+### Added
+
+- Optional `Project.translate(..., batch_by="<primary-key level>", batch_size=N)` for complete hierarchical key-group batching. `batch_by` names one actual primary-key column; TeAL resolves the inclusive prefix so repeated child IDs under different parent keys remain separate.
+- Optional `SourceRequest.min_batch_by` for a translator to declare the finest acceptable complete-group batch level. Requests finer than the requirement are rejected rather than silently changing the caller's batching policy.
+
+### Changed
+
+- Grouped translation plans persist chosen key groups and processing order in the operation's SQLite execution plan for durable retry and resume. Legacy row-based batching remains the default, with unchanged positional request constructors.
+- Grouped batches follow first-seen group order and original source position *within* each group. Rows may therefore appear in a different physical order from interleaved row batching.
+
+### Fixed
+
+- Reject grouped `form="single"` requests that could discard records. Only one full-primary-key row per grouped batch is accepted with that form.
+- Preserve grouped execution with arbitrary valid key names that overlap SQL planning labels, and migrate previously persisted positional plan tables.
+
+### Notes
+
+- The first grouped batching implementation applies to single-source `mode="batches"` requests. Translators requesting `mode="full_artifact"` still use their existing behavior; grouping requests against them are rejected. A single exceptionally large group may still require substantial memory.
+- `ArtifactCountVectorizer` does **not** yet fit or transform in multiple batches; its two-pass refactor is deferred.
+- This is a focused **minor release** under TeAL's existing policy because it adds a new optional public execution mode and translator constraint; release numbers indicate API evolution, not the magnitude of the implementation. No existing translator scientific semantics or positional request constructors are intentionally changed.
+
 ## [0.4.0] - 2026-10-11
 
 ### Added
