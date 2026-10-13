@@ -158,9 +158,209 @@ result = outputs["output"]
 
 `project.translate(...)` always returns a mapping from output label to Artifact, including for single-output translators.
 
-Built-in translators include text cleaning and diagnostics, spaCy decomposition, count vectorization, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, Word2Vec, sentence/contextual transformer encoding, dictionary coding, fitted prediction, linguistic models, function mapping, and external API/model paths.
+Translators span preprocessing, linguistic processing, representations, statistical models, and custom operations. Browse the built-in classes by task (some appear in more than one family):
+
+<details>
+<summary>Preprocessing</summary>
+
+- `TextFileExtractor`
+- `PdfTextExtractor`
+- `RegexCleaner`
+- `DelimiterDecomposer`
+- `TextLength`
+- `FunctionMapper`
+
+</details>
+
+<details>
+<summary>NLP</summary>
+
+- `SpacyTranslator`
+- `CoreferenceResolver`
+- `SemanticRoleLabeler`
+- `SemanticRoleHeadResolver`
+- `WordSenseDisambiguator`
+- `SenseSelector`
+
+</details>
+
+<details>
+<summary>Bag of Words</summary>
+
+- `CountVectorizer`
+- `ArtifactCountVectorizer`
+- `TfidfTransformer`
+
+</details>
+
+<details>
+<summary>Dictionaries</summary>
+
+- `DictionaryTranslator`
+
+</details>
+
+<details>
+<summary>Embeddings</summary>
+
+- `SentenceTransformerEncoder`
+- `ContextualTransformer`
+- `Word2Vec`
+- `EmbeddingLookup`
+
+</details>
+
+<details>
+<summary>Matrix Utilities</summary>
+
+- `MatrixNormalizer`
+- `MatrixRowAggregator`
+- `MatrixTranspose`
+- `FeatureTrimmer`
+- `TfidfTransformer`
+
+</details>
+
+<details>
+<summary>Dimensionality Reduction</summary>
+
+- `SVD`
+- `UMAP`
+
+</details>
+
+<details>
+<summary>Topic Modeling & Latent Semantics</summary>
+
+- `LDA`
+- `SVD`
+
+</details>
+
+<details>
+<summary>Clustering</summary>
+
+- `KMeans`
+- `MiniBatchKMeans`
+- `KMedoids`
+- `SphericalKMeans`
+- `DBSCAN`
+- `HDBSCAN`
+- `OPTICS`
+- `AgglomerativeClustering`
+- `SpectralClustering`
+- `GaussianMixture`
+
+</details>
+
+<details>
+<summary>Classification & Prediction</summary>
+
+- `FittedPredictor`
+- `GeCoPredictor`
+
+</details>
+
+<details>
+<summary>LLMs</summary>
+
+- `OpenAIResponsesTranslator`
+
+</details>
+
+<details>
+<summary>Miscellaneous</summary>
+
+- `FunctionMapper`
+- `EmbeddingLookup`
+
+</details>
 
 Translation supports ordinary row batches, complete primary-key groups, and opt-in repeated passes over a saved input plan.
+
+## Analyses
+
+Analyses inspect Artifacts and return in-memory results without adding a new Artifact to the project. Use them to explore and compare results before choosing what to save.
+
+```python
+summary = documents.analysis.summarize()
+```
+
+Browse analysis methods by task (methods may appear in multiple families):
+
+<details>
+<summary>Text Exploration & Preprocessing</summary>
+
+- `text_diagnostics`
+- `kwic`
+
+</details>
+
+<details>
+<summary>Bag of Words & Topic Interpretation</summary>
+
+- `feature_summary`
+- `top_features`
+
+</details>
+
+<details>
+<summary>Dictionaries</summary>
+
+- `dictionary_counts`
+- `dictionary_matches`
+- `polarity`
+- `valence`
+
+</details>
+
+<details>
+<summary>Embeddings & Similarity</summary>
+
+- `cosine_similarity`
+- `distance`
+- `nearest_neighbors`
+
+</details>
+
+<details>
+<summary>Matrix Utilities</summary>
+
+- `matrix_summary`
+- `row_summary`
+- `feature_summary`
+- `top_features`
+- `cosine_similarity`
+- `distance`
+- `nearest_neighbors`
+
+</details>
+
+<details>
+<summary>Classification & Evaluation</summary>
+
+- `classification`
+
+</details>
+
+<details>
+<summary>Statistical Estimation</summary>
+
+- `generalized_difference`
+- `generalized_difference_by`
+
+</details>
+
+<details>
+<summary>Descriptive Summaries</summary>
+
+- `summarize`
+- `crosstab`
+- `matrix_summary`
+- `row_summary`
+- `feature_summary`
+
+</details>
 
 ## Project Center
 
