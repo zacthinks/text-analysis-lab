@@ -146,3 +146,70 @@ def test_attached_matrix_large_integer_precision(tmp_path, representation, has_m
             assert result["big_count"].dtype == np.dtype("int64")
     finally:
         project.close()
+
+
+@pytest.mark.parametrize("caller_type", ["dense_matrix", "sparse_matrix"])
+def test_sparse_caller_record_forms_preserve_implicit_zero(tmp_path, caller_type):
+    """Records and single agree with native/table scalar values for sparse zeros."""
+    project = teal.Project.create(tmp_path / "zero_records", name="zero_records")
+    try:
+        payload = np.asarray([[0, 5], [7, 0]], dtype="int64")
+        if caller_type == "sparse_matrix":
+            payload = sparse.csr_matrix(payload)
+        left = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {"values": payload, "columns": ["f0", "f1"]},
+        }], artifact_type=caller_type, primary_key="doc_id")
+        right = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {"values": sparse.csr_matrix([[0], [3]]),
+                     "columns": ["topic"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+
+        records = left.query(with_artifacts=right, with_columns="topic",
+                             form="records")
+        table = left.query(with_artifacts=right, with_columns="topic",
+                           form="table")
+        assert records[0]["f0"] == 0
+        assert records[1]["f1"] == 0
+        assert records[0]["topic"] == 0
+        assert records[0]["f0"] == table["f0"].iloc[0]
+        assert records[1]["f1"] == table["f1"].iloc[1]
+        single = left.query(with_artifacts=right, with_columns="topic",
+                            positions=[0], form="single")
+        assert single["f0"] == 0
+        assert single["topic"] == 0
+        batches = list(left.query(with_artifacts=right, with_columns="topic",
+                                  form="records", iter_batches=True, batch_size=1))
+        assert batches[0][0]["f0"] == 0
+        assert batches[1][0]["f1"] == 0
+    finally:
+        project.close()
+
+
+def test_attached_matrix_where_order_positions_and_no_hidden_handles(tmp_path):
+    project = teal.Project.create(tmp_path / "aligned", name="aligned")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3], "sort": [3, 1, 2]}),
+            primary_key="doc_id", data_fields="sort",
+        )
+        right = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "metadata": pd.DataFrame({"rank": [10, 20]}),
+            "data": {"values": sparse.csr_matrix([[0], [8]]),
+                     "columns": ["topic"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+        result = left.query(with_artifacts=right, with_columns="topic",
+                            where="rank >= 10", order_by="rank DESC",
+                            positions=[0, 1, 2], limit=1, key_columns=False,
+                            data_columns=False, form="table")
+        assert len(result) == 1
+        assert result["topic"].tolist() == [8]
+        assert not any(col.startswith("_teal_with_position") for col in result.columns)
+        hidden = left.query(with_artifacts=right, with_columns=False,
+                            data_columns=False, form="records")
+        assert all("topic" not in row for row in hidden)
+        assert len(hidden) == 3
+    finally:
+        project.close()
