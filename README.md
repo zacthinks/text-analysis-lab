@@ -272,7 +272,6 @@ Translators span preprocessing, linguistic processing, representations, statisti
 <summary>Miscellaneous</summary>
 
 - `FunctionMapper`
-- `EmbeddingLookup`
 
 </details>
 
