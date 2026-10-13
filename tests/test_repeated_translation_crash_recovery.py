@@ -28,6 +28,18 @@ def _assert_complete(path, operation_id):
             key_columns=False, data_columns="value", form="table"
         )["value"].tolist() == list("abcde")
         assert project.get_operation(operation_id)["status"] == "complete"
+        # The resumed canonical translator's terminal state is saved as the
+        # operation's frozen operator snapshot; verify all callbacks in every
+        # injected crash/recovery scenario, not only the output row universe.
+        operation = project.get_operation(operation_id)
+        snapshot_dir = project.storage.operator_dir(str(operation["operator_id"]))
+        restored = _ReplayProbe.load_from_dir(snapshot_dir)
+        expected = [("a", "b"), ("c", "d"), ("e",)]
+        for index in (0, 1):
+            assert restored.seen[index] == expected
+            assert [e[2] for e in restored.events if e[0] == "handle" and e[1] == index] == [0, 1, 2]
+        assert [e for e in restored.events if e[0] == "barrier"] == [("barrier", 0)]
+        assert [e for e in restored.events if e[0] == "final"] == [("final", 2)]
         return output.artifact_id
     finally:
         project.close()
