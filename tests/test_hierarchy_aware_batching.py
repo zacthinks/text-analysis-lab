@@ -315,11 +315,14 @@ def test_user_key_names_overlap_internal_group_aliases(tmp_path):
 
     project = Project.create(tmp_path / "collision", name="aliases")
     try:
-        keys = ["first_position", "__batch_order", "__teal_group_first_position", "token"]
+        # TeAL rejects primary-key labels beginning with "_". Exercise the
+        # original unqualified first_position SQL alias collision using valid
+        # opaque labels, rather than weakening the primary-key contract.
+        keys = ["first_position", "batch_order", "teal_group_first_position", "token"]
         rows = pd.DataFrame({
             "first_position": [1, 2, 1, 2],
-            "__batch_order": [1, 1, 1, 1],
-            "__teal_group_first_position": [1, 1, 1, 1],
+            "batch_order": [1, 1, 1, 1],
+            "teal_group_first_position": [1, 1, 1, 1],
             "token": [0, 0, 1, 1],
             "value": ["one", "two", "three", "four"],
         })
@@ -336,8 +339,8 @@ def test_user_key_names_overlap_internal_group_aliases(tmp_path):
         )
         source = project.get_artifact("art_aliases")
         output = project.translate(
-            _Echo(min_level="__teal_group_first_position"), source,
-            batch_size=1, batch_by="__teal_group_first_position",
+            _Echo(min_level="teal_group_first_position"), source,
+            batch_size=1, batch_by="teal_group_first_position",
         )["output"]
         assert output.n_rows == 4
         actual = output.query(key_columns=True, data_columns="value", form="table")
