@@ -1088,8 +1088,8 @@ class BaseArtifact(ABC):
         limit: int | None,
         form: QueryForm,
         include_position: bool,
-        with_artifacts: Any,
-        with_columns: ColumnSelect,
+        with_artifacts: Any = None,
+        with_columns: ColumnSelect = True,
     ) -> Any:
         if (
             self.data_artifact is None
@@ -1183,8 +1183,8 @@ class BaseArtifact(ABC):
         include_position: bool,
         batch_size: int,
         streaming_mode: StreamingMode,
-        with_artifacts: Any,
-        with_columns: ColumnSelect,
+        with_artifacts: Any = None,
+        with_columns: ColumnSelect = True,
     ) -> Iterable[Any]:
         if (
             self.data_artifact is None
