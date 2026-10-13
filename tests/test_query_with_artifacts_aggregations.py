@@ -1,0 +1,116 @@
+"""Phase 2B: persisted-project batchwise aggregation across attached artifacts."""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import pytest
+from scipy import sparse
+
+pytest.importorskip("duckdb")
+pytest.importorskip("pyarrow")
+
+import text_analysis_lab as teal
+from text_analysis_lab.core.errors import ArtifactError
+
+
+def test_attached_histogram_and_crosstab_across_batch_boundaries(tmp_path):
+    project = teal.Project.create(tmp_path / "aggregations", name="aggregations")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 1, 2, 3, 4],
+                          "sentence_id": [0, 1, 0, 0, 0],
+                          "kind": ["A", "A", "B", "B", "A"]}),
+            primary_key=["doc_id", "sentence_id"], data_fields="kind",
+        )
+        right = project.register_external(
+            pd.DataFrame({"doc_id": [2, 1, 3],
+                          "score": [3.0, 1.0, 5.0],
+                          "group": ["Y", "X", "Y"]}),
+            primary_key="doc_id", data_fields=["score", "group"],
+        )
+        result = left.visualize.histogram(
+            "score", by="kind", with_artifacts=right,
+            bins=[0, 2, 4, 6], batch_size=2, output="result",
+        )
+        assert result.observed_count == 4
+        assert result.missing_count == 1
+        counts = result.to_frame()
+        assert counts.loc[counts["kind"] == "A", "count"].tolist() == [2, 0, 0]
+        assert counts.loc[counts["kind"] == "B", "count"].tolist() == [0, 1, 1]
+        dynamic = left.visualize.histogram(
+            "score", by="group", with_artifacts=right,
+            bins=3, batch_size=2, output="result",
+        )
+        assert dynamic.observed_count == 4
+        assert sum(int(values.sum()) for values in dynamic.counts.values()) == 4
+        tab = left.analysis.crosstab(
+            "kind", "group", with_artifacts=right, margins=True, batch_size=2,
+        )
+        assert tab.loc["A", "X"] == 2
+        assert tab.loc["B", "Y"] == 2
+        assert tab.loc["All", "All"] == 4
+        missing = left.analysis.crosstab(
+            "kind", "group", with_artifacts=right,
+            dropna=False, batch_size=2,
+        )
+        assert missing.loc["A", "<NA>"] == 1
+        with pytest.raises(ArtifactError, match="excluded"):
+            left.analysis.crosstab(
+                "kind", "group", with_artifacts=right,
+                with_columns=False,
+            )
+    finally:
+        project.close()
+
+
+def test_attached_sparse_numeric_histogram_preserves_zeros_and_null(tmp_path):
+    project = teal.Project.create(tmp_path / "sparse", name="sparse")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3, 4]}), primary_key="doc_id",
+        )
+        right = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2, 3]}),
+            "data": {"values": sparse.csr_matrix([[0, 9], [2, 8], [0, 7]]),
+                     "columns": ["score", "other"]},
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+        result = left.visualize.histogram(
+            "score", with_artifacts=right,
+            bins=[0, 1, 3], batch_size=2, output="result",
+        )
+        assert result.observed_count == 3
+        assert result.missing_count == 1
+        assert result.to_frame()["count"].tolist() == [2, 1]
+        tab = left.analysis.crosstab(
+            "score", "score", with_artifacts=right, batch_size=2,
+        )
+        assert tab.loc[0, 0] == 2
+        assert tab.loc[2, 2] == 1
+        with pytest.raises(ArtifactError, match="excluded"):
+            left.visualize.histogram(
+                "score", with_artifacts=right,
+                with_columns=["other"], output="result",
+            )
+    finally:
+        project.close()
+
+
+def test_attached_histogram_sql_filter_on_relational_right(tmp_path):
+    project = teal.Project.create(tmp_path / "filter", name="filter")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3]}), primary_key="doc_id"
+        )
+        right = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3],
+                          "group": ["A", "B", "A"], "weight": [1, 2, 3]}),
+            primary_key="doc_id", data_fields=["group", "weight"],
+        )
+        result = left.visualize.histogram(
+            "weight", with_artifacts=right,
+            where="group = 'A'", bins=[0, 2, 4], output="result", batch_size=1,
+        )
+        assert result.observed_count == 2
+        assert result.to_frame()["count"].tolist() == [1, 1]
+    finally:
+        project.close()
