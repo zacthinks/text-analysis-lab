@@ -114,17 +114,17 @@ def test_ngrams_default_to_immediate_parent_boundary_not_aggregation_boundary() 
         {"source": _packet(frame)}, mode="fit_translate", request=TranslationRequest()
     )
     columns = result.outputs["output"]["data"]["columns"]
-    assert "alpha beta" in columns
-    assert "gamma delta" in columns
-    assert "beta gamma" not in columns
+    assert "alpha_beta" in columns
+    assert "gamma_delta" in columns
+    assert "beta_gamma" not in columns
     values = result.outputs["output"]["data"]["values"].toarray()[0]
     assert dict(zip(columns, values, strict=True)) == {
         "alpha": 1,
-        "alpha beta": 1,
+        "alpha_beta": 1,
         "beta": 1,
         "delta": 1,
         "gamma": 1,
-        "gamma delta": 1,
+        "gamma_delta": 1,
     }
 
 
@@ -147,9 +147,9 @@ def test_sequence_by_can_intentionally_allow_cross_sentence_ngrams() -> None:
         {"source": _packet(frame)}, mode="fit_translate", request=TranslationRequest()
     )
     assert result.outputs["output"]["data"]["columns"] == [
-        "alpha beta",
-        "beta gamma",
-        "gamma delta",
+        "alpha_beta",
+        "beta_gamma",
+        "gamma_delta",
     ]
 
 
@@ -170,7 +170,7 @@ def test_ngrams_follow_filtered_artifact_row_sequence_even_when_token_ids_have_g
     result = translator.translate_batch(
         {"source": _packet(frame)}, mode="fit_translate", request=TranslationRequest()
     )
-    assert result.outputs["output"]["data"]["columns"] == ["alpha beta"]
+    assert result.outputs["output"]["data"]["columns"] == ["alpha_beta"]
     assert result.outputs["output"]["data"]["values"].toarray().tolist() == [[1]]
 
 
@@ -244,7 +244,7 @@ def test_ngram_display_collision_fails_instead_of_merging_distinct_features() ->
             "doc_id": [1, 1, 1],
             "sentence_id": [0, 0, 0],
             "token_id": [0, 1, 2],
-            "lemma": ["a b", "a", "b"],
+            "lemma": ["a_b", "a", "b"],
         }
     )
     translator = ArtifactCountVectorizer(
