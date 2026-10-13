@@ -132,6 +132,8 @@ def test_qualified_attached_collisions_use_narrow_output_names(tmp_path):
             primary_key="doc_id", data_fields=["score", "kind"],
         )
         fields = left.query_columns(with_artifacts=right)["columns"]
+        caller_kind = next(x["qualified_name"] for x in fields
+                           if x["namespace"] == "data" and x["base_name"] == "kind")
         score = next(x["qualified_name"] for x in fields
                      if x["namespace"] == "with" and x["base_name"] == "score")
         kind = next(x["qualified_name"] for x in fields
@@ -144,7 +146,7 @@ def test_qualified_attached_collisions_use_narrow_output_names(tmp_path):
         assert hist.missing_count == 1
         assert hist.to_frame()["count"].tolist() == [1, 1]
         ct = left.analysis.crosstab(
-            "kind", kind, with_artifacts=right, batch_size=1,
+            caller_kind, kind, with_artifacts=right, batch_size=1,
         )
         assert ct.loc["A", "X"] == 1
         assert ct.loc["B", "Y"] == 1
