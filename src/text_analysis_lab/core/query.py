@@ -2229,8 +2229,9 @@ class QueryEngine:
         if include_position:
             select_exprs.append("v._position AS _position")
         selected_handles: set[str] = set()
+        fields_by_output = {field.output_name: field for field in view.columns}
         for col in selected:
-            field = next(c for c in view.columns if c.output_name == col)
+            field = fields_by_output[col]
             if field.deferred_feature_name is not None:
                 handle = field.deferred_position_column
                 if handle is not None and handle not in selected_handles:
