@@ -12,6 +12,7 @@ from text_analysis_lab.analysis._tabular_utils import (
     batch_query_columns,
     batch_with_columns,
     resolve_tabular_fields,
+    resolve_batch_output_names,
 )
 
 if TYPE_CHECKING:
@@ -50,7 +51,12 @@ def crosstab(
         artifact, rows, columns, with_artifacts=with_artifacts,
         with_columns=with_columns,
     )
-    data_columns, metadata_columns = batch_query_columns((row_field, column_field))
+    row_field, column_field = resolve_batch_output_names(
+        artifact, (row_field, column_field), with_artifacts=with_artifacts,
+    )
+    data_columns, metadata_columns = batch_query_columns(
+        (row_field, column_field), qualified=with_artifacts is not None,
+    )
 
     counts: dict[tuple[Any, Any], int] = defaultdict(int)
     row_values: list[Any] = []
