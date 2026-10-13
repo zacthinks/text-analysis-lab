@@ -162,10 +162,6 @@ Built-in translators include text cleaning and diagnostics, spaCy decomposition,
 
 Translation supports ordinary row batches, complete primary-key groups, and opt-in repeated passes over a saved input plan.
 
-## Clustering
-
-TeAL includes clustering methods for numeric matrix Artifacts, covering centroid-, medoid-, density-, hierarchical-, spectral-, and mixture-based approaches. Results preserve source keys and lineage; methods with prediction support can apply fitted state to compatible data.
-
 ## Project Center
 
 The Project Center provides a visual interface to the same TeAL project used from Python. It supports project graph inspection, lineage/provenance views, artifact previews, storage inspection, and versioned memos for projects, artifacts, operations, and operators.
