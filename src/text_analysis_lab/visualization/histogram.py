@@ -13,7 +13,9 @@ import pandas as pd
 from text_analysis_lab.analysis._tabular_utils import (
     ResolvedField,
     batch_query_columns,
+    batch_with_columns,
     resolve_tabular_fields,
+    resolve_batch_output_names,
 )
 
 if TYPE_CHECKING:
@@ -103,6 +105,8 @@ def histogram(
     bins: int | Sequence[float] = 10,
     range: tuple[float, float] | None = None,
     dropna: bool = True,
+    with_artifacts: Any = None,
+    with_columns: Any = True,
     where: str | None = None,
     positions: Sequence[int] | None = None,
     limit: int | None = None,
@@ -125,7 +129,11 @@ def histogram(
         raise ValueError("batch_size must be positive.")
     if output not in {"plot", "data", "result"}:
         raise ValueError("output must be 'plot', 'data', or 'result'.")
-    resolved = resolve_tabular_fields(artifact, field, *([] if by is None else [by]))
+    resolved = resolve_tabular_fields(artifact, field, *([] if by is None else [by]),
+                                      with_artifacts=with_artifacts, with_columns=with_columns)
+    resolved = resolve_batch_output_names(
+        artifact, resolved, with_artifacts=with_artifacts,
+    )
     value_field = resolved[0]
     group_field = None if by is None else resolved[1]
     if isinstance(bins, int):
@@ -137,6 +145,7 @@ def histogram(
             group_field=group_field,
             dropna=dropna,
             where=where,
+            with_artifacts=with_artifacts,
             positions=positions,
             limit=limit,
             batch_size=int(batch_size),
@@ -165,6 +174,7 @@ def histogram(
         edges=edges,
         dropna=dropna,
         where=where,
+        with_artifacts=with_artifacts,
         positions=positions,
         limit=limit,
         batch_size=int(batch_size),
@@ -199,12 +209,33 @@ def _iter_values(
     value_field: ResolvedField,
     group_field: ResolvedField | None,
     where: str | None,
+    with_artifacts: Any,
     positions: Sequence[int] | None,
     limit: int | None,
     batch_size: int,
 ):
     fields = (value_field,) if group_field is None else (value_field, group_field)
-    data_columns, metadata_columns = batch_query_columns(fields)
+    data_columns, metadata_columns = batch_query_columns(
+        fields, qualified=with_artifacts is not None,
+    )
+    query_kwargs = dict(
+        batch_size=batch_size,
+        key_columns=False,
+        data_columns=data_columns,
+        metadata_columns=metadata_columns,
+        metadata_mode="full" if metadata_columns is not False else "none",
+        where=where,
+        positions=positions,
+        limit=limit,
+        include_position=False,
+    )
+    if with_artifacts is not None:
+        yield from artifact.query(
+            **query_kwargs, with_artifacts=with_artifacts,
+            with_columns=batch_with_columns(fields),
+            form="table", iter_batches=True,
+        )
+        return
     yield from artifact.iter_table_batches(
         batch_size=batch_size,
         key_columns=False,
@@ -225,6 +256,7 @@ def _numeric_range(
     group_field: ResolvedField | None,
     dropna: bool,
     where: str | None,
+    with_artifacts: Any,
     positions: Sequence[int] | None,
     limit: int | None,
     batch_size: int,
@@ -236,6 +268,7 @@ def _numeric_range(
         value_field=value_field,
         group_field=group_field,
         where=where,
+        with_artifacts=with_artifacts,
         positions=positions,
         limit=limit,
         batch_size=batch_size,
@@ -264,6 +297,7 @@ def _count_bins(
     edges: np.ndarray,
     dropna: bool,
     where: str | None,
+    with_artifacts: Any,
     positions: Sequence[int] | None,
     limit: int | None,
     batch_size: int,
@@ -277,6 +311,7 @@ def _count_bins(
         value_field=value_field,
         group_field=group_field,
         where=where,
+        with_artifacts=with_artifacts,
         positions=positions,
         limit=limit,
         batch_size=batch_size,

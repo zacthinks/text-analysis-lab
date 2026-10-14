@@ -10,7 +10,9 @@ import pandas as pd
 
 from text_analysis_lab.analysis._tabular_utils import (
     batch_query_columns,
+    batch_with_columns,
     resolve_tabular_fields,
+    resolve_batch_output_names,
 )
 
 if TYPE_CHECKING:
@@ -28,6 +30,8 @@ def crosstab(
     margins: bool = False,
     margins_name: str = "All",
     dropna: bool = True,
+    with_artifacts: Any = None,
+    with_columns: Any = True,
     where: str | None = None,
     positions: Sequence[int] | None = None,
     limit: int | None = None,
@@ -43,25 +47,39 @@ def crosstab(
         raise ValueError("margins_name must be a non-empty string.")
     if int(batch_size) <= 0:
         raise ValueError("batch_size must be positive.")
-    row_field, column_field = resolve_tabular_fields(artifact, rows, columns)
-    data_columns, metadata_columns = batch_query_columns((row_field, column_field))
+    row_field, column_field = resolve_tabular_fields(
+        artifact, rows, columns, with_artifacts=with_artifacts,
+        with_columns=with_columns,
+    )
+    row_field, column_field = resolve_batch_output_names(
+        artifact, (row_field, column_field), with_artifacts=with_artifacts,
+    )
+    data_columns, metadata_columns = batch_query_columns(
+        (row_field, column_field), qualified=with_artifacts is not None,
+    )
 
     counts: dict[tuple[Any, Any], int] = defaultdict(int)
     row_values: list[Any] = []
     column_values: list[Any] = []
     seen_rows: set[Any] = set()
     seen_columns: set[Any] = set()
-    for batch in artifact.iter_table_batches(
+    query_kwargs = dict(
         batch_size=int(batch_size),
         key_columns=False,
         data_columns=data_columns,
         metadata_columns=metadata_columns,
         metadata_mode="full" if metadata_columns is not False else "none",
-        where=where,
-        positions=positions,
-        limit=limit,
-        include_position=False,
-    ):
+        where=where, positions=positions, limit=limit, include_position=False,
+    )
+    batches = (
+        artifact.iter_table_batches(**query_kwargs) if with_artifacts is None
+        else artifact.query(
+            **query_kwargs, with_artifacts=with_artifacts,
+            with_columns=batch_with_columns((row_field, column_field)),
+            form="table", iter_batches=True,
+        )
+    )
+    for batch in batches:
         left = batch[row_field.output_name]
         right = batch[column_field.output_name]
         for left_value, right_value in zip(left, right, strict=True):
