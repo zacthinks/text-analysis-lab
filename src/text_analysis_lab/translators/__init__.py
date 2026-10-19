@@ -23,6 +23,7 @@ from text_analysis_lab.translators.delimiter_decomposer import DelimiterDecompos
 from text_analysis_lab.translators.dictionary_translator import DictionaryTranslator
 from text_analysis_lab.translators.embedding_lookup import EmbeddingLookup
 from text_analysis_lab.translators.feature_trimmer import FeatureTrimmer
+from text_analysis_lab.translators.feature_matrix import FeatureMatrix
 from text_analysis_lab.translators.fitted_predictor import FittedPredictor
 from text_analysis_lab.translators.function_mapper import FunctionMapper
 from text_analysis_lab.translators.geco_predictor import GeCoPredictor
@@ -91,6 +92,7 @@ __all__ = [
     "DictionaryTranslator",
     "EmbeddingLookup",
     "FeatureTrimmer",
+    "FeatureMatrix",
     "FittedPredictor",
     "FunctionMapper",
     "GeCoPredictor",
