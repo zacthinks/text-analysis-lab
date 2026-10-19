@@ -104,7 +104,7 @@ class FeatureMatrixEncoding:
                 # Equality with a category is false for NA and unseen values.
                 if cats:
                     block = np.column_stack([
-                        values.eq(category).fillna(False).to_numpy(dtype=float)
+                        values.astype('string').eq(category).fillna(False).to_numpy(dtype=float)
                         for category in cats
                     ])
                 else:
