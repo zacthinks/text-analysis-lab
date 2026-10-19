@@ -122,3 +122,50 @@ def test_feature_matrix_frozen_standalone_table_translation(tmp_path):
         np.testing.assert_array_equal(values, [[1, 0, 41], [0, 0, 42]])
     finally:
         project.close()
+
+
+def test_frozen_replay_on_distinct_teal_artifact_with_unseen_categories(tmp_path):
+    project, source, _ = _project(tmp_path)
+    try:
+        first = FeatureMatrix(
+            data_columns=False,
+            metadata_columns=["group", "income"],
+            encodings={"group": "onehot"},
+        )
+        original = project.translate(first, source)["output"]
+        expected_columns = original.get_data_columns()
+        frozen_id = first.operator_id
+    finally:
+        project.close()
+
+    other_path = tmp_path / "other.csv"
+    pd.DataFrame({
+        "text": ["different text", "other text"],
+        "group": ["unknown", "female"],
+        "income": [99, 47],
+    }).to_csv(other_path, index=False)
+    reopened = Project.open(tmp_path / "lab")
+    try:
+        distinct = reopened.read_csv(
+            other_path, text_fields="text",
+            metadata_fields=["group", "income"], output_label="other_documents",
+        )
+        frozen = reopened.get_operator(frozen_id)
+        replay = reopened.translate(frozen, distinct)["output"]
+        assert replay.get_data_columns() == expected_columns
+        np.testing.assert_array_equal(
+            replay.get_matrix(), [[0, 0, 99], [1, 0, 47]]
+        )
+
+        incompatible_path = tmp_path / "incompatible.csv"
+        pd.DataFrame({"text": ["no field"], "other": [5]}).to_csv(
+            incompatible_path, index=False
+        )
+        incompatible = reopened.read_csv(
+            incompatible_path, text_fields="text",
+            metadata_fields=["other"], output_label="incompatible_documents",
+        )
+        with pytest.raises(Exception, match="FeatureMatrix|group|income"):
+            reopened.translate(frozen, incompatible)
+    finally:
+        reopened.close()
