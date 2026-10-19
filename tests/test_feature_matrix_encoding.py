@@ -75,3 +75,30 @@ def test_numeric_mapping_keys_survive_json_roundtrip():
     loaded = FeatureMatrixEncoding.from_state(json.loads(json.dumps(fitted.to_state())))
     np.testing.assert_array_equal(loaded.transform(train), [[10], [20], [10]])
     assert np.isnan(loaded.transform(pd.DataFrame({"category": [3]}))[0, 0])
+
+
+def test_streaming_fit_aggregates_categories_across_batches():
+    batches = (
+        pd.DataFrame({"gender": ["male", "female"], "age": [30, 40]}),
+        pd.DataFrame({"gender": ["nonbinary", "male"], "age": [50, 60]}),
+    )
+    encoder = FeatureMatrixEncoding().fit_batches(
+        iter(batches), columns=["gender", "age"],
+    )
+    assert encoder.columns == (
+        "gender_female", "gender_male", "gender_nonbinary", "age",
+    )
+    replay = FeatureMatrixEncoding.from_state(
+        json.loads(json.dumps(encoder.to_state()))
+    )
+    values = replay.transform(pd.DataFrame({"gender": ["unknown"], "age": [70]}))
+    np.testing.assert_array_equal(values, [[0, 0, 0, 70]])
+
+
+def test_streaming_fit_rejects_schema_changes():
+    batches = [
+        pd.DataFrame({"a": ["x"]}),
+        pd.DataFrame({"b": ["y"]}),
+    ]
+    with pytest.raises(ArtifactError, match="same ordered scalar columns"):
+        FeatureMatrixEncoding().fit_batches(batches, columns=["a"])
