@@ -1012,6 +1012,14 @@ class Project:
         expose a typed ``translate(project, ...)`` convenience method that
         delegates here.
         """
+        from text_analysis_lab.translators.feature_matrix import FeatureMatrix
+        if isinstance(translator, FeatureMatrix):
+            from text_analysis_lab.core.feature_matrix import feature_matrix
+            return feature_matrix(
+                self, translator, sources, workers=workers, batch_size=batch_size,
+                batch_by=batch_by, max_outstanding_units=max_outstanding_units,
+                memo=memo, alias=alias, overwrite=overwrite, **params,
+            )
         return _translate(
             self,
             translator,
