@@ -382,8 +382,7 @@ class _MatrixArtifact(BaseArtifact):
         operator = self.project.get_operator(recipe["operator_id"])
         source = self.project.get_artifact(recipe["source_artifact_id"])
         selected, indices = self._column_indices(data_columns)
-        matrix = operator.render(source, positions)
-        return matrix[:, indices]
+        return operator.render(source, positions, selected_indices=indices)
 
     def get_feature_metadata(self) -> pd.DataFrame:
         """Return Feature Metadata in this artifact's local feature order.
