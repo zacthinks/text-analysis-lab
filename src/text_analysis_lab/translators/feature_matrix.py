@@ -88,14 +88,14 @@ class FeatureMatrix(BaseTranslator):
         self.scalar_data_columns = data
         self.scalar_metadata_columns = meta
         self.scalar_key_columns = key
-        frame = source.query(
+        batches = source.query(
             data_columns=data if data else False,
             metadata_columns=meta if meta else False,
             key_columns=key if key else False,
             metadata_mode="full" if meta else "none",
-            form="table",
+            form="table", iter_batches=True, batch_size=batch_size,
         )
-        self._encoder.fit(frame)
+        self._encoder.fit_batches(batches, columns=[*key, *data, *meta])
         self.feature_columns = [*mat, *self._encoder.columns]
         if not self.feature_columns or len(set(self.feature_columns)) != len(self.feature_columns):
             raise ArtifactError("FeatureMatrix needs unique nonempty feature columns.")
