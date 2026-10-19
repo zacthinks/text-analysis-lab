@@ -112,7 +112,7 @@ class FeatureMatrix(BaseTranslator):
         ):
             raise ArtifactError("FeatureMatrix source lacks frozen selected feature columns.")
 
-    def render(self, source: Any, positions: Sequence[int]) -> Any:
+    def render(self, source: Any, positions: Sequence[int], *, selected_indices: Sequence[int] | None = None) -> Any:
         return render_feature_matrix(
             source, positions=positions,
             matrix_columns=self.matrix_columns if self.matrix_columns else False,
@@ -121,6 +121,7 @@ class FeatureMatrix(BaseTranslator):
             key_columns=self.scalar_key_columns if self.scalar_key_columns else False,
             encoder=self._encoder, sparse_output=self.sparse_output,
             output_columns=self.feature_columns,
+            selected_indices=selected_indices,
         )
 
     def to_json_state(self) -> dict[str, Any]:
