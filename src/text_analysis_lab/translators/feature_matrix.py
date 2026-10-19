@@ -154,6 +154,33 @@ class FeatureMatrix(BaseTranslator):
             obj._encoder = FeatureMatrixEncoding.from_state(state["encoder"])
         return obj
 
+    def translate(self, source: Any) -> Any:
+        """Apply a fitted FeatureMatrix recipe to a pandas DataFrame.
+
+        Artifact-backed matrix composition uses Project.translate(), not this
+        standalone tabular convenience method.
+        """
+        if not self.is_fitted:
+            raise OperatorError("FeatureMatrix must be fitted before standalone translation.")
+        if not isinstance(source, pd.DataFrame):
+            raise TypeError("FeatureMatrix.translate expects a pandas DataFrame.")
+        selected = [
+            *self.scalar_key_columns,
+            *self.scalar_data_columns,
+            *self.scalar_metadata_columns,
+        ]
+        missing = [name for name in selected if name not in source.columns]
+        if missing:
+            raise ArtifactError(f"FeatureMatrix input is missing columns: {missing}")
+        if self.matrix_columns:
+            raise OperatorError(
+                "Standalone FeatureMatrix.translate cannot assemble an artifact-backed "
+                "matrix; use Project.translate with an artifact."
+            )
+        return self._encoder.transform(
+            source.loc[:, selected], sparse_output=self.sparse_output
+        )
+
     def input_request(self, *, sources, mode, request):
         raise OperatorError("FeatureMatrix uses the recipe-only Project.translate path.")
 
