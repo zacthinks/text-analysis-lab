@@ -6,6 +6,9 @@ import numpy as np
 import pandas as pd
 import pytest
 from scipy import sparse
+from sklearn.linear_model import LogisticRegression
+
+from text_analysis_lab.translators import FittedPredictor
 
 pytest.importorskip("duckdb")
 
@@ -169,3 +172,101 @@ def test_frozen_replay_on_distinct_teal_artifact_with_unseen_categories(tmp_path
             reopened.translate(frozen, incompatible)
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize("kind", ["sparse", "dense"])
+def test_feature_subset_pushes_narrow_computed_columns_to_source(
+    tmp_path, monkeypatch, kind,
+):
+    project, source, dtm = _project(tmp_path)
+    try:
+        computed = project.translate(
+            FeatureMatrix(
+                metadata_columns=["group", "income"],
+                encodings={"group": "onehot"},
+                matrix_type=kind,
+            ), dtm,
+        )["output"]
+        subset = project.feature_subset(
+            computed, lambda meta: meta["column"].eq("income"),
+        )
+        called = []
+        original_query = type(dtm).query
+
+        def recorded_query(artifact, **kwargs):
+            if artifact.artifact_id == dtm.artifact_id:
+                called.append(kwargs)
+                if kwargs.get("form") == "native" and kwargs.get("data_columns") is not False:
+                    pytest.fail("FeatureSubset income-only query fetched source DTM features")
+            return original_query(artifact, **kwargs)
+
+        monkeypatch.setattr(type(dtm), "query", recorded_query)
+        assert subset.get_data_columns() == ["income"]
+        got = subset.get_matrix(positions=[2, 0])
+        if sparse.issparse(got):
+            got = got.toarray()
+        np.testing.assert_array_equal(got, [[30], [10]])
+        assert any(
+            entry.get("metadata_columns") == ["income"]
+            and entry.get("data_columns") is False
+            for entry in called
+        )
+    finally:
+        project.close()
+
+
+def test_compound_keys_survive_recipe_and_subset_queries(tmp_path):
+    project, source, dtm = _project(tmp_path)
+    try:
+        compound = project.set_primary_keys(
+            source, levels={"group": "group_id"}, leaf_key="doc_id",
+        )
+        assert compound.primary_key == ["group_id", "doc_id"]
+        matrix = project.translate(
+            FeatureMatrix(
+                data_columns=False,
+                metadata_columns=["income"],
+                key_columns=True,
+            ), compound,
+        )["output"]
+        assert matrix.primary_key == ["group_id", "doc_id"]
+        keys = matrix.query(
+            key_columns=True, data_columns=False, form="table",
+        )[["group_id", "doc_id"]]
+        assert keys.to_numpy().tolist() == [[1, 0], [0, 0], [1, 1]]
+        assert matrix.get_data_columns() == ["group_id", "doc_id", "income"]
+        np.testing.assert_array_equal(
+            matrix.get_matrix(), [[1, 0, 10], [0, 0, 20], [1, 1, 30]]
+        )
+        subset = project.feature_subset(
+            matrix, lambda features: features["column"].eq("income"),
+        )
+        assert subset.primary_key == ["group_id", "doc_id"]
+        np.testing.assert_array_equal(subset.get_matrix(), [[10], [20], [30]])
+    finally:
+        project.close()
+
+
+def test_fitted_predictor_consumes_recipe_backed_sparse_matrix(tmp_path):
+    project, source, dtm = _project(tmp_path)
+    try:
+        augmented = project.translate(
+            FeatureMatrix(
+                metadata_columns=["group", "income"],
+                encodings={"group": "onehot"},
+            ), dtm,
+        )["output"]
+        x = augmented.get_matrix()
+        assert sparse.isspmatrix_csr(x)
+        y = np.array([0, 1, 0])
+        fitted = LogisticRegression(random_state=0).fit(x, y)
+        predicted = project.translate(
+            FittedPredictor(fitted, save_model=True), augmented,
+        )["output"]
+        assert predicted.primary_key == augmented.primary_key
+        actual = predicted.query(
+            key_columns=False, data_columns=["prediction"], form="table",
+        )["prediction"].to_numpy()
+        np.testing.assert_array_equal(actual, fitted.predict(x))
+    finally:
+        project.close()
