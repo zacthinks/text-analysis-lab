@@ -2272,13 +2272,13 @@ class QueryEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _matrix_query_error(artifact: BaseArtifact, exc: Exception) -> QueryError | None:
+    def _matrix_query_error(
+        artifact: BaseArtifact,
+        exc: Exception,
+        *,
+        with_artifacts: Any = None,
+    ) -> QueryError | None:
         """Explain missing matrix features without interfering with valid SQL."""
-        if artifact.artifact_type not in {
-            ArtifactType.DENSE_MATRIX,
-            ArtifactType.SPARSE_MATRIX,
-        }:
-            return None
         message = str(exc)
         # DuckDB may report either spelling, depending on its version.
         missing = re.search(
@@ -2295,17 +2295,39 @@ class QueryEngine:
         if missing is None:
             return None
         name = missing.group(1)
-        if name not in artifact.get_data_columns():
-            return None
-        return QueryError(
-            f"Matrix feature {name!r} cannot be used in SQL where or order_by: "
-            "matrix feature values are not columns in the SQL view. "
-            "Queries on primary keys, row positions and metadata are supported. "
-            "To filter on matrix values, select the feature names with "
-            "data_columns=[...], form='table', include_position=True, filter "
-            "or sort the Pandas DataFrame and use query(positions=...) to "
-            "retrieve the matching matrix rows."
-        )
+        matrix_types = {ArtifactType.DENSE_MATRIX, ArtifactType.SPARSE_MATRIX}
+        if (
+            artifact.artifact_type in matrix_types
+            and name in artifact.get_data_columns()
+        ):
+            return QueryError(
+                f"Matrix feature {name!r} cannot be used in SQL where or order_by: "
+                "matrix feature values are not columns in the SQL view. "
+                "Queries on primary keys, row positions and metadata are supported. "
+                "To filter on matrix values, select the feature names with "
+                "data_columns=[...], form='table', include_position=True, filter "
+                "or sort the Pandas DataFrame and use query(positions=...) to "
+                "retrieve the matching matrix rows."
+            )
+        for attached in with_artifacts or ():
+            if (
+                attached.artifact_type in matrix_types
+                and (
+                    name in attached.get_data_columns()
+                    or name in {
+                        f"with.{attached.artifact_id}.data.{field}"
+                        for field in attached.get_data_columns()
+                    }
+                )
+            ):
+                return QueryError(
+                    f"Attached matrix feature {name!r} cannot be used in SQL "
+                    "where or order_by: attached matrix values are selectable "
+                    "with with_columns=[...] but are not SQL-addressable. "
+                    "Select form='table', filter or sort the result in Pandas, "
+                    "and use query(positions=...) for further keyed retrieval."
+                )
+        return None
 
     def artifact_query(
         self,
@@ -2344,7 +2366,9 @@ class QueryEngine:
         except MissingDependencyError:
             raise
         except Exception as exc:
-            explanation = self._matrix_query_error(artifact, exc)
+            explanation = self._matrix_query_error(
+                artifact, exc, with_artifacts=with_artifacts
+            )
             if explanation is not None:
                 raise explanation from exc
             raise QueryError(f"Artifact query failed: {exc}") from exc
@@ -2455,10 +2479,12 @@ class QueryEngine:
                         raise
                     yield from yield_paged()
         except Exception as exc:
-            explanation = self._matrix_query_error(artifact, exc)
+            explanation = self._matrix_query_error(
+                artifact, exc, with_artifacts=with_artifacts
+            )
             if explanation is not None:
                 raise explanation from exc
-            raise
+            raise QueryError(f"Artifact query failed: {exc}") from exc
         finally:
             for name in reversed(registered):
                 with suppress(Exception):
