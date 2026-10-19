@@ -65,6 +65,12 @@ def test_sparse_feature_matrix_durable_replay_and_legacy_feature_subset(tmp_path
         np.testing.assert_array_equal(
             subset.get_matrix().toarray(), [[1], [0], [1]]
         )
+        np.testing.assert_array_equal(
+            subset.query(
+                positions=[2, 0], key_columns=False,
+                data_columns=["group_male"], form="native",
+            )["matrix"].toarray(), [[1], [1]]
+        )
         artifact_id, operator_id = derived.artifact_id, operator.operator_id
     finally:
         project.close()
@@ -100,5 +106,19 @@ def test_dense_table_to_feature_matrix_without_numeric_data_duplication(tmp_path
             matrix.query(data_columns=["income"], key_columns=False, form="native")["matrix"],
             [[10], [20], [30]],
         )
+    finally:
+        project.close()
+
+def test_feature_matrix_frozen_standalone_table_translation(tmp_path):
+    project, source, _ = _project(tmp_path)
+    try:
+        op = FeatureMatrix(
+            data_columns=False,
+            metadata_columns=["group", "income"],
+        )
+        project.translate(op, source)
+        frame = pd.DataFrame({"group": ["female", "new"], "income": [41, 42]})
+        values = op.translate(frame)
+        np.testing.assert_array_equal(values, [[1, 0, 41], [0, 0, 42]])
     finally:
         project.close()
