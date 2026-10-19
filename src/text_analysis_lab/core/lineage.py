@@ -406,6 +406,10 @@ def find_data_artifact(artifact: BaseArtifact) -> BaseArtifact | None:
 
         if current.has_own_data():
             return current
+        if isinstance(current.descriptor.get("lineage", {}), dict) and (
+            "feature_matrix" in current.descriptor["lineage"]
+        ):
+            return current
 
         lineage = artifact_lineage(current)
         mode = lineage.get("lineage_mode")
