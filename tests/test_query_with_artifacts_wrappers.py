@@ -103,7 +103,9 @@ def test_wrapper_hidden_projection_and_matrix_sql_guard(composed):
     assert sum(len(batch) for batch in batches) == 2
     assert all("topic_0" not in batch for batch in batches)
     with pytest.raises(QueryError):
-        left.table(with_artifacts=right, where="topic_0 > 0")
+        list(left.iter_table_batches(
+            batch_size=1, with_artifacts=right, where="topic_0 > 0",
+        ))
 
 
 def test_wrapper_baselines_and_no_persistent_join(composed):
