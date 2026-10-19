@@ -375,13 +375,30 @@ class _MatrixArtifact(BaseArtifact):
         value = self.descriptor.get("lineage", {}).get("feature_matrix")
         return value if isinstance(value, dict) else None
 
-    def _render_feature_matrix(self, positions: Sequence[int], data_columns: ColumnSelect) -> Any:
+    def _render_feature_matrix(
+        self,
+        positions: Sequence[int],
+        data_columns: ColumnSelect = True,
+        *,
+        column_indices: Sequence[int] | None = None,
+    ) -> Any:
+        """Read only the requested computed features in their requested order.
+
+        Existing logical name requests resolve on this artifact. Inherited
+        FeatureSubset paths already resolved physical indices against their
+        data owner, so they must pass those indices directly without first
+        computing the complete parent matrix.
+        """
         recipe = self._feature_matrix_recipe()
         if recipe is None:
             raise ArtifactError("This matrix has no computed feature recipe.")
         operator = self.project.get_operator(recipe["operator_id"])
         source = self.project.get_artifact(recipe["source_artifact_id"])
-        selected, indices = self._column_indices(data_columns)
+        indices = (
+            [int(index) for index in column_indices]
+            if column_indices is not None
+            else self._column_indices(data_columns)[1]
+        )
         return operator.render(source, positions, selected_indices=indices)
 
     def get_feature_metadata(self) -> pd.DataFrame:
@@ -852,7 +869,7 @@ class DenseMatrixArtifact(_MatrixArtifact):
         column_indices: Sequence[int],
     ) -> np.ndarray:
         if self._feature_matrix_recipe() is not None:
-            return self._render_feature_matrix(positions, True)[:, list(column_indices)]
+            return self._render_feature_matrix(positions, column_indices=column_indices)
         positions = _positions_as_list(positions)
         resolved_columns = [int(index) for index in column_indices]
         if not positions:
@@ -967,7 +984,7 @@ class SparseMatrixArtifact(_MatrixArtifact):
         column_indices: Sequence[int],
     ) -> scipy_sparse.csr_matrix:
         if self._feature_matrix_recipe() is not None:
-            return self._render_feature_matrix(positions, True)[:, list(column_indices)]
+            return self._render_feature_matrix(positions, column_indices=column_indices)
         sparse = self._sparse_module()
         positions = _positions_as_list(positions)
         resolved_columns = [int(index) for index in column_indices]
