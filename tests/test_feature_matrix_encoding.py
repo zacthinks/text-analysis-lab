@@ -1,5 +1,7 @@
 """Isolated acceptance tests for the opt-in FeatureMatrix encoding engine."""
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -65,3 +67,11 @@ def test_mismatched_rows_and_unfitted_state_fail():
         FeatureMatrixEncoding().transform(pd.DataFrame({"x": [1]}))
     with pytest.raises(ArtifactError, match="matching row counts"):
         append_feature_columns(np.zeros((3, 2)), np.ones((2, 1)), sparse_output=True)
+
+
+def test_numeric_mapping_keys_survive_json_roundtrip():
+    train = pd.DataFrame({"category": [1, 2, 1]})
+    fitted = FeatureMatrixEncoding({"category": {1: 10, 2: 20}}).fit(train)
+    loaded = FeatureMatrixEncoding.from_state(json.loads(json.dumps(fitted.to_state())))
+    np.testing.assert_array_equal(loaded.transform(train), [[10], [20], [10]])
+    assert np.isnan(loaded.transform(pd.DataFrame({"category": [3]}))[0, 0])
