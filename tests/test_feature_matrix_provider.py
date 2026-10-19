@@ -62,3 +62,37 @@ def test_table_only_dense_with_selected_keys_as_features():
     )
     np.testing.assert_array_equal(result, [[20, 5.0]])
     assert source.calls == [([1], "table")]
+
+
+def test_narrow_added_features_do_not_query_base_matrix():
+    source = _Source(sparse.csr_matrix([[1, 0], [0, 2], [3, 0]]))
+    encoder = FeatureMatrixEncoding({"gender": "onehot"}).fit(
+        source.info[["gender", "income"]]
+    )
+    output_names = ["x", "y", *encoder.columns]
+    income_index = output_names.index("income")
+    result = render_feature_matrix(
+        source, positions=[2, 0], matrix_columns=["x", "y"],
+        metadata_columns=["gender", "income"], encoder=encoder,
+        sparse_output=True, output_columns=output_names,
+        selected_indices=[income_index],
+    )
+    np.testing.assert_array_equal(result.toarray(), [[6], [4]])
+    assert source.calls == [([2, 0], "table")]
+
+
+def test_narrow_onehot_fetches_only_its_own_scalar_field():
+    source = _Source(sparse.csr_matrix([[1, 0], [0, 2], [3, 0]]))
+    encoder = FeatureMatrixEncoding({"gender": "onehot"}).fit(
+        source.info[["gender", "income"]]
+    )
+    output_names = ["x", "y", *encoder.columns]
+    index = output_names.index("gender_m")
+    result = render_feature_matrix(
+        source, positions=[1, 2], matrix_columns=["x", "y"],
+        metadata_columns=["gender", "income"], encoder=encoder,
+        sparse_output=True, output_columns=output_names,
+        selected_indices=[index],
+    )
+    np.testing.assert_array_equal(result.toarray(), [[1], [0]])
+    assert source.calls == [([1, 2], "table")]
