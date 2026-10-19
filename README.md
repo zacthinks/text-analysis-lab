@@ -218,6 +218,7 @@ Translators span preprocessing, linguistic processing, representations, statisti
 - `MatrixRowAggregator`
 - `MatrixTranspose`
 - `FeatureTrimmer`
+- `FeatureMatrix`
 - `TfidfTransformer`
 
 </details>
