@@ -47,7 +47,7 @@ def render_feature_matrix(
     chosen_positions = [int(p) for p in positions]
 
     matrix_names = list(matrix_columns) if matrix_columns is not False and matrix_columns is not True else (
-        list(source.get_data_columns()) if is_matrix and matrix_columns is True else []
+        (list(output_columns[:len(output_columns) - len(encoder.columns)]) if output_columns is not None else list(source.get_data_columns())) if is_matrix and matrix_columns is True else []
     )
     matrix_width = len(matrix_names)
     full_width = matrix_width + len(encoder.columns)
