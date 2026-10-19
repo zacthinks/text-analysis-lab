@@ -371,6 +371,20 @@ class _MatrixArtifact(BaseArtifact):
             )
         return basis
 
+    def _feature_matrix_recipe(self) -> dict[str, Any] | None:
+        value = self.descriptor.get("lineage", {}).get("feature_matrix")
+        return value if isinstance(value, dict) else None
+
+    def _render_feature_matrix(self, positions: Sequence[int], data_columns: ColumnSelect) -> Any:
+        recipe = self._feature_matrix_recipe()
+        if recipe is None:
+            raise ArtifactError("This matrix has no computed feature recipe.")
+        operator = self.project.get_operator(recipe["operator_id"])
+        source = self.project.get_artifact(recipe["source_artifact_id"])
+        selected, indices = self._column_indices(data_columns)
+        matrix = operator.render(source, positions)
+        return matrix[:, indices]
+
     def get_feature_metadata(self) -> pd.DataFrame:
         """Return Feature Metadata in this artifact's local feature order.
 
@@ -394,7 +408,10 @@ class _MatrixArtifact(BaseArtifact):
                 f"feature_metadata_mode={mode!r}."
             )
 
-        if inherit:
+        recipe = self._feature_matrix_recipe()
+        if recipe is not None:
+            frame = pd.DataFrame({"column": recipe["feature_columns"]})
+        elif inherit:
             basis = self._feature_metadata_basis()
             frame = basis.get_feature_metadata()
             raw_indices = lineage.get("feature_indices")
@@ -677,6 +694,8 @@ class _MatrixArtifact(BaseArtifact):
     ) -> Any:
         if data_columns is False:
             return None
+        if self._feature_matrix_recipe() is not None:
+            return self._render_feature_matrix(positions, data_columns)
         _, physical_indices = self._physical_column_indices(data_columns)
         data_positions = self._resolve_data_positions(positions)
         data_artifact = self._require_data_artifact()
