@@ -79,7 +79,9 @@ class FeatureMatrixEncoding:
                     raise ArtifactError(f"Feature mapping for {column!r} must be numeric.")
                 specs.append({
                     "name": str(column), "kind": "mapping",
-                    "mapping": dict(requested),
+                    "pairs": [[key.item() if isinstance(key, np.generic) else key,
+                               value.item() if isinstance(value, np.generic) else value]
+                              for key, value in requested.items()],
                     "outputs": [str(column)],
                 })
             else:
@@ -110,7 +112,7 @@ class FeatureMatrixEncoding:
                 else:
                     block = np.empty((len(frame), 0), dtype=float)
             elif spec["kind"] == "mapping":
-                block = values.map(spec["mapping"]).to_numpy(dtype=float).reshape(-1, 1)
+                block = values.map(dict(spec["pairs"])).to_numpy(dtype=float).reshape(-1, 1)
             else:
                 try:
                     block = pd.to_numeric(values, errors="raise").to_numpy(dtype=float).reshape(-1, 1)
