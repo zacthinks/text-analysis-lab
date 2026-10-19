@@ -461,6 +461,8 @@ class _MatrixArtifact(BaseArtifact):
 
     def _feature_indices_to_data_artifact(self) -> list[int]:
         """Map this local feature axis onto the physical data owner's columns."""
+        if self._feature_matrix_recipe() is not None:
+            return list(range(len(self.get_data_columns())))
         if self.has_own_data():
             return list(range(self._infer_n_columns()))
 
@@ -728,7 +730,11 @@ class _MatrixArtifact(BaseArtifact):
         *,
         data_columns: ColumnSelect = True,
     ) -> pd.DataFrame:
-        selected, _ = self._physical_column_indices(data_columns)
+        selected, _ = (
+            self._column_indices(data_columns)
+            if self._feature_matrix_recipe() is not None
+            else self._physical_column_indices(data_columns)
+        )
         matrix = self._data_native_for_positions(positions, data_columns=data_columns)
         if self.artifact_type == ArtifactType.SPARSE_MATRIX:
             canonical = self._canonical_sparse_for_tabular_output(matrix)
@@ -846,6 +852,8 @@ class DenseMatrixArtifact(_MatrixArtifact):
         *,
         column_indices: Sequence[int],
     ) -> np.ndarray:
+        if self._feature_matrix_recipe() is not None:
+            return self._render_feature_matrix(positions, True)[:, list(column_indices)]
         positions = _positions_as_list(positions)
         resolved_columns = [int(index) for index in column_indices]
         if not positions:
