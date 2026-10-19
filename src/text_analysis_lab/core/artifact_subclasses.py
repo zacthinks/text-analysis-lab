@@ -967,6 +967,8 @@ class SparseMatrixArtifact(_MatrixArtifact):
         *,
         column_indices: Sequence[int],
     ) -> scipy_sparse.csr_matrix:
+        if self._feature_matrix_recipe() is not None:
+            return self._render_feature_matrix(positions, True)[:, list(column_indices)]
         sparse = self._sparse_module()
         positions = _positions_as_list(positions)
         resolved_columns = [int(index) for index in column_indices]
