@@ -6,7 +6,7 @@ mappings. Numerical output rows are never retained.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -40,53 +40,90 @@ class FeatureMatrixEncoding:
         )
 
     def fit(self, frame: pd.DataFrame) -> FeatureMatrixEncoding:
+        """Fit from an in-memory frame (the standalone encoding contract)."""
+        return self.fit_batches((frame,), columns=frame.columns)
+
+    def fit_batches(
+        self, batches: Iterable[pd.DataFrame], *, columns: Sequence[str],
+    ) -> FeatureMatrixEncoding:
+        """Learn only category vocabularies; never accumulate source rows.
+
+        A column's type is determined from its first nonempty batch. This is
+        stable for TeAL/Arrow-backed fields, whose schema is fixed throughout
+        the query. Numeric fields retain no row-wise state.
+        """
         if self._specs is not None:
             raise ArtifactError("FeatureMatrix encoding is already fitted.")
-        unknown = set(self.encodings).difference(frame.columns)
+        names = [str(name) for name in columns]
+        unknown = set(self.encodings).difference(names)
         if unknown:
             raise ArtifactError(f"Unknown FeatureMatrix encoding columns: {sorted(unknown)}")
+        if len(names) != len(set(names)):
+            raise ArtifactError("FeatureMatrix input scalar columns must be unique.")
         specs: list[dict[str, Any]] = []
-        for column in frame.columns:
-            values = frame[column]
-            requested = self.encodings.get(column)
+        vocabularies: dict[str, set[str]] = {}
+        for name in names:
+            requested = self.encodings.get(name)
             if requested is None:
-                requested = (
-                    "onehot"
-                    if pd.api.types.is_object_dtype(values.dtype)
-                    or isinstance(values.dtype, pd.CategoricalDtype)
-                    or pd.api.types.is_string_dtype(values.dtype)
-                    else "numeric"
-                )
-            if requested == "onehot":
-                # Category ordering is frozen; missing categories do not become
-                # features, and unseen categories at replay produce all zeros.
-                categories = sorted(
-                    {str(value) for value in values.dropna().tolist()}
-                )
-                specs.append({
-                    "name": str(column), "kind": "onehot",
-                    "categories": categories,
-                    "outputs": [f"{column}_{category}" for category in categories],
-                })
-            elif requested == "numeric":
-                specs.append({
-                    "name": str(column), "kind": "numeric",
-                    "outputs": [str(column)],
-                })
+                kind = "auto"
+            elif requested in ("onehot", "numeric"):
+                kind = requested
             elif isinstance(requested, Mapping):
-                if any(not isinstance(v, (int, float, np.integer, np.floating))
-                       for v in requested.values()):
-                    raise ArtifactError(f"Feature mapping for {column!r} must be numeric.")
-                specs.append({
-                    "name": str(column), "kind": "mapping",
-                    "pairs": [[key.item() if isinstance(key, np.generic) else key,
-                               value.item() if isinstance(value, np.generic) else value]
-                              for key, value in requested.items()],
-                    "outputs": [str(column)],
-                })
+                kind = "mapping"
             else:
-                raise ArtifactError(f"Unsupported encoding for {column!r}: {requested!r}")
-        outputs = [name for spec in specs for name in spec["outputs"]]
+                raise ArtifactError(f"Unsupported encoding for {name!r}: {requested!r}")
+            spec: dict[str, Any] = {"name": name, "kind": kind}
+            if kind == "mapping":
+                if any(not isinstance(v, (int, float, np.integer, np.floating))
+                       or isinstance(v, bool) for v in requested.values()):
+                    raise ArtifactError(f"Feature mapping for {name!r} must be numeric.")
+                spec["pairs"] = [
+                    [key.item() if isinstance(key, np.generic) else key,
+                     value.item() if isinstance(value, np.generic) else value]
+                    for key, value in requested.items()
+                ]
+            if kind == "onehot":
+                vocabularies[name] = set()
+            specs.append(spec)
+
+        for frame in batches:
+            if list(frame.columns) != names:
+                raise ArtifactError(
+                    "FeatureMatrix batches must have the same ordered scalar columns."
+                )
+            if frame.empty:
+                continue
+            for spec in specs:
+                name = spec["name"]
+                kind = spec["kind"]
+                values = frame[name]
+                if kind == "auto":
+                    kind = (
+                        "onehot"
+                        if pd.api.types.is_object_dtype(values.dtype)
+                        or isinstance(values.dtype, pd.CategoricalDtype)
+                        or pd.api.types.is_string_dtype(values.dtype)
+                        else "numeric"
+                    )
+                    spec["kind"] = kind
+                    if kind == "onehot":
+                        vocabularies[name] = set()
+                if kind == "onehot":
+                    vocabularies[name].update(
+                        str(value) for value in values.dropna().tolist()
+                    )
+
+        for spec in specs:
+            name = spec["name"]
+            if spec["kind"] == "auto":
+                spec["kind"] = "numeric"
+            if spec["kind"] == "onehot":
+                categories = sorted(vocabularies[name])
+                spec["categories"] = categories
+                spec["outputs"] = [f"{name}_{cat}" for cat in categories]
+            else:
+                spec["outputs"] = [name]
+        outputs = [output for spec in specs for output in spec["outputs"]]
         if len(outputs) != len(set(outputs)):
             raise ArtifactError("FeatureMatrix output column names must be unique.")
         self._specs = specs
