@@ -129,37 +129,74 @@ class FeatureMatrixEncoding:
         self._specs = specs
         return self
 
-    def transform(self, frame: pd.DataFrame, *, sparse_output: bool = False) -> Any:
+    def _selected_specs(
+        self, indices: Sequence[int] | None,
+    ) -> list[tuple[dict[str, Any], int]]:
         if self._specs is None:
             raise ArtifactError("FeatureMatrix encoding has not been fitted.")
+        features = [
+            (spec, local_index)
+            for spec in self._specs
+            for local_index in range(len(spec["outputs"]))
+        ]
+        selected = range(len(features)) if indices is None else indices
+        result = []
+        for raw in selected:
+            index = int(raw)
+            if index < 0 or index >= len(features):
+                raise ArtifactError(
+                    f"FeatureMatrix encoded feature index {index} is out of range."
+                )
+            result.append(features[index])
+        return result
+
+    def required_columns(self, indices: Sequence[int] | None = None) -> list[str]:
+        """Scalar inputs needed for precisely the requested encoded features."""
+        selected = self._selected_specs(indices)
+        return list(dict.fromkeys(spec["name"] for spec, _ in selected))
+
+    def transform(
+        self, frame: pd.DataFrame, *, sparse_output: bool = False,
+        indices: Sequence[int] | None = None,
+    ) -> Any:
+        """Materialize only selected encoded features, in the requested order."""
+        selected = self._selected_specs(indices)
         blocks: list[Any] = []
-        for spec in self._specs:
+        string_values: dict[str, pd.Series] = {}
+        for spec, local_index in selected:
             name = spec["name"]
             if name not in frame.columns:
                 raise ArtifactError(f"FeatureMatrix input is missing {name!r}.")
             values = frame[name]
             if spec["kind"] == "onehot":
-                cats = spec["categories"]
-                # Equality with a category is false for NA and unseen values.
-                if cats:
-                    block = np.column_stack([
-                        values.astype('string').eq(category).fillna(False).to_numpy(dtype=float)
-                        for category in cats
-                    ])
-                else:
-                    block = np.empty((len(frame), 0), dtype=float)
+                if name not in string_values:
+                    string_values[name] = values.astype("string")
+                category = spec["categories"][local_index]
+                block = (
+                    string_values[name].eq(category).fillna(False)
+                    .to_numpy(dtype=float).reshape(-1, 1)
+                )
             elif spec["kind"] == "mapping":
-                block = values.map(dict(spec["pairs"])).to_numpy(dtype=float).reshape(-1, 1)
+                block = (
+                    values.map(dict(spec["pairs"]))
+                    .to_numpy(dtype=float).reshape(-1, 1)
+                )
             else:
                 try:
-                    block = pd.to_numeric(values, errors="raise").to_numpy(dtype=float).reshape(-1, 1)
+                    block = (
+                        pd.to_numeric(values, errors="raise")
+                        .to_numpy(dtype=float).reshape(-1, 1)
+                    )
                 except (TypeError, ValueError) as exc:
                     raise ArtifactError(
                         f"FeatureMatrix numeric column {name!r} contains nonnumeric values."
                     ) from exc
             blocks.append(sparse.csr_matrix(block) if sparse_output else block)
         if sparse_output:
-            return sparse.hstack(blocks, format="csr") if blocks else sparse.csr_matrix((len(frame), 0))
+            return (
+                sparse.hstack(blocks, format="csr") if blocks
+                else sparse.csr_matrix((len(frame), 0))
+            )
         return np.hstack(blocks) if blocks else np.empty((len(frame), 0))
 
     def to_state(self) -> dict[str, Any]:
