@@ -68,6 +68,7 @@ def test_plan_fit_finalize_and_teal_prediction(labeled_representations):
     assert chosen.source.artifact_id == result.loc[selected, "representation_id"]
     assert isinstance(chosen.predictor.model, (LogisticRegression,)) or callable(chosen.predictor.model.predict)
     assert chosen.provenance["development_rows"] == 12
+    assert chosen.predictor.training_provenance == chosen.provenance
     predicted = project.translate(chosen.predictor, chosen.source)["output"]
     values = predicted.query(
         data_columns=["prediction"], key_columns=False, form="table",
@@ -135,3 +136,52 @@ def test_invalid_label_schema_and_missing_keys(labeled_representations):
         )
     with pytest.raises(TypeError, match="matrix"):
         ClassifierSearch(representations=[labels], models={"logistic": {}}, cv=3)
+
+
+def test_group_aware_cv_and_holdout(labeled_representations):
+    _, labels, dense, _ = labeled_representations
+    grouped = ClassifierSearch(
+        representations=[dense], models={"logistic": {"C": [1.0]}},
+        cv=3,
+    )
+    grouped.plan(labels, target="label", group="group")
+    assert len(grouped._folds) == 3
+    for train, test in grouped._folds:
+        assert not set(grouped._groups[train]) & set(grouped._groups[test])
+
+    heldout = ClassifierSearch(
+        representations=[dense], models={"logistic": {"C": [1.0]}},
+        cv=None, holdout=0.3,
+    )
+    heldout.plan(labels, target="label", group="group")
+    train, test = heldout._folds[0]
+    assert not set(heldout._groups[train]) & set(heldout._groups[test])
+
+
+def test_custom_cv_splitter(labeled_representations):
+    from sklearn.model_selection import StratifiedKFold
+
+    _, labels, dense, _ = labeled_representations
+    splitter = StratifiedKFold(n_splits=3, shuffle=True, random_state=11)
+    search = ClassifierSearch(
+        representations=[dense], models={"logistic": {"C": [1.0]}},
+        cv=splitter,
+    )
+    search.fit(labels, target="label")
+    assert search.results()["status"].tolist() == ["ok"]
+    assert len(search.results()["fold_scores"].iloc[0]) == 3
+
+
+def test_finalize_provenance_survives_operator_reopen(labeled_representations):
+    project, labels, dense, _ = labeled_representations
+    search = ClassifierSearch(
+        representations=[dense], models={"logistic": {"C": [1.0]}},
+        cv=3,
+    ).fit(labels, target="label")
+    chosen = search.finalize(candidate=0)
+    artifact = project.translate(chosen.predictor, chosen.source)["output"]
+    operator_id = project.catalog.get_operation(
+        artifact.descriptor["operation_id"]
+    )["operator_id"]
+    restored = project.get_operator(operator_id)
+    assert restored.training_provenance == chosen.provenance
