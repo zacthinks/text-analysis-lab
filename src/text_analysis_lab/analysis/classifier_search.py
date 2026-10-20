@@ -387,7 +387,9 @@ class ClassifierSearch:
             "development_rows": len(self._y),
         }
         return FinalizedClassifier(
-            predictor=FittedPredictor(fitted, save_model=True),
+            predictor=FittedPredictor(
+                fitted, save_model=True, training_provenance=provenance,
+            ),
             source=source,
             provenance=provenance,
         )
