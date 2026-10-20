@@ -416,11 +416,74 @@ def test_sklearn_random_and_halving_backends(labeled_representations):
             assert result["eligible_for_selection"].all()
 
 
+def test_halving_multiround_budget_and_selection(tmp_path):
+    """A genuinely adaptive search must account for survivor refits."""
+    frame = pd.DataFrame({
+        "text": [f"document {i}" for i in range(120)],
+        "x1": [i % 11 for i in range(120)],
+        "x2": [(i * 7) % 17 for i in range(120)],
+        "label": [i % 2 for i in range(120)],
+    })
+    data = tmp_path / "multiround.csv"
+    frame.to_csv(data, index=False)
+    project = Project.create(tmp_path / "multiround", name="multiround-halving")
+    try:
+        labels = project.read_csv(
+            data, text_fields="text",
+            metadata_fields=["x1", "x2", "label"],
+        )
+        features = project.translate(
+            FeatureMatrix(data_columns=False, metadata_columns=["x1", "x2"]),
+            labels,
+        )["output"]
+        for strategy in ("halving_grid", "halving_random"):
+            search = ClassifierSearch(
+                representations=[features],
+                models={"logistic": {"C": [0.01, 0.1, 1.0, 10.0, 100.0, 1000.0]}},
+                strategy=strategy,
+                n_iter=6 if strategy == "halving_random" else None,
+                cv=3, random_state=7,
+                search_kwargs={"factor": 2, "min_resources": 30},
+            )
+            plan = search.plan(labels, target="label")
+            assert len(plan) == 6
+            assert plan["initial_round_fits"].sum() == 18
+            assert plan["planned_fits"].isna().all()
+            search.fit(labels, target="label")
+            result = search.results()
+            rounds = result.groupby("search_iteration").agg(
+                configs=("candidate", "size"),
+                resources=("n_resources", "first"),
+                fits=("executed_fits", "sum"),
+            )
+            assert rounds.index.tolist() == [0, 1, 2]
+            assert rounds["configs"].tolist() == [6, 3, 2]
+            assert rounds["resources"].tolist() == [30, 60, 120]
+            assert rounds["fits"].tolist() == [18, 9, 6]
+            assert result["executed_fits"].sum() == 33
+            assert len(result) == 11
+            assert result["eligible_for_selection"].sum() == 2
+            early = result.loc[~result["eligible_for_selection"]].iloc[0]
+            with pytest.raises(ValueError, match="intermediate"):
+                search.finalize(candidate=int(early["candidate"]))
+            final = result.loc[
+                result["eligible_for_selection"] & result["status"].eq("ok")
+            ].iloc[0]
+            chosen = search.finalize(candidate=int(final["candidate"]))
+            assert chosen.provenance["search_strategy"] == strategy
+            assert chosen.provenance["development_rows"] == 120
+    finally:
+        project.close()
+
+
 def test_search_kwargs_and_invalid_strategy(labeled_representations):
     _, labels, dense, _ = labeled_representations
     with pytest.raises(ValueError, match="Unknown sklearn search strategy"):
         ClassifierSearch(representations=[dense], models={"logistic": {}},
                          strategy="nonexistent")
+    with pytest.raises(ValueError, match="positive candidate budget"):
+        ClassifierSearch(representations=[dense], models={"logistic": {}},
+                         strategy="random")
     with pytest.raises(ValueError, match="n_iter is only applicable"):
         ClassifierSearch(representations=[dense], models={"logistic": {}},
                          strategy="grid", n_iter=2)
