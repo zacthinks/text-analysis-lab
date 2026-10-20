@@ -10,22 +10,74 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+from random import Random
+from math import isfinite
 from time import perf_counter
 from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
 from scipy import sparse
-from sklearn.base import clone
+from sklearn.base import BaseEstimator, clone
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import get_scorer
 from sklearn.model_selection import (
-    GroupKFold, GroupShuffleSplit, ParameterGrid, ParameterSampler, StratifiedKFold,
+    GroupKFold, GroupShuffleSplit, ParameterGrid, StratifiedKFold,
     train_test_split,
 )
 from sklearn.svm import LinearSVC
 
 from text_analysis_lab.translators.fitted_predictor import FittedPredictor
+
+
+def _describe_search_value(value: Any) -> Any:
+    """Keep provenance JSON-safe without confusing parameter objects with scalars.
+
+    The actual estimator and estimator-valued hyperparameters remain preserved
+    in the fitted model asset. This is a descriptive, stable selection record.
+    """
+    if isinstance(value, np.generic):
+        value = value.item()
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if isfinite(value) else {
+            "__kind__": "nonfinite_float", "value": str(value),
+        }
+    if isinstance(value, BaseEstimator):
+        return {
+            "__kind__": "sklearn_estimator",
+            "class": f"{type(value).__module__}.{type(value).__qualname__}",
+            "parameters": {
+                str(k): _describe_search_value(v)
+                for k, v in sorted(value.get_params(deep=False).items())
+            },
+        }
+    if isinstance(value, np.ndarray):
+        return {
+            "__kind__": "numpy_array",
+            "dtype": str(value.dtype),
+            "shape": list(value.shape),
+            "values": _describe_search_value(value.tolist()),
+        }
+    if isinstance(value, Mapping):
+        return {
+            str(k): _describe_search_value(v)
+            for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_describe_search_value(v) for v in value]
+    return {
+        "__kind__": "object",
+        "class": f"{type(value).__module__}.{type(value).__qualname__}",
+    }
+
+
+def _describe_search_params(params: Mapping[str, Any]) -> dict[str, Any]:
+    description = {str(k): _describe_search_value(v) for k, v in params.items()}
+    # Enforce portable strict JSON before creating the saved operator.
+    json.dumps(description, sort_keys=True, allow_nan=False)
+    return description
 
 
 @dataclass(frozen=True)
@@ -224,13 +276,21 @@ class ClassifierSearch:
         rows = []
         for rep_index, representation in enumerate(self.representations):
             for family_name, estimator, grid in self._families:
-                configurations = list(ParameterGrid(grid))
-                if self.n_iter is not None and len(configurations) > self.n_iter:
-                    # ParameterSampler with a seeded distinct sample gives the
-                    # same family-level budget independently of other families.
-                    configurations = list(ParameterSampler(
-                        grid, n_iter=self.n_iter, random_state=self.random_state,
-                    ))
+                combinations = ParameterGrid(grid)
+                if self.n_iter is None:
+                    configurations = iter(combinations)
+                else:
+                    # ParameterGrid supports O(1) indexing and O(number of
+                    # hyperparameters) cardinality, without materializing all
+                    # combinations. Random.sample(range(...), k) uses bounded
+                    # memory for large finite grids.
+                    budget = min(self.n_iter, len(combinations))
+                    picked = Random(self.random_state).sample(
+                        range(len(combinations)), budget,
+                    ) if budget < len(combinations) else range(len(combinations))
+                    configurations = (
+                        combinations[int(index)] for index in picked
+                    )
                 for params in configurations:
                     rows.append({
                         "candidate": len(rows),
@@ -278,7 +338,6 @@ class ClassifierSearch:
                 raise ValueError("Cross-validation training and validation rows overlap.")
             if (
                 groups is not None
-                and isinstance(splitter, GroupKFold)
                 and len(set(groups[training]) & set(groups[validation]))
             ):
                 raise ValueError("Grouped CV has overlapping development groups.")
@@ -394,7 +453,7 @@ class ClassifierSearch:
             "target": self._target,
             "candidate": index,
             "model": row["model"],
-            "params": row["params"],
+            "params": _describe_search_params(row["params"]),
             "development_rows": len(self._y),
         }
         return FinalizedClassifier(
