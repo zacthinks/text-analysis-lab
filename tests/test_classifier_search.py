@@ -396,6 +396,7 @@ def test_sklearn_random_and_halving_backends(labeled_representations):
             cv=3, strategy=strategy,
             n_iter=3 if strategy in ("random", "halving_random") else None,
             random_state=23,
+            search_kwargs={"min_resources": 12} if strategy.startswith("halving") else None,
         ).fit(labels, target="label")
         result = search.results()
         assert (result["strategy"] == strategy).all()
