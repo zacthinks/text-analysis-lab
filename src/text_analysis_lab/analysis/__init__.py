@@ -7,6 +7,7 @@ hierarchy.
 """
 
 from text_analysis_lab.analysis.accessor import ArtifactAnalysis
+from text_analysis_lab.analysis.classifier_search import ClassifierSearch, FinalizedClassifier
 from text_analysis_lab.analysis.classification import (
     ClassificationEvaluation,
     classification,
@@ -48,6 +49,8 @@ __all__ = [
     "ArtifactAnalysis",
     "ArtifactSummary",
     "ClassificationEvaluation",
+    "ClassifierSearch",
+    "FinalizedClassifier",
     "GeneralizedDifferenceResult",
     "TextDiagnosticsResult",
     "KWICResult",
