@@ -244,3 +244,100 @@ def test_estimator_valued_pipeline_grid_survives_frozen_reopen(labeled_represent
         restored.model.predict(dense.get_matrix()),
         chosen.predictor.model.predict(dense.get_matrix()),
     )
+
+
+def test_real_reordered_keys_and_missing_development_key(tmp_path):
+    source = pd.DataFrame({
+        "text": [f"text {i}" for i in range(12)],
+        "uid": list(range(12)),
+        "x": list(range(12)),
+        "label": [int(i >= 6) for i in range(12)],
+    })
+    labels_file = tmp_path / "labels.csv"
+    reordered_file = tmp_path / "reordered.csv"
+    missing_file = tmp_path / "missing.csv"
+    source.to_csv(labels_file, index=False)
+    source.iloc[::-1].to_csv(reordered_file, index=False)
+    source.iloc[1:].to_csv(missing_file, index=False)
+    project = Project.create(tmp_path / "keyed", name="keyed-search")
+    try:
+        labels_base = project.read_csv(
+            labels_file, text_fields="text", metadata_fields=["uid", "label"],
+        )
+        labels = project.set_primary_keys(
+            labels_base, levels={"uid": "uid_key"}, leaf_key="leaf",
+        )
+        def make_matrix(path):
+            base = project.read_csv(
+                path, text_fields="text", metadata_fields=["uid", "x"],
+            )
+            keyed = project.set_primary_keys(
+                base, levels={"uid": "uid_key"}, leaf_key="leaf",
+            )
+            return project.translate(
+                FeatureMatrix(data_columns=False, metadata_columns=["x"]), keyed
+            )["output"]
+
+        reverse = make_matrix(reordered_file)
+        np.testing.assert_array_equal(reverse.get_matrix().ravel(), np.arange(11, -1, -1))
+        search = ClassifierSearch(
+            representations=[reverse], models={"logistic": {"C": [1.0]}}, cv=3,
+        ).fit(labels, target="label")
+        assert search.results()["status"].tolist() == ["ok"]
+        assert search._matrices[0].ravel().tolist() == list(range(12))
+        chosen = search.finalize(candidate=0)
+        assert chosen.provenance["development_rows"] == 12
+
+        partial = make_matrix(missing_file)
+        missing = ClassifierSearch(
+            representations=[partial], models={"logistic": {"C": [1.0]}}, cv=3,
+        ).fit(labels, target="label")
+        assert missing.results()["status"].tolist() == ["failed"]
+        assert "missing development keys" in missing.results()["error"].iloc[0]
+    finally:
+        project.close()
+
+
+def test_audit_only_matrix_rows_never_loaded_during_search(tmp_path, monkeypatch):
+    frame = pd.DataFrame({
+        "text": [f"text {i}" for i in range(12)],
+        "x": list(range(12)),
+        "label": [int(i >= 6) for i in range(12)],
+    })
+    devfile, fullfile = tmp_path / "dev.csv", tmp_path / "full.csv"
+    frame.iloc[:8].to_csv(devfile, index=False)
+    frame.to_csv(fullfile, index=False)
+    project = Project.create(tmp_path / "audit", name="audit-search")
+    try:
+        # Default row keys are deliberately shared for the first eight rows.
+        development = project.read_csv(
+            devfile, text_fields="text", metadata_fields=["label"],
+        )
+        complete = project.read_csv(
+            fullfile, text_fields="text", metadata_fields=["x"],
+        )
+        matrix = project.translate(
+            FeatureMatrix(data_columns=False, metadata_columns=["x"]), complete,
+        )["output"]
+        original = type(matrix).get_matrix
+        requested = []
+        def guarded(artifact, *, positions=None, data_columns=True):
+            if artifact.artifact_id == matrix.artifact_id:
+                assert positions is not None
+                assert all(0 <= p < 8 for p in positions), "audit-only matrix row queried"
+                requested.extend(positions)
+            return original(artifact, positions=positions, data_columns=data_columns)
+        monkeypatch.setattr(type(matrix), "get_matrix", guarded)
+        search = ClassifierSearch(
+            representations=[matrix],
+            models={"logistic": {"C": [1.0]}},
+            cv=2,
+        )
+        search.plan(development, target="label")
+        search.fit(development, target="label")
+        chosen = search.finalize(candidate=0)
+        assert len(requested) == 8
+        assert chosen.provenance["development_rows"] == 8
+        assert chosen.predictor.model.n_features_in_ == 1
+    finally:
+        project.close()
