@@ -549,6 +549,7 @@ class ClassifierSearch:
                         **{k: v for k, v in row.items() if not k.startswith("_")},
                         **{k: v for k, v in result.items() if k != "params"},
                         "strategy": self.strategy,
+                        "search_round": 0,
                     })
         self._results = pd.DataFrame(outcomes)
         return self
