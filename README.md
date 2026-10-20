@@ -342,6 +342,8 @@ Browse analysis methods by task (methods may appear in multiple families):
 <summary>Classification & Evaluation</summary>
 
 - `classification`
+- `ClassifierSearch`
+- `FinalizedClassifier`
 
 </details>
 
