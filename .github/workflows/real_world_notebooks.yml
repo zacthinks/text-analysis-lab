@@ -1,0 +1,42 @@
+name: Real-world notebooks
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  notebooks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.11
+
+      - name: Install TeAL and development dependencies
+        run: uv sync --python 3.11 --all-extras
+
+      - name: Execute real-text notebooks
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+        run: uv run python scripts/run_real_world_notebooks.py
+
+      - name: Preserve executed notebooks for qualitative inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wikinews-executed-notebooks
+          path: notebook-runs/*.executed.ipynb
+          if-no-files-found: warn
