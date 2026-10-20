@@ -387,6 +387,34 @@ def test_progress_tracks_sklearn_searches_and_is_opt_in(
     assert seen[-1].total == seen[-1].completed == 1
 
 
+
+def test_fit_more_accumulates_without_replacing_existing_results(labeled_representations):
+    _, labels, dense, sparse_features = labeled_representations
+    search = ClassifierSearch(
+        representations=[dense], models={"logistic": {"C": [1.0]}}, cv=3,
+    )
+    with pytest.raises(RuntimeError, match="Call fit"):
+        search.fit_more(representations=[dense], models={"logistic": {"C": [0.1]}})
+    search.fit(labels, target="label")
+    original = search.results().copy(deep=True)
+    search.fit_more(
+        representations=[sparse_features],
+        models={"linear_svm": {"C": [0.1, 1.0]}},
+    )
+    observed = search.results()
+    pd.testing.assert_frame_equal(original, observed.iloc[:1].reset_index(drop=True))
+    assert observed["candidate"].tolist() == [0, 1, 2]
+    assert observed["search_round"].tolist() == [0, 1, 1]
+    assert search.finalize(candidate=0).source.artifact_id == dense.artifact_id
+    assert search.finalize(candidate=2).source.artifact_id == sparse_features.artifact_id
+    search.fit_more(representations=[dense], models={"logistic": {"C": [0.1]}})
+    assert len(search.representations) == 2
+    assert search.results()["candidate"].tolist() == [0, 1, 2, 3]
+    search.fit(labels, target="label")
+    assert search.results()["candidate"].tolist() == [0]
+    assert search.results()["search_round"].tolist() == [0]
+
+
 def test_sklearn_random_and_halving_backends(labeled_representations):
     _, labels, dense, _ = labeled_representations
     for strategy in ("grid", "random", "halving_grid", "halving_random"):
