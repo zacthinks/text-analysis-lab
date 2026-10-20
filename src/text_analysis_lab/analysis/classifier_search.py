@@ -236,6 +236,7 @@ class ClassifierSearch:
         n_jobs: int | None = None,
     ) -> None:
         self.representations = list(representations)
+        self._initial_representations = tuple(self.representations)
         if not self.representations:
             raise ValueError("Provide at least one representation.")
         if (cv is None) == (holdout is None):
@@ -389,6 +390,9 @@ class ClassifierSearch:
     def plan(
         self, labels: Any, *, target: str, group: str | None = None,
     ) -> pd.DataFrame:
+        # A new plan/fit begins with the constructor's search space, not
+        # any additional representations registered by earlier fit_more rounds.
+        self.representations = list(self._initial_representations)
         if tuple(labels.primary_key) != tuple(self.representations[0].primary_key):
             raise ValueError("Labels and representations require the same key schema.")
         if labels.project is not self.representations[0].project:
