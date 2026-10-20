@@ -212,7 +212,7 @@ def test_custom_splitter_cannot_mix_declared_groups(labeled_representations):
     search = ClassifierSearch(
         representations=[dense],
         models={"logistic": {"C": [1.0]}},
-        cv=KFold(n_splits=3, shuffle=False),
+        cv=KFold(n_splits=3, shuffle=True, random_state=3),
     )
     with pytest.raises(ValueError, match="overlapping development groups"):
         search.plan(labels, target="label", group="group")
