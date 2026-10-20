@@ -8,6 +8,8 @@ search candidates nor fold estimators are persisted as TeAL artifacts.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+import json
 from time import perf_counter
 from typing import Any, Mapping, Sequence
 
@@ -377,7 +379,16 @@ class ClassifierSearch:
         fitted = clone(row["_estimator"]).set_params(**row["params"])
         fitted.fit(matrix, self._y)
         source = self.representations[row["representation_index"]]
+        assert self._keys is not None
+        key_identity = sha256(
+            json.dumps(
+                [[record[col] for col in source.primary_key] for record in self._keys],
+                separators=(",", ":"), default=str,
+            ).encode("utf-8")
+        ).hexdigest()
         provenance = {
+            "development_key_fingerprint": key_identity,
+            "development_primary_key": list(source.primary_key),
             "representation_artifact_id": source.artifact_id,
             "development_labels_artifact_id": self._label_artifact.artifact_id,
             "target": self._target,
