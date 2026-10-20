@@ -343,49 +343,28 @@ def test_audit_only_matrix_rows_never_loaded_during_search(tmp_path, monkeypatch
         project.close()
 
 
-def test_progress_tracks_sklearn_searches_and_is_opt_in(
+def test_progress_uses_sklearn_callbacks_only_when_requested(
     labeled_representations, monkeypatch,
 ):
+    from sklearn.callback import ProgressBar
     from text_analysis_lab.analysis import classifier_search as module
 
     _, labels, dense, _ = labeled_representations
-    seen = []
+    calls = []
 
-    class TrackingBar:
-        def __init__(self, **kwargs):
-            self.total = kwargs["total"]
-            self.disabled = kwargs["disable"]
-            self.completed = 0
-            self.postfixes = []
-            seen.append(self)
+    def tracking_progress(*args, **kwargs):
+        calls.append((args, kwargs))
+        return ProgressBar(*args, **kwargs)
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def update(self, amount):
-            self.completed += amount
-
-        def set_postfix_str(self, value, refresh=False):
-            self.postfixes.append(value)
-
-    monkeypatch.setattr(module, "tqdm", TrackingBar)
+    monkeypatch.setattr(module, "ProgressBar", tracking_progress)
     search = ClassifierSearch(
-        representations=[dense], models={"logistic": {"C": [0.1, 1.0]}},
-        cv=3,
+        representations=[dense], models={"logistic": {"C": [1.0]}}, cv=3,
     )
+    search.fit(labels, target="label", progress=False)
+    assert calls == []
     search.fit(labels, target="label", progress=True)
-    assert seen[-1].total == seen[-1].completed == 1
-    assert seen[-1].disabled is False
-    assert any("logistic" in text for text in seen[-1].postfixes)
-    assert len(search.results()) == 2
-
-    search.fit(labels, target="label")
-    assert seen[-1].disabled is True
-    assert seen[-1].total == seen[-1].completed == 1
-
+    assert calls == [((), {"max_propagation_depth": None})]
+    assert search.results()["status"].tolist() == ["ok"]
 
 
 def test_fit_more_accumulates_without_replacing_existing_results(labeled_representations):
