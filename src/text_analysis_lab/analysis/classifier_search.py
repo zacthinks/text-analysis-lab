@@ -10,9 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import json
-from random import Random
 from math import isfinite
-from time import perf_counter
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -20,11 +18,13 @@ import pandas as pd
 from scipy import sparse
 from sklearn.base import BaseEstimator, clone
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import get_scorer
 from sklearn.model_selection import (
-    GroupKFold, GroupShuffleSplit, ParameterGrid, StratifiedKFold,
-    train_test_split,
+    GridSearchCV, GroupKFold, GroupShuffleSplit, ParameterGrid,
+    ParameterSampler, RandomizedSearchCV, StratifiedKFold, train_test_split,
 )
+# Successive-halving search is explicitly experimental in sklearn.
+from sklearn.experimental import enable_halving_search_cv  # noqa: F401
+from sklearn.model_selection import HalvingGridSearchCV, HalvingRandomSearchCV
 from sklearn.svm import LinearSVC
 from tqdm.auto import tqdm
 
@@ -231,6 +231,9 @@ class ClassifierSearch:
         n_iter: int | None = None,
         random_state: int | None = 42,
         batch_size: int = 10_000,
+        strategy: str | None = None,
+        search_kwargs: Mapping[str, Any] | None = None,
+        n_jobs: int | None = None,
     ) -> None:
         self.representations = list(representations)
         if not self.representations:
@@ -249,6 +252,26 @@ class ClassifierSearch:
             raise ValueError("batch_size must be a positive integer.")
         self.cv, self.holdout, self.scoring = cv, holdout, scoring
         self.n_iter, self.random_state, self.batch_size = n_iter, random_state, int(batch_size)
+        self.strategy = strategy or ("random" if n_iter is not None else "grid")
+        strategies = {"grid", "random", "halving_grid", "halving_random"}
+        if self.strategy not in strategies:
+            raise ValueError(f"Unknown sklearn search strategy {self.strategy!r}.")
+        if self.strategy in {"grid", "halving_grid"} and n_iter is not None:
+            raise ValueError("n_iter is only applicable to randomized search strategies.")
+        if self.strategy == "halving_random" and n_iter is None:
+            raise ValueError("Set n_iter to an initial candidate budget for halving_random.")
+        if self.strategy.startswith("halving") and holdout is not None:
+            raise ValueError("Successive halving needs cross-validation, not one holdout fold.")
+        self.search_kwargs = dict(search_kwargs or {})
+        reserved = {
+            "estimator", "param_grid", "param_distributions", "cv", "scoring",
+            "refit", "n_iter", "n_candidates", "random_state", "n_jobs",
+            "return_train_score", "error_score",
+        }
+        overlap = reserved.intersection(self.search_kwargs)
+        if overlap:
+            raise ValueError(f"Set {sorted(overlap)} through ClassifierSearch, not search_kwargs.")
+        self.n_jobs = n_jobs
         self._families = _model_families(models, random_state)
         self._validate_representations()
         self._candidates: list[dict[str, Any]] = []
@@ -274,23 +297,17 @@ class ClassifierSearch:
                 raise ValueError("Search representations must be in the same Project.")
 
     def _candidate_configs(self) -> list[dict[str, Any]]:
+        """Build the initial search plan using sklearn's own samplers."""
         rows = []
         for rep_index, representation in enumerate(self.representations):
             for family_name, estimator, grid in self._families:
-                combinations = ParameterGrid(grid)
-                if self.n_iter is None:
-                    configurations = iter(combinations)
+                if self.strategy in {"grid", "halving_grid"}:
+                    configurations = ParameterGrid(grid)
                 else:
-                    # ParameterGrid supports O(1) indexing and O(number of
-                    # hyperparameters) cardinality, without materializing all
-                    # combinations. Random.sample(range(...), k) uses bounded
-                    # memory for large finite grids.
-                    budget = min(self.n_iter, len(combinations))
-                    picked = Random(self.random_state).sample(
-                        range(len(combinations)), budget,
-                    ) if budget < len(combinations) else range(len(combinations))
-                    configurations = (
-                        combinations[int(index)] for index in picked
+                    # ParameterSampler uses bounded indexing for finite grids;
+                    # random searches also support scipy parameter distributions.
+                    configurations = ParameterSampler(
+                        grid, n_iter=self.n_iter, random_state=self.random_state,
                     )
                 for params in configurations:
                     rows.append({
@@ -302,6 +319,29 @@ class ClassifierSearch:
                         "_estimator": estimator,
                     })
         return rows
+
+    def _sklearn_search(self, estimator: Any, grid: Mapping[str, Any]) -> Any:
+        """Let sklearn own enumeration, folding, fitting and score aggregation."""
+        common = dict(
+            estimator=estimator, scoring=self.scoring, cv=self._folds,
+            refit=False, error_score=np.nan, return_train_score=False,
+            n_jobs=self.n_jobs, **self.search_kwargs,
+        )
+        if self.strategy == "grid":
+            return GridSearchCV(param_grid=grid, **common)
+        if self.strategy == "random":
+            return RandomizedSearchCV(
+                param_distributions=grid, n_iter=self.n_iter,
+                random_state=self.random_state, **common,
+            )
+        if self.strategy == "halving_grid":
+            return HalvingGridSearchCV(
+                param_grid=grid, random_state=self.random_state, **common,
+            )
+        return HalvingRandomSearchCV(
+            param_distributions=grid, n_candidates=self.n_iter,
+            random_state=self.random_state, **common,
+        )
 
     def _make_folds(
         self, y: np.ndarray, groups: np.ndarray | None,
@@ -377,94 +417,124 @@ class ClassifierSearch:
         self, labels: Any, *, target: str, group: str | None = None,
         progress: bool = False,
     ) -> ClassifierSearch:
-        """Evaluate all candidates; optionally show live fold-level progress.
+        """Run sklearn searches over TeAL's aligned development-only matrices.
 
-        With progress=True, a single notebook/terminal tqdm bar reports the
-        number of completed-or-skipped candidate folds. The postfix indicates
-        the active representation, model family, candidate and fold. A failure
-        skips the remaining folds of that candidate, but advances the bar to
-        keep its total accurate. Default behavior remains silent.
+        The tqdm bar tracks representation/model searches; sklearn's
+        search_kwargs={'verbose': 2} shows completed CV fits within a search.
+        Search estimators use refit=False; finalize() performs the sole durable
+        full-development refit.
         """
         self.plan(labels, target=target, group=group)
         assert self._keys is not None and self._y is not None
-        scorer = get_scorer(self.scoring)
+        planned = list(self._candidates)
         outcomes: list[dict[str, Any]] = []
+        self._candidates = []
         n_folds = len(self._folds)
-        n_candidates = len(self._candidates)
-        total_fits = n_candidates * n_folds
+        n_searches = len(self.representations) * len(self._families)
         with tqdm(
-            total=total_fits,
-            desc="Classifier search",
-            unit="fit",
-            disable=not progress,
-            dynamic_ncols=True,
+            total=n_searches, desc="Classifier search", unit="search",
+            disable=not progress, dynamic_ncols=True,
         ) as bar:
-            for row in self._candidates:
-                index = row["representation_index"]
-                candidate = row["candidate"]
-                representation_id = row["representation_id"]
-                model_name = row["model"]
-                caption = (
-                    f"candidate {candidate + 1}/{n_candidates} "
-                    f"({representation_id}, {model_name})"
-                )
-                if progress:
-                    bar.set_postfix_str(f"{caption}, loading features", refresh=True)
-                if index not in self._matrices:
-                    try:
-                        self._matrices[index] = _extract_representation(
-                            self.representations[index], self._keys,
-                            batch_size=self.batch_size,
+            for rep_index, representation in enumerate(self.representations):
+                for model_name, estimator, grid in self._families:
+                    if progress:
+                        bar.set_postfix_str(
+                            f"{rep_index + 1}/{len(self.representations)} "
+                            f"{model_name}", refresh=True,
                         )
-                    except (ValueError, TypeError, KeyError) as exc:
-                        self._matrices[index] = exc
-                matrix = self._matrices[index]
-                scores = []
-                times = []
-                error = None
-                completed_folds = 0
-                if isinstance(matrix, Exception):
-                    error = str(matrix)
-                else:
-                    for fold_number, (training, validation) in enumerate(self._folds, 1):
-                        if progress:
-                            bar.set_postfix_str(
-                                f"{caption}, fold {fold_number}/{n_folds}",
-                                refresh=True,
+                    group_plan = [
+                        row for row in planned
+                        if row["representation_index"] == rep_index
+                        and row["model"] == model_name
+                    ]
+                    failure: str | None = None
+                    outcome_data: list[dict[str, Any]] = []
+                    try:
+                        if rep_index not in self._matrices:
+                            self._matrices[rep_index] = _extract_representation(
+                                representation, self._keys, batch_size=self.batch_size,
                             )
-                        started = perf_counter()
-                        try:
-                            estimator = clone(row["_estimator"]).set_params(**row["params"])
-                            estimator.fit(matrix[training], self._y[training])
-                            scores.append(float(scorer(
-                                estimator, matrix[validation], self._y[validation]
-                            )))
-                        except Exception as exc:
-                            error = f"{type(exc).__name__}: {exc}"
-                            break
-                        finally:
-                            times.append(perf_counter() - started)
-                            completed_folds += 1
-                            bar.update(1)
-
-                # Record failed and unattempted folds as processed work: the
-                # bar reaches its declared total even when candidates fail.
-                skipped = n_folds - completed_folds
-                if skipped:
-                    bar.update(skipped)
-                if progress and error is not None:
-                    bar.set_postfix_str(
-                        f"{caption}, failed: {error[:70]}", refresh=True,
-                    )
-                outcomes.append({
-                    **{k: v for k, v in row.items() if not k.startswith("_")},
-                    "mean_score": float(np.mean(scores)) if error is None else np.nan,
-                    "std_score": float(np.std(scores)) if error is None else np.nan,
-                    "fold_scores": list(scores),
-                    "fit_seconds": float(sum(times)),
-                    "status": "failed" if error is not None else "ok",
-                    "error": error,
-                })
+                        matrix = self._matrices[rep_index]
+                        search = self._sklearn_search(estimator, grid)
+                        search.fit(matrix, self._y)
+                        cv_results = search.cv_results_
+                        last_round = (
+                            int(np.max(cv_results["iter"]))
+                            if "iter" in cv_results else None
+                        )
+                        for j, params in enumerate(cv_results["params"]):
+                            mean = float(cv_results["mean_test_score"][j])
+                            folds = [
+                                float(cv_results[f"split{k}_test_score"][j])
+                                for k in range(n_folds)
+                            ]
+                            valid = bool(np.isfinite(mean) and all(
+                                np.isfinite(score) for score in folds
+                            ))
+                            stage = (
+                                int(cv_results["iter"][j])
+                                if "iter" in cv_results else None
+                            )
+                            outcome_data.append({
+                                "params": dict(params),
+                                "mean_score": mean if valid else np.nan,
+                                "std_score": (
+                                    float(cv_results["std_test_score"][j])
+                                    if valid else np.nan
+                                ),
+                                "fold_scores": folds,
+                                "fit_seconds": float(
+                                    cv_results["mean_fit_time"][j] * n_folds
+                                ),
+                                "status": "ok" if valid else "failed",
+                                "error": None if valid else (
+                                    "One or more sklearn CV fits failed; "
+                                    "see FitFailedWarning for details."
+                                ),
+                                "search_iteration": stage,
+                                "n_resources": (
+                                    int(cv_results["n_resources"][j])
+                                    if "n_resources" in cv_results else None
+                                ),
+                                "eligible_for_selection": (
+                                    last_round is None or stage == last_round
+                                ),
+                            })
+                    except Exception as exc:
+                        failure = f"{type(exc).__name__}: {exc}"
+                    finally:
+                        bar.update(1)
+                    if failure is not None:
+                        # A broken representation or all-failed sklearn search
+                        # does not prevent other representation/model searches.
+                        outcome_data = [{
+                            "params": row["params"],
+                            "mean_score": np.nan,
+                            "std_score": np.nan,
+                            "fold_scores": [],
+                            "fit_seconds": 0.0,
+                            "status": "failed",
+                            "error": failure,
+                            "search_iteration": None,
+                            "n_resources": None,
+                            "eligible_for_selection": True,
+                        } for row in group_plan]
+                    for result in outcome_data:
+                        candidate = len(self._candidates)
+                        row = {
+                            "candidate": candidate,
+                            "representation_index": rep_index,
+                            "representation_id": representation.artifact_id,
+                            "model": model_name,
+                            "params": result["params"],
+                            "_estimator": estimator,
+                        }
+                        self._candidates.append(row)
+                        outcomes.append({
+                            **{k: v for k, v in row.items() if not k.startswith("_")},
+                            **{k: v for k, v in result.items() if k != "params"},
+                            "strategy": self.strategy,
+                        })
         self._results = pd.DataFrame(outcomes)
         return self
 
@@ -482,6 +552,8 @@ class ClassifierSearch:
         chosen = self._results.loc[self._results["candidate"] == index].iloc[0]
         if chosen["status"] != "ok":
             raise ValueError("Cannot finalize a failed candidate.")
+        if not chosen["eligible_for_selection"]:
+            raise ValueError("Cannot finalize an intermediate successive-halving candidate.")
         row = self._candidates[index]
         matrix = self._matrices[row["representation_index"]]
         fitted = clone(row["_estimator"]).set_params(**row["params"])
@@ -503,6 +575,11 @@ class ClassifierSearch:
             "candidate": index,
             "model": row["model"],
             "params": _describe_search_params(row["params"]),
+            "search_strategy": self.strategy,
+            "search_iteration": (
+                int(chosen["search_iteration"])
+                if pd.notna(chosen["search_iteration"]) else None
+            ),
             "development_rows": len(self._y),
         }
         return FinalizedClassifier(
