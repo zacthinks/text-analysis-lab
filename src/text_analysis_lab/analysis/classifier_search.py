@@ -8,7 +8,6 @@ search candidates nor fold estimators are persisted as TeAL artifacts.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import product
 from time import perf_counter
 from typing import Any, Mapping, Sequence
 
@@ -19,7 +18,7 @@ from sklearn.base import clone
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import get_scorer
 from sklearn.model_selection import (
-    GroupKFold, ParameterGrid, ParameterSampler, StratifiedKFold,
+    GroupKFold, GroupShuffleSplit, ParameterGrid, ParameterSampler, StratifiedKFold,
     train_test_split,
 )
 from sklearn.svm import LinearSVC
@@ -246,6 +245,15 @@ class ClassifierSearch:
     ) -> list[tuple[np.ndarray, np.ndarray]]:
         indices = np.arange(len(y))
         if self.holdout is not None:
+            if groups is not None:
+                splitter = GroupShuffleSplit(
+                    n_splits=1, test_size=self.holdout,
+                    random_state=self.random_state,
+                )
+                return [
+                    (np.asarray(training), np.asarray(validation))
+                    for training, validation in splitter.split(indices, y, groups)
+                ]
             training, validation = train_test_split(
                 indices, test_size=self.holdout,
                 random_state=self.random_state, stratify=y,
@@ -259,10 +267,20 @@ class ClassifierSearch:
             )
         else:
             splitter = self.cv
-        return [
+        folds = [
             (np.asarray(train, dtype=int), np.asarray(test, dtype=int))
             for train, test in splitter.split(indices, y, groups)
         ]
+        for training, validation in folds:
+            if len(set(training) & set(validation)):
+                raise ValueError("Cross-validation training and validation rows overlap.")
+            if (
+                groups is not None
+                and isinstance(splitter, GroupKFold)
+                and len(set(groups[training]) & set(groups[validation]))
+            ):
+                raise ValueError("Grouped CV has overlapping development groups.")
+        return folds
 
     def plan(
         self, labels: Any, *, target: str, group: str | None = None,
