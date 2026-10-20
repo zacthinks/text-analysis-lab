@@ -7,6 +7,9 @@ import pandas as pd
 import pytest
 from scipy import sparse
 from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import KFold
 
 from text_analysis_lab import Project
 from text_analysis_lab.analysis import ClassifierSearch
@@ -185,3 +188,59 @@ def test_finalize_provenance_survives_operator_reopen(labeled_representations):
     )["operator_id"]
     restored = project.get_operator(operator_id)
     assert restored.training_provenance == chosen.provenance
+
+
+def test_huge_grid_random_budget_does_not_enumerate(labeled_representations, monkeypatch):
+    _, labels, dense, _ = labeled_representations
+    from sklearn.model_selection import ParameterGrid
+    original = ParameterGrid.__iter__
+    def forbidden(self):
+        raise AssertionError("Bounded search must not iterate the whole grid")
+    monkeypatch.setattr(ParameterGrid, "__iter__", forbidden)
+    search = ClassifierSearch(
+        representations=[dense],
+        models={"logistic": {"C": range(1, 2_000_001)}},
+        cv=3, n_iter=2, random_state=9,
+    )
+    planned = search.plan(labels, target="label")
+    assert len(planned) == 2
+    assert all(params["C"] > 0 for params in planned["params"])
+
+
+def test_custom_splitter_cannot_mix_declared_groups(labeled_representations):
+    _, labels, dense, _ = labeled_representations
+    search = ClassifierSearch(
+        representations=[dense],
+        models={"logistic": {"C": [1.0]}},
+        cv=KFold(n_splits=3, shuffle=False),
+    )
+    with pytest.raises(ValueError, match="overlapping development groups"):
+        search.plan(labels, target="label", group="group")
+
+
+def test_estimator_valued_pipeline_grid_survives_frozen_reopen(labeled_representations):
+    project, labels, dense, _ = labeled_representations
+    pipeline = Pipeline([
+        ("scale", "passthrough"),
+        ("predict", LogisticRegression(max_iter=500)),
+    ])
+    search = ClassifierSearch(
+        representations=[dense],
+        models={"pipeline": (
+            pipeline, {"scale": [StandardScaler(), "passthrough"]}
+        )},
+        cv=3,
+    ).fit(labels, target="label")
+    assert set(search.results()["status"]) == {"ok"}
+    chosen = search.finalize(candidate=0)
+    assert chosen.provenance["params"]["scale"]["__kind__"] == "sklearn_estimator"
+    artifact = project.translate(chosen.predictor, chosen.source)["output"]
+    op_id = project.catalog.get_operation(
+        artifact.descriptor["operation_id"]
+    )["operator_id"]
+    restored = project.get_operator(op_id)
+    assert restored.training_provenance == chosen.provenance
+    np.testing.assert_array_equal(
+        restored.model.predict(dense.get_matrix()),
+        chosen.predictor.model.predict(dense.get_matrix()),
+    )
