@@ -341,3 +341,81 @@ def test_audit_only_matrix_rows_never_loaded_during_search(tmp_path, monkeypatch
         assert chosen.predictor.model.n_features_in_ == 1
     finally:
         project.close()
+
+
+def test_progress_reports_each_fold_and_is_opt_in(labeled_representations, monkeypatch):
+    from text_analysis_lab.analysis import classifier_search as module
+
+    _, labels, dense, _ = labeled_representations
+    seen = []
+
+    class TrackingBar:
+        def __init__(self, **kwargs):
+            self.total = kwargs["total"]
+            self.disabled = kwargs["disable"]
+            self.completed = 0
+            self.postfixes = []
+            seen.append(self)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def update(self, amount):
+            self.completed += amount
+
+        def set_postfix_str(self, value, refresh=False):
+            self.postfixes.append(value)
+
+    monkeypatch.setattr(module, "tqdm", TrackingBar)
+    search = ClassifierSearch(
+        representations=[dense], models={"logistic": {"C": [0.1, 1.0]}},
+        cv=3,
+    )
+    search.fit(labels, target="label", progress=True)
+    assert seen[-1].total == seen[-1].completed == 6
+    assert seen[-1].disabled is False
+    assert any("fold 3/3" in text for text in seen[-1].postfixes)
+    assert len(search.results()) == 2
+
+    search.fit(labels, target="label")
+    assert seen[-1].disabled is True
+    assert seen[-1].total == seen[-1].completed == 6
+
+
+def test_failed_candidate_progress_accounts_for_skipped_folds(
+    labeled_representations, monkeypatch,
+):
+    from text_analysis_lab.analysis import classifier_search as module
+
+    _, labels, dense, _ = labeled_representations
+    progress = []
+
+    class TrackingBar:
+        def __init__(self, **kwargs):
+            self.total = kwargs["total"]
+            self.completed = 0
+            progress.append(self)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def set_postfix_str(self, value, refresh=False):
+            pass
+
+        def update(self, amount):
+            self.completed += amount
+
+    monkeypatch.setattr(module, "tqdm", TrackingBar)
+    search = ClassifierSearch(
+        representations=[dense],
+        models={"logistic": {"C": [0.0, 1.0]}},
+        cv=3,
+    ).fit(labels, target="label", progress=True)
+    assert search.results()["status"].tolist() == ["failed", "ok"]
+    assert progress[-1].completed == progress[-1].total == 6
