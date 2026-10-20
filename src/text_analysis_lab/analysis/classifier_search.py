@@ -256,6 +256,8 @@ class ClassifierSearch:
         strategies = {"grid", "random", "halving_grid", "halving_random"}
         if self.strategy not in strategies:
             raise ValueError(f"Unknown sklearn search strategy {self.strategy!r}.")
+        if self.strategy == "random" and n_iter is None:
+            raise ValueError("Set n_iter to a positive candidate budget for strategy='random'.")
         if self.strategy in {"grid", "halving_grid"} and n_iter is not None:
             raise ValueError("n_iter is only applicable to randomized search strategies.")
         if self.strategy == "halving_random" and n_iter is None:
@@ -405,9 +407,15 @@ class ClassifierSearch:
         self._candidates = configs
         self._results = None
         self._matrices = {}
+        # Successive halving may refit survivors in later rounds. Reporting
+        # only the initial candidates * folds as a total is misleading.
+        # sklearn determines the subsequent stages when its search runs.
+        adaptive = self.strategy.startswith("halving")
         return pd.DataFrame([
             {k: v for k, v in row.items() if not k.startswith("_")} | {
-                "n_folds": len(folds), "planned_fits": len(folds),
+                "n_folds": len(folds),
+                "initial_round_fits": len(folds),
+                "planned_fits": None if adaptive else len(folds),
                 "development_rows": len(keys),
             }
             for row in configs
@@ -449,6 +457,9 @@ class ClassifierSearch:
                     ]
                     failure: str | None = None
                     outcome_data: list[dict[str, Any]] = []
+                    # No matrix => no model fits. If sklearn raises before
+                    # cv_results_, the number attempted is unknown.
+                    attempted_fits: int | None = 0
                     try:
                         if rep_index not in self._matrices:
                             self._matrices[rep_index] = _extract_representation(
@@ -456,6 +467,7 @@ class ClassifierSearch:
                             )
                         matrix = self._matrices[rep_index]
                         search = self._sklearn_search(estimator, grid)
+                        attempted_fits = None
                         search.fit(matrix, self._y)
                         cv_results = search.cv_results_
                         last_round = (
@@ -486,6 +498,10 @@ class ClassifierSearch:
                                 "fit_seconds": float(
                                     cv_results["mean_fit_time"][j] * n_folds
                                 ),
+                                # Each cv_results_ row is one candidate
+                                # evaluated over every shared CV fold. Halving
+                                # lists survivors again at higher resources.
+                                "executed_fits": n_folds,
                                 "status": "ok" if valid else "failed",
                                 "error": None if valid else (
                                     "One or more sklearn CV fits failed; "
@@ -513,6 +529,7 @@ class ClassifierSearch:
                             "std_score": np.nan,
                             "fold_scores": [],
                             "fit_seconds": 0.0,
+                            "executed_fits": attempted_fits,
                             "status": "failed",
                             "error": failure,
                             "search_iteration": None,
@@ -539,6 +556,13 @@ class ClassifierSearch:
         return self
 
     def results(self) -> pd.DataFrame:
+        """Return one row per sklearn CV evaluation.
+
+        Under halving, a configuration may occur in multiple rounds at
+        different resource levels. executed_fits counts attempted CV fits
+        in each reported evaluation. The total is known only if all
+        searches successfully returned cv_results_.
+        """
         if self._results is None:
             raise RuntimeError("Call fit(...) before results().")
         return self._results.copy()
