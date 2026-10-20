@@ -1013,6 +1013,9 @@ class Project:
         delegates here.
         """
         from text_analysis_lab.translators.feature_matrix import FeatureMatrix
+        if not isinstance(translator, BaseTranslator):
+            from text_analysis_lab.core.fitted_sklearn_adapter import adapt_fitted_predictor
+            translator = adapt_fitted_predictor(translator)
         if isinstance(translator, FeatureMatrix):
             from text_analysis_lab.core.feature_matrix import feature_matrix
             return feature_matrix(
