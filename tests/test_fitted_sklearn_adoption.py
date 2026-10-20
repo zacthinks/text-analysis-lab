@@ -78,13 +78,13 @@ def test_fitted_sklearn_predictors_save_and_reopen(project_matrix, predictor):
 
 
 def test_sparse_fitted_predictor_and_explicit_wrapper_unchanged(project_matrix):
-    project, _, matrix, path = project_matrix
+    project, table, matrix, path = project_matrix
     sparse_features = project.translate(
         FeatureMatrix(
             data_columns=False, metadata_columns=["first", "second"],
             matrix_type="sparse"
         ),
-        project.get_artifact("input"),
+        table,
     )["output"]
     x = sparse_features.get_matrix()
     y = np.array([0, 0, 0, 1, 1, 1])
