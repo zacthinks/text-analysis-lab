@@ -404,6 +404,7 @@ class ClassifierSearch:
             raise ValueError("No candidate configurations.")
         self._keys, self._y, self._groups, self._folds = keys, y, groups, folds
         self._label_artifact, self._target = labels, str(target)
+        self._group = group
         self._candidates = configs
         self._results = None
         self._matrices = {}
@@ -550,6 +551,69 @@ class ClassifierSearch:
                         "strategy": self.strategy,
                     })
         self._results = pd.DataFrame(outcomes)
+        return self
+
+    def fit_more(
+        self, *,
+        representations: Sequence[Any],
+        models: Mapping[str, Any],
+        progress: bool = False,
+    ) -> ClassifierSearch:
+        """Append searches with identical development labels, CV folds and scoring.
+
+        Earlier candidates retain their IDs and fitted results. New search
+        rounds use the existing key-aligned development selection exclusively.
+        """
+        if self._results is None or self._label_artifact is None or self._target is None:
+            raise RuntimeError("Call fit(...) before fit_more(...).")
+        requested = list(representations)
+        if not requested:
+            raise ValueError("Provide at least one representation to fit_more.")
+        if not models:
+            raise ValueError("Provide at least one model family to fit_more.")
+        additional = ClassifierSearch(
+            representations=requested, models=models,
+            cv=self.cv, holdout=self.holdout, scoring=self.scoring,
+            n_iter=self.n_iter, random_state=self.random_state,
+            batch_size=self.batch_size, strategy=self.strategy,
+            search_kwargs=self.search_kwargs, n_jobs=self.n_jobs,
+        )
+        # Inherit the exact folds, including a custom or stochastic splitter.
+        additional._make_folds = lambda y, groups: self._folds
+        additional.fit(
+            self._label_artifact, target=self._target,
+            group=self._group, progress=progress,
+        )
+        if not np.array_equal(additional._y, self._y):
+            raise ValueError("Development labels changed since the initial fit.")
+        if additional._keys != self._keys:
+            raise ValueError("Development keys changed since the initial fit.")
+        existing = {rep.artifact_id: i for i, rep in enumerate(self.representations)}
+        for local_index, rep in enumerate(additional.representations):
+            if rep.artifact_id not in existing:
+                existing[rep.artifact_id] = len(self.representations)
+                self.representations.append(rep)
+            mapped = existing[rep.artifact_id]
+            if mapped not in self._matrices and local_index in additional._matrices:
+                self._matrices[mapped] = additional._matrices[local_index]
+        round_number = int(self._results["search_round"].max()) + 1
+        offset = len(self._candidates)
+        for row in additional._candidates:
+            new_row = dict(row)
+            new_row["candidate"] += offset
+            new_row["representation_index"] = existing[
+                row["representation_id"]
+            ]
+            self._candidates.append(new_row)
+        new_results = additional.results()
+        new_results["candidate"] += offset
+        new_results["representation_index"] = new_results[
+            "representation_id"
+        ].map(existing)
+        new_results["search_round"] = round_number
+        self._results = pd.concat(
+            [self._results, new_results], ignore_index=True,
+        )
         return self
 
     def results(self) -> pd.DataFrame:
