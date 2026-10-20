@@ -22,16 +22,19 @@ from text_analysis_lab.translators import FeatureMatrix, FittedPredictor
 def project_matrix(tmp_path):
     path = tmp_path / "predictors.csv"
     pd.DataFrame({
+        "text": ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"],
         "first": [0, 1, 2, 3, 4, 5],
         "second": [0, 0, 1, 1, 2, 2],
     }).to_csv(path, index=False)
     project = Project.create(tmp_path / "lab", name="fitted-adoption")
     table = project.read_csv(
-        path, text_fields=["first", "second"],
-        metadata_fields=None, output_label="input",
+        path, text_fields="text",
+        metadata_fields=["first", "second"], output_label="input",
     )
     matrix = project.translate(
-        FeatureMatrix(data_columns=["first", "second"]), table
+        FeatureMatrix(
+            data_columns=False, metadata_columns=["first", "second"]
+        ), table
     )["output"]
     try:
         yield project, table, matrix, tmp_path / "lab"
@@ -60,16 +63,26 @@ def test_fitted_sklearn_predictors_save_and_reopen(project_matrix, predictor):
     op_id = result.descriptor["operation_id"]
     # Durable fitted-object operator can be restored from the saved operation.
     operation = project.catalog.get_operation(op_id)
-    restored_model = project.get_operator(operation["operator_id"])
-    assert isinstance(restored_model, FittedPredictor)
-    assert restored_model.save_model is True
+    reopened = Project.open(path)
+    try:
+        restored_model = reopened.get_operator(operation["operator_id"])
+        assert isinstance(restored_model, FittedPredictor)
+        assert restored_model.save_model is True
+        replay = reopened.translate(restored_model, reopened.get_artifact(matrix.artifact_id))["output"]
+        replay_predictions = replay.query(
+            data_columns=["prediction"], key_columns=False, form="table",
+        )["prediction"].to_numpy()
+        np.testing.assert_array_equal(replay_predictions, model.predict(x))
+    finally:
+        reopened.close()
 
 
 def test_sparse_fitted_predictor_and_explicit_wrapper_unchanged(project_matrix):
     project, _, matrix, path = project_matrix
     sparse_features = project.translate(
         FeatureMatrix(
-            data_columns=["first", "second"], matrix_type="sparse"
+            data_columns=False, metadata_columns=["first", "second"],
+            matrix_type="sparse"
         ),
         project.get_artifact("input"),
     )["output"]
