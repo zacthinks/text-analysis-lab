@@ -343,10 +343,53 @@ def test_audit_only_matrix_rows_never_loaded_during_search(tmp_path, monkeypatch
         project.close()
 
 
-def test_progress_uses_sklearn_callbacks_only_when_requested(
-    labeled_representations, monkeypatch,
-):
-    from sklearn.callback import ProgressBar
+def test_compact_progress_counts_fits_and_accumulates(labeled_representations, monkeypatch):
+    from text_analysis_lab.analysis import classifier_search as module
+
+    _, labels, dense, sparse_features = labeled_representations
+    bars = []
+
+    class FakeBar:
+        def __init__(self, **kwargs):
+            self.total = kwargs["total"]
+            self.n = kwargs.get("initial", 0)
+            self.closed = False
+            self.contexts = []
+            bars.append(self)
+
+        def update(self, n):
+            self.n += n
+
+        def set_postfix_str(self, context, refresh=False):
+            self.contexts.append(context)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(module, "tqdm", FakeBar)
+    search = ClassifierSearch(
+        representations=[dense], models={"logistic": {"C": [0.1, 1.0]}},
+        cv=3, n_jobs=1,
+    )
+    search.fit(labels, target="label", progress=True)
+    assert bars[-1].total == bars[-1].n == 6
+    assert bars[-1].closed
+    assert bars[-1].contexts
+    search.fit_more(
+        representations=[sparse_features],
+        models={"linear_svm": {"C": [0.1, 1.0]}},
+        progress=True,
+    )
+    assert bars[-1].total == bars[-1].n == 12
+    assert bars[-1].closed
+    assert search.results()["search_round"].tolist() == [0, 0, 1, 1]
+    # Silent calls must not create a bar.
+    before = len(bars)
+    search.fit(labels, target="label", progress=False)
+    assert len(bars) == before
+
+
+def test_verbose_progress_remains_available(labeled_representations, monkeypatch):
     from text_analysis_lab.analysis import classifier_search as module
 
     _, labels, dense, _ = labeled_representations
@@ -356,15 +399,15 @@ def test_progress_uses_sklearn_callbacks_only_when_requested(
         calls.append((args, kwargs))
         return ProgressBar(*args, **kwargs)
 
+    from sklearn.callback import ProgressBar
     monkeypatch.setattr(module, "ProgressBar", tracking_progress)
     search = ClassifierSearch(
         representations=[dense], models={"logistic": {"C": [1.0]}}, cv=3,
     )
-    search.fit(labels, target="label", progress=False)
-    assert calls == []
-    search.fit(labels, target="label", progress=True)
+    search.fit(labels, target="label", progress="verbose")
     assert calls == [((), {"max_propagation_depth": None})]
-    assert search.results()["status"].tolist() == ["ok"]
+    with pytest.raises(ValueError, match="progress"):
+        search.fit(labels, target="label", progress="invalid")
 
 
 def test_fit_more_accumulates_without_replacing_existing_results(labeled_representations):
