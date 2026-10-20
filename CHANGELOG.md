@@ -16,6 +16,26 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
+## [0.9.0] - 2026-10-20
+
+### Added
+
+- `FeatureMatrix` builds frozen, replayable dense or sparse feature matrices from existing matrix features and selected numeric/categorical data or metadata. Its recipe-backed artifact computes requested rows and columns lazily rather than storing an expanded copy, with frozen ordered features and categorical vocabularies that transfer to compatible new sources (PR #53).
+- `Project.translate(...)` accepts an already-fitted scikit-learn predictor or Pipeline by adopting it into TeAL's durable `FittedPredictor` infrastructure; unfitted and transformer-only estimators are rejected. Explicit `FittedPredictor` use remains supported (PR #54).
+- `analysis.ClassifierSearch` compares sklearn classifiers on one or more key-aligned dense/sparse TeAL matrix representations. Search fits on explicitly selected development labels, uses shared CV/holdout folds with optional group isolation, reports candidate scores and failures, and finalizes a selected candidate by freshly fitting it on all development examples (PR #55).
+- Scikit-learn-backed grid, randomized, and successive-halving search strategies; explicit initial versus realized fit accounting for adaptive searches; optional compact or verbose search progress; and cumulative `fit_more(...)` for additional model/representation candidates without refitting earlier candidates (PR #55).
+- Durable selected-model provenance including the development-key fingerprint, representation, model parameters, and search strategy, with persisted and reloadable fitted predictions. Real-text lexical/latent notebook execution is checked in CI; a larger, independent-test 20 Newsgroups notebook supports manual validation (PR #55).
+
+### Changed
+
+- Raise the minimum scikit-learn version from 1.6.1 to **1.9.1** and add `rich>=13.9` as a core dependency for sklearn's native search callbacks. Existing environments pinned to older scikit-learn releases must upgrade before installing TeAL 0.9.0.
+- The new search API delegates cross-validation and hyperparameter evaluation to scikit-learn rather than retaining a parallel model-selection implementation. `ClassifierSearch` is an in-memory analysis utility, not a persisted search Artifact; only explicitly finalized predictors become reusable frozen operators.
+
+### Notes
+
+- The small Wikinews notebooks validate end-to-end interoperability, not generalizable classification performance. The full 20 Newsgroups notebook uses development-only fitting and a separate test partition for an independently evaluated example.
+- Existing stored-matrix and `FeatureSubset` behavior remains on its original path unless the new `FeatureMatrix` provider is explicitly used.
+
 ## [0.8.0] - 2026-10-19
 
 ### Added

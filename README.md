@@ -19,10 +19,10 @@ TeAL currently includes:
 - corpus inspection, context retrieval, KWIC, summaries, diagnostics, and visualization;
 - sparse and dense matrix analytics, including nearest neighbors, distances, row summaries, feature summaries, matrix summaries, and generic `top_features()` rankings (value, probability, frequency, lift, FREX, and custom scores);
 - spaCy sentence/token decomposition with POS tags, dependencies, entities, and lexical flags;
-- count matrices, TF-IDF, feature trimming, normalization, SVD/LSA, LDA, UMAP, Word2Vec, and ten clustering translators (including density, centroid, medoid, spectral, spherical, and probabilistic methods);
+- count matrices, TF-IDF, frozen sparse/dense feature construction, feature trimming, normalization, SVD/LSA, LDA, UMAP, Word2Vec, and ten clustering translators (including density, centroid, medoid, spectral, spherical, and probabilistic methods);
 - sentence-transformer and contextual-transformer representations;
 - researcher-defined and provider-backed dictionaries and lexicons;
-- classical classification, frozen fitted predictors, and external-result registration;
+- classical classification, reusable fitted sklearn predictors, key-aligned supervised classifier search, and external-result registration;
 - coreference resolution, semantic-role labeling, and word-sense disambiguation;
 - generalized-difference estimation for audited machine-coded measurements;
 - GeCo integration for interactive exploration, human coding, and classifier development;
@@ -342,6 +342,8 @@ Browse analysis methods by task (methods may appear in multiple families):
 <summary>Classification & Evaluation</summary>
 
 - `classification`
+- `ClassifierSearch`
+- `FinalizedClassifier`
 
 </details>
 

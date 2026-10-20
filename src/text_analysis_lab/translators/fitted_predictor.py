@@ -64,6 +64,7 @@ class FittedPredictor(BaseTranslator):
         *,
         probability_class: Any | None = None,
         save_model: bool = False,
+        training_provenance: Mapping[str, Any] | None = None,
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
@@ -74,6 +75,8 @@ class FittedPredictor(BaseTranslator):
         self.model = model
         self.probability_class = _json_scalar(probability_class)
         self.save_model = bool(save_model)
+        # Optional known training details never gate prediction on a new source.
+        self.training_provenance = dict(training_provenance or {})
         self._source_type: str | None = None
 
     def execution_capabilities(
@@ -295,6 +298,7 @@ class FittedPredictor(BaseTranslator):
             clone_estimator(self._require_model()),
             probability_class=self.probability_class,
             save_model=self.save_model,
+            training_provenance=self.training_provenance,
         )
         worker._source_type = self._source_type
         return worker
@@ -303,6 +307,7 @@ class FittedPredictor(BaseTranslator):
         return {
             "probability_class": self.probability_class,
             "save_model": self.save_model,
+            "training_provenance": dict(self.training_provenance),
         }
 
     @classmethod
@@ -311,6 +316,7 @@ class FittedPredictor(BaseTranslator):
             None,
             probability_class=state.get("probability_class"),
             save_model=bool(state.get("save_model", False)),
+            training_provenance=state.get("training_provenance"),
         )
 
     def save_assets(self, assets_dir: Path) -> Mapping[str, Any]:
