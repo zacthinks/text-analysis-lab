@@ -27,6 +27,7 @@ from sklearn.model_selection import (
 from sklearn.experimental import enable_halving_search_cv  # noqa: F401
 from sklearn.model_selection import HalvingGridSearchCV, HalvingRandomSearchCV
 from sklearn.svm import LinearSVC
+from tqdm import tqdm
 
 from text_analysis_lab.translators.fitted_predictor import FittedPredictor
 
@@ -214,6 +215,27 @@ def _model_families(
     return families
 
 
+class _SearchFitCounter:
+    """Non-propagating SearchCV callback for individual completed CV fits."""
+
+    def __init__(self, bar: Any) -> None:
+        self.bar = bar
+
+    def setup(self, estimator: Any, context: Any) -> None:
+        pass
+
+    def teardown(self, estimator: Any, context: Any) -> None:
+        pass
+
+    def on_fit_task_begin(self, estimator: Any, context: Any) -> None:
+        pass
+
+    def on_fit_task_end(self, estimator: Any, context: Any) -> bool:
+        if context.task_name == "candidate-split-evaluation":
+            self.bar.update(1)
+        return False
+
+
 class ClassifierSearch:
     """Search representation and sklearn-model combinations on development labels.
 
@@ -286,6 +308,7 @@ class ClassifierSearch:
         self._target: str | None = None
         self._results: pd.DataFrame | None = None
         self._matrices: dict[int, Any] = {}
+        self._progress_initial = 0
 
     def _validate_representations(self) -> None:
         first = self.representations[0]
@@ -428,133 +451,160 @@ class ClassifierSearch:
 
     def fit(
         self, labels: Any, *, target: str, group: str | None = None,
-        progress: bool = False,
+        progress: bool | str = False,
     ) -> ClassifierSearch:
-        """Run sklearn searches over TeAL's aligned development-only matrices.
+        """Fit candidates with one compact CV-fit bar or verbose sklearn output.
 
-        With progress=True, sklearn's native callback reports candidate/fold
-        fits as they run. Only callback-compatible estimators report deeper
-        iteration progress; SAGA does not support inner iteration callbacks.
-        All sklearn searches use refit=False; finalize() owns the durable refit.
+        progress=True counts completed CV fits in place. progress="verbose"
+        restores sklearn's detailed nested callbacks. With n_jobs>1 compact
+        progress advances after whole searches because child workers cannot
+        safely update one in-process counter. Successive-halving budgets are
+        adaptive and the percentage is deliberately omitted.
         """
+        if progress is not True and progress is not False and progress != "verbose":
+            raise ValueError("progress must be False, True, or 'verbose'.")
         self.plan(labels, target=target, group=group)
         assert self._keys is not None and self._y is not None
         planned = list(self._candidates)
         outcomes: list[dict[str, Any]] = []
         self._candidates = []
         n_folds = len(self._folds)
-        for rep_index, representation in enumerate(self.representations):
-            for model_name, estimator, grid in self._families:
-                group_plan = [
-                    row for row in planned
-                    if row["representation_index"] == rep_index
-                    and row["model"] == model_name
-                ]
-                if progress:
-                    print(
-                        f"Representation {rep_index + 1}/{len(self.representations)}"
-                        f" ({representation.artifact_id}), {model_name}: "
-                        f"{len(group_plan)} initial candidates x {n_folds} folds",
-                        flush=True,
-                    )
-                failure: str | None = None
-                outcome_data: list[dict[str, Any]] = []
-                # No matrix => no model fits. If sklearn raises before
-                # cv_results_, the number attempted is unknown.
-                attempted_fits: int | None = 0
-                try:
-                    if rep_index not in self._matrices:
-                        self._matrices[rep_index] = _extract_representation(
-                            representation, self._keys, batch_size=self.batch_size,
+        total = (
+            None if self.strategy.startswith("halving")
+            else self._progress_initial + len(planned) * n_folds
+        )
+        bar = (
+            tqdm(
+                total=total, initial=self._progress_initial,
+                desc="Classifier search", unit="fit", dynamic_ncols=True,
+            )
+            if progress is True else None
+        )
+        try:
+            for rep_index, representation in enumerate(self.representations):
+                for model_name, estimator, grid in self._families:
+                    group_plan = [
+                        row for row in planned
+                        if row["representation_index"] == rep_index
+                        and row["model"] == model_name
+                    ]
+                    if progress == "verbose":
+                        print(
+                            f"Representation {rep_index + 1}/{len(self.representations)}"
+                            f" ({representation.artifact_id}), {model_name}: "
+                            f"{len(group_plan)} initial candidates x {n_folds} folds",
+                            flush=True,
                         )
-                    matrix = self._matrices[rep_index]
-                    search = self._sklearn_search(estimator, grid)
-                    if progress:
-                        search.set_callbacks(ProgressBar(max_propagation_depth=None))
-                    attempted_fits = None
-                    search.fit(matrix, self._y)
-                    cv_results = search.cv_results_
-                    last_round = (
-                        int(np.max(cv_results["iter"]))
-                        if "iter" in cv_results else None
-                    )
-                    for j, params in enumerate(cv_results["params"]):
-                        mean = float(cv_results["mean_test_score"][j])
-                        folds = [
-                            float(cv_results[f"split{k}_test_score"][j])
-                            for k in range(n_folds)
-                        ]
-                        valid = bool(np.isfinite(mean) and all(
-                            np.isfinite(score) for score in folds
-                        ))
-                        stage = (
-                            int(cv_results["iter"][j])
+                    if bar is not None:
+                        bar.set_postfix_str(
+                            f"{representation.artifact_id} / {model_name}", refresh=False,
+                        )
+                    failure: str | None = None
+                    outcome_data: list[dict[str, Any]] = []
+                    # No matrix => no model fits. If sklearn raises before
+                    # cv_results_, the number attempted is unknown.
+                    attempted_fits: int | None = 0
+                    try:
+                        if rep_index not in self._matrices:
+                            self._matrices[rep_index] = _extract_representation(
+                                representation, self._keys, batch_size=self.batch_size,
+                            )
+                        matrix = self._matrices[rep_index]
+                        search = self._sklearn_search(estimator, grid)
+                        if progress == "verbose":
+                            search.set_callbacks(ProgressBar(max_propagation_depth=None))
+                        elif bar is not None and self.n_jobs in (None, 1):
+                            search.set_callbacks(_SearchFitCounter(bar))
+                        attempted_fits = None
+                        search.fit(matrix, self._y)
+                        cv_results = search.cv_results_
+                        if bar is not None and self.n_jobs not in (None, 1):
+                            # Worker-local callbacks cannot update the parent process.
+                            bar.update(len(cv_results["params"]) * n_folds)
+                        last_round = (
+                            int(np.max(cv_results["iter"]))
                             if "iter" in cv_results else None
                         )
-                        outcome_data.append({
-                            "params": dict(params),
-                            "mean_score": mean if valid else np.nan,
-                            "std_score": (
-                                float(cv_results["std_test_score"][j])
-                                if valid else np.nan
-                            ),
-                            "fold_scores": folds,
-                            "fit_seconds": float(
-                                cv_results["mean_fit_time"][j] * n_folds
-                            ),
-                            # Each cv_results_ row is one candidate
-                            # evaluated over every shared CV fold. Halving
-                            # lists survivors again at higher resources.
-                            "executed_fits": n_folds,
-                            "status": "ok" if valid else "failed",
-                            "error": None if valid else (
-                                "One or more sklearn CV fits failed; "
-                                "see FitFailedWarning for details."
-                            ),
-                            "search_iteration": stage,
-                            "n_resources": (
-                                int(cv_results["n_resources"][j])
-                                if "n_resources" in cv_results else None
-                            ),
-                            "eligible_for_selection": (
-                                last_round is None or stage == last_round
-                            ),
+                        for j, params in enumerate(cv_results["params"]):
+                            mean = float(cv_results["mean_test_score"][j])
+                            folds = [
+                                float(cv_results[f"split{k}_test_score"][j])
+                                for k in range(n_folds)
+                            ]
+                            valid = bool(np.isfinite(mean) and all(
+                                np.isfinite(score) for score in folds
+                            ))
+                            stage = (
+                                int(cv_results["iter"][j])
+                                if "iter" in cv_results else None
+                            )
+                            outcome_data.append({
+                                "params": dict(params),
+                                "mean_score": mean if valid else np.nan,
+                                "std_score": (
+                                    float(cv_results["std_test_score"][j])
+                                    if valid else np.nan
+                                ),
+                                "fold_scores": folds,
+                                "fit_seconds": float(
+                                    cv_results["mean_fit_time"][j] * n_folds
+                                ),
+                                # Each cv_results_ row is one candidate
+                                # evaluated over every shared CV fold. Halving
+                                # lists survivors again at higher resources.
+                                "executed_fits": n_folds,
+                                "status": "ok" if valid else "failed",
+                                "error": None if valid else (
+                                    "One or more sklearn CV fits failed; "
+                                    "see FitFailedWarning for details."
+                                ),
+                                "search_iteration": stage,
+                                "n_resources": (
+                                    int(cv_results["n_resources"][j])
+                                    if "n_resources" in cv_results else None
+                                ),
+                                "eligible_for_selection": (
+                                    last_round is None or stage == last_round
+                                ),
+                            })
+                    except Exception as exc:
+                        failure = f"{type(exc).__name__}: {exc}"
+                    if failure is not None:
+                        # A broken representation or all-failed sklearn search
+                        # does not prevent other representation/model searches.
+                        outcome_data = [{
+                            "params": row["params"],
+                            "mean_score": np.nan,
+                            "std_score": np.nan,
+                            "fold_scores": [],
+                            "fit_seconds": 0.0,
+                            "executed_fits": attempted_fits,
+                            "status": "failed",
+                            "error": failure,
+                            "search_iteration": None,
+                            "n_resources": None,
+                            "eligible_for_selection": True,
+                        } for row in group_plan]
+                    for result in outcome_data:
+                        candidate = len(self._candidates)
+                        row = {
+                            "candidate": candidate,
+                            "representation_index": rep_index,
+                            "representation_id": representation.artifact_id,
+                            "model": model_name,
+                            "params": result["params"],
+                            "_estimator": estimator,
+                        }
+                        self._candidates.append(row)
+                        outcomes.append({
+                            **{k: v for k, v in row.items() if not k.startswith("_")},
+                            **{k: v for k, v in result.items() if k != "params"},
+                            "strategy": self.strategy,
+                            "search_round": 0,
                         })
-                except Exception as exc:
-                    failure = f"{type(exc).__name__}: {exc}"
-                if failure is not None:
-                    # A broken representation or all-failed sklearn search
-                    # does not prevent other representation/model searches.
-                    outcome_data = [{
-                        "params": row["params"],
-                        "mean_score": np.nan,
-                        "std_score": np.nan,
-                        "fold_scores": [],
-                        "fit_seconds": 0.0,
-                        "executed_fits": attempted_fits,
-                        "status": "failed",
-                        "error": failure,
-                        "search_iteration": None,
-                        "n_resources": None,
-                        "eligible_for_selection": True,
-                    } for row in group_plan]
-                for result in outcome_data:
-                    candidate = len(self._candidates)
-                    row = {
-                        "candidate": candidate,
-                        "representation_index": rep_index,
-                        "representation_id": representation.artifact_id,
-                        "model": model_name,
-                        "params": result["params"],
-                        "_estimator": estimator,
-                    }
-                    self._candidates.append(row)
-                    outcomes.append({
-                        **{k: v for k, v in row.items() if not k.startswith("_")},
-                        **{k: v for k, v in result.items() if k != "params"},
-                        "strategy": self.strategy,
-                        "search_round": 0,
-                    })
+        finally:
+            if bar is not None:
+                bar.close()
         self._results = pd.DataFrame(outcomes)
         return self
 
@@ -562,7 +612,7 @@ class ClassifierSearch:
         self, *,
         representations: Sequence[Any],
         models: Mapping[str, Any],
-        progress: bool = False,
+        progress: bool | str = False,
     ) -> ClassifierSearch:
         """Append searches with identical development labels, CV folds and scoring.
 
@@ -585,6 +635,9 @@ class ClassifierSearch:
         )
         # Inherit the exact folds, including a custom or stochastic splitter.
         additional._make_folds = lambda y, groups: self._folds
+        # Start the appended round's bar at the count already evaluated.
+        previous = self._results["executed_fits"]
+        additional._progress_initial = int(previous.dropna().sum())
         additional.fit(
             self._label_artifact, target=self._target,
             group=self._group, progress=progress,
