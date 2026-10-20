@@ -343,7 +343,9 @@ def test_audit_only_matrix_rows_never_loaded_during_search(tmp_path, monkeypatch
         project.close()
 
 
-def test_progress_reports_each_fold_and_is_opt_in(labeled_representations, monkeypatch):
+def test_progress_tracks_sklearn_searches_and_is_opt_in(
+    labeled_representations, monkeypatch,
+):
     from text_analysis_lab.analysis import classifier_search as module
 
     _, labels, dense, _ = labeled_representations
@@ -375,47 +377,59 @@ def test_progress_reports_each_fold_and_is_opt_in(labeled_representations, monke
         cv=3,
     )
     search.fit(labels, target="label", progress=True)
-    assert seen[-1].total == seen[-1].completed == 6
+    assert seen[-1].total == seen[-1].completed == 1
     assert seen[-1].disabled is False
-    assert any("fold 3/3" in text for text in seen[-1].postfixes)
+    assert any("logistic" in text for text in seen[-1].postfixes)
     assert len(search.results()) == 2
 
     search.fit(labels, target="label")
     assert seen[-1].disabled is True
-    assert seen[-1].total == seen[-1].completed == 6
+    assert seen[-1].total == seen[-1].completed == 1
 
 
-def test_failed_candidate_progress_accounts_for_skipped_folds(
-    labeled_representations, monkeypatch,
-):
-    from text_analysis_lab.analysis import classifier_search as module
-
+def test_sklearn_random_and_halving_backends(labeled_representations):
     _, labels, dense, _ = labeled_representations
-    progress = []
+    for strategy in ("grid", "random", "halving_grid", "halving_random"):
+        search = ClassifierSearch(
+            representations=[dense],
+            models={"logistic": {"C": [0.1, 1.0, 10.0, 100.0]}},
+            cv=3, strategy=strategy,
+            n_iter=3 if strategy in ("random", "halving_random") else None,
+            random_state=23,
+        ).fit(labels, target="label")
+        result = search.results()
+        assert (result["strategy"] == strategy).all()
+        assert result["status"].eq("ok").any()
+        if strategy.startswith("halving"):
+            assert result["search_iteration"].notna().all()
+            assert result["n_resources"].notna().all()
+            finalists = result.loc[result["eligible_for_selection"]]
+            assert len(finalists) >= 1
+            chosen = search.finalize(candidate=int(finalists.iloc[0]["candidate"]))
+            assert chosen.provenance["search_strategy"] == strategy
+            earlier = result.loc[~result["eligible_for_selection"]]
+            if len(earlier):
+                with pytest.raises(ValueError, match="intermediate"):
+                    search.finalize(candidate=int(earlier.iloc[0]["candidate"]))
+        else:
+            assert result["eligible_for_selection"].all()
 
-    class TrackingBar:
-        def __init__(self, **kwargs):
-            self.total = kwargs["total"]
-            self.completed = 0
-            progress.append(self)
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def set_postfix_str(self, value, refresh=False):
-            pass
-
-        def update(self, amount):
-            self.completed += amount
-
-    monkeypatch.setattr(module, "tqdm", TrackingBar)
+def test_search_kwargs_and_invalid_strategy(labeled_representations):
+    _, labels, dense, _ = labeled_representations
+    with pytest.raises(ValueError, match="Unknown sklearn search strategy"):
+        ClassifierSearch(representations=[dense], models={"logistic": {}},
+                         strategy="nonexistent")
+    with pytest.raises(ValueError, match="n_iter is only applicable"):
+        ClassifierSearch(representations=[dense], models={"logistic": {}},
+                         strategy="grid", n_iter=2)
+    with pytest.raises(ValueError, match="needs cross-validation"):
+        ClassifierSearch(representations=[dense], models={"logistic": {}},
+                         cv=None, holdout=0.25, strategy="halving_grid")
     search = ClassifierSearch(
         representations=[dense],
-        models={"logistic": {"C": [0.0, 1.0]}},
-        cv=3,
-    ).fit(labels, target="label", progress=True)
-    assert search.results()["status"].tolist() == ["failed", "ok"]
-    assert progress[-1].completed == progress[-1].total == 6
+        models={"logistic": {"C": [1.0]}},
+        strategy="grid", search_kwargs={"verbose": 0},
+        n_jobs=1,
+    ).fit(labels, target="label")
+    assert search.results()["status"].tolist() == ["ok"]
