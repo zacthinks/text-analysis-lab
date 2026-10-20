@@ -26,6 +26,7 @@ from sklearn.model_selection import (
     train_test_split,
 )
 from sklearn.svm import LinearSVC
+from tqdm.auto import tqdm
 
 from text_analysis_lab.translators.fitted_predictor import FittedPredictor
 
@@ -374,48 +375,96 @@ class ClassifierSearch:
 
     def fit(
         self, labels: Any, *, target: str, group: str | None = None,
+        progress: bool = False,
     ) -> ClassifierSearch:
+        """Evaluate all candidates; optionally show live fold-level progress.
+
+        With progress=True, a single notebook/terminal tqdm bar reports the
+        number of completed-or-skipped candidate folds. The postfix indicates
+        the active representation, model family, candidate and fold. A failure
+        skips the remaining folds of that candidate, but advances the bar to
+        keep its total accurate. Default behavior remains silent.
+        """
         self.plan(labels, target=target, group=group)
         assert self._keys is not None and self._y is not None
         scorer = get_scorer(self.scoring)
         outcomes: list[dict[str, Any]] = []
-        for row in self._candidates:
-            index = row["representation_index"]
-            if index not in self._matrices:
-                try:
-                    self._matrices[index] = _extract_representation(
-                        self.representations[index], self._keys,
-                        batch_size=self.batch_size,
-                    )
-                except (ValueError, TypeError, KeyError) as exc:
-                    self._matrices[index] = exc
-            matrix = self._matrices[index]
-            scores = []
-            times = []
-            error = None
-            if isinstance(matrix, Exception):
-                error = str(matrix)
-            else:
-                for training, validation in self._folds:
-                    started = perf_counter()
+        n_folds = len(self._folds)
+        n_candidates = len(self._candidates)
+        total_fits = n_candidates * n_folds
+        with tqdm(
+            total=total_fits,
+            desc="Classifier search",
+            unit="fit",
+            disable=not progress,
+            dynamic_ncols=True,
+        ) as bar:
+            for row in self._candidates:
+                index = row["representation_index"]
+                candidate = row["candidate"]
+                representation_id = row["representation_id"]
+                model_name = row["model"]
+                caption = (
+                    f"candidate {candidate + 1}/{n_candidates} "
+                    f"({representation_id}, {model_name})"
+                )
+                if progress:
+                    bar.set_postfix_str(f"{caption}, loading features", refresh=True)
+                if index not in self._matrices:
                     try:
-                        estimator = clone(row["_estimator"]).set_params(**row["params"])
-                        estimator.fit(matrix[training], self._y[training])
-                        scores.append(float(scorer(estimator, matrix[validation], self._y[validation])))
-                    except Exception as exc:
-                        error = f"{type(exc).__name__}: {exc}"
-                        break
-                    finally:
-                        times.append(perf_counter() - started)
-            outcomes.append({
-                **{k: v for k, v in row.items() if not k.startswith("_")},
-                "mean_score": float(np.mean(scores)) if error is None else np.nan,
-                "std_score": float(np.std(scores)) if error is None else np.nan,
-                "fold_scores": list(scores),
-                "fit_seconds": float(sum(times)),
-                "status": "failed" if error is not None else "ok",
-                "error": error,
-            })
+                        self._matrices[index] = _extract_representation(
+                            self.representations[index], self._keys,
+                            batch_size=self.batch_size,
+                        )
+                    except (ValueError, TypeError, KeyError) as exc:
+                        self._matrices[index] = exc
+                matrix = self._matrices[index]
+                scores = []
+                times = []
+                error = None
+                completed_folds = 0
+                if isinstance(matrix, Exception):
+                    error = str(matrix)
+                else:
+                    for fold_number, (training, validation) in enumerate(self._folds, 1):
+                        if progress:
+                            bar.set_postfix_str(
+                                f"{caption}, fold {fold_number}/{n_folds}",
+                                refresh=True,
+                            )
+                        started = perf_counter()
+                        try:
+                            estimator = clone(row["_estimator"]).set_params(**row["params"])
+                            estimator.fit(matrix[training], self._y[training])
+                            scores.append(float(scorer(
+                                estimator, matrix[validation], self._y[validation]
+                            )))
+                        except Exception as exc:
+                            error = f"{type(exc).__name__}: {exc}"
+                            break
+                        finally:
+                            times.append(perf_counter() - started)
+                            completed_folds += 1
+                            bar.update(1)
+
+                # Record failed and unattempted folds as processed work: the
+                # bar reaches its declared total even when candidates fail.
+                skipped = n_folds - completed_folds
+                if skipped:
+                    bar.update(skipped)
+                if progress and error is not None:
+                    bar.set_postfix_str(
+                        f"{caption}, failed: {error[:70]}", refresh=True,
+                    )
+                outcomes.append({
+                    **{k: v for k, v in row.items() if not k.startswith("_")},
+                    "mean_score": float(np.mean(scores)) if error is None else np.nan,
+                    "std_score": float(np.std(scores)) if error is None else np.nan,
+                    "fold_scores": list(scores),
+                    "fit_seconds": float(sum(times)),
+                    "status": "failed" if error is not None else "ok",
+                    "error": error,
+                })
         self._results = pd.DataFrame(outcomes)
         return self
 
