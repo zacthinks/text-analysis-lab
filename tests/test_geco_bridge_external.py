@@ -1002,6 +1002,23 @@ def test_bad_topic_registration_rolls_back_new_link(tmp_path: Path, monkeypatch)
                 topic_models={"incomplete": {"membership": matrix}},
             )
         assert not (project.storage.teal_dir / "geco" / "links" / "also_invalid.json").exists()
+
+        unrelated = project.from_keyed_frame(
+            docs,
+            dominant.query(
+                key_columns=True, data_columns=["max_feature", "max_value"],
+                metadata_columns=False, form="table",
+            ),
+            data_fields=["max_feature", "max_value"],
+            require_complete=True,
+        )
+        with pytest.raises(bridge.GeCoIntegrationError, match="provenance"):
+            project.geco.create(
+                "unrelated", documents=docs, text_field="text", geometry=matrix,
+                topic_models={"bad": {
+                    "membership": matrix, "dominant": unrelated,
+                }},
+            )
         assert argmax.artifact_type.value == "table"
     finally:
         project.close()
