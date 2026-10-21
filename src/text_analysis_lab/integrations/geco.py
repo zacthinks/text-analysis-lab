@@ -788,6 +788,69 @@ class LinkedGeCoWorkspace:
             )
         )
 
+    def add_topic_model(
+        self,
+        name: str,
+        *,
+        membership: BaseArtifact | str,
+        dominant: BaseArtifact | str,
+        description: BaseArtifact | str | None = None,
+        topic_labels: Mapping[str, str] | None = None,
+        if_exists: str = "error",
+    ) -> int:
+        """Register TeAL artifacts in GeCo's sole authoritative topic registry."""
+        if self._provider is None:
+            raise GeCoIntegrationError("Topic registration requires an external provider.")
+        model_name = _validate_resource_name(name, kind="topic model")
+        matrix = self._project.get_artifact(membership)
+        argmax = self._project.get_artifact(dominant)
+        terms = self._project.get_artifact(description) if description is not None else None
+        if matrix.artifact_type not in _MATRIX_TYPES:
+            raise GeCoIntegrationError("Topic membership must be a TeAL matrix.")
+        if not matrix.primary_key or not set(matrix.primary_key).issubset(
+            self.documents.primary_key
+        ):
+            raise GeCoIntegrationError("Topic membership keys must be contained in document keys.")
+        if argmax.artifact_type != ArtifactType.TABLE:
+            raise GeCoIntegrationError("Topic dominant assignments must be a TeAL ArgMax table.")
+        if argmax.primary_key != matrix.primary_key:
+            raise GeCoIntegrationError("Topic membership and ArgMax key schemas disagree.")
+        if not {"max_feature", "max_value"}.issubset(argmax.get_data_columns()):
+            raise GeCoIntegrationError("Topic ArgMax needs max_feature and max_value.")
+        if int(matrix.n_rows or 0) != int(argmax.n_rows or 0):
+            raise GeCoIntegrationError("Topic memberships and ArgMax row counts disagree.")
+        basis = argmax.descriptor.get("lineage", {}).get("basis_artifact_ids", [])
+        if basis and matrix.artifact_id not in basis:
+            raise GeCoIntegrationError("ArgMax provenance does not match membership artifact.")
+        if terms is not None:
+            if terms.artifact_type not in _MATRIX_TYPES:
+                raise GeCoIntegrationError("Topic descriptions must be a TeAL matrix.")
+            names = matrix.get_data_columns()
+            if int(terms.n_rows or 0) != len(names):
+                raise GeCoIntegrationError("Topic description topic count does not match memberships.")
+            if len(terms.primary_key) == 1:
+                key_frame = terms.query(
+                    key_columns=True, data_columns=False, metadata_columns=False,
+                    order_by="_position", form="table",
+                )
+                ids = key_frame[str(terms.primary_key[0])].tolist()
+                suffixes = [re.fullmatch(r".*_(\d+)", n) for n in names]
+                if all(suffixes) and all(str(i).isdigit() for i in ids):
+                    expected = [int(m.group(1)) for m in suffixes if m is not None]
+                    if [int(i) for i in ids] != expected:
+                        raise GeCoIntegrationError("Topic description topic ordering differs from memberships.")
+        register = getattr(self._coder, "register_topic_model", None)
+        if not callable(register):
+            raise GeCoIntegrationError("Installed GeCo does not support topic registration.")
+        return int(register(
+            name=model_name,
+            membership_artifact_id=str(matrix.artifact_id),
+            dominant_artifact_id=str(argmax.artifact_id),
+            description_artifact_id=str(terms.artifact_id) if terms is not None else None,
+            topic_labels=topic_labels,
+            if_exists=if_exists,
+        ))
+
     def _geometries(self) -> list[dict[str, Any]]:
         method = getattr(self._coder, "geometries", None)
         if not callable(method):
@@ -859,6 +922,7 @@ class GeCoManager:
         text: BaseArtifact | str | None = None,
         display_text: BaseArtifact | str | None = None,
         projections: Mapping[str, BaseArtifact | str] | None = None,
+        topic_models: Mapping[str, Mapping[str, Any]] | None = None,
         metadata_fields: Sequence[str] | None = None,
         geometry_name: str | None = None,
         overwrite: bool = False,
@@ -992,6 +1056,37 @@ class GeCoManager:
                     name=view_name,
                     external_ref=_external_ref(view),
                 )
+
+            if topic_models:
+                # Registration is GeCo-owned, not repeated in TeAL's manifest.
+                temporary_manifest = {
+                    "name": workspace_name,
+                    "mode": "explore",
+                    "documents_artifact_id": documents_artifact.artifact_id,
+                    "workspace_path": str(workspace_path.relative_to(self.root)),
+                }
+                linked_for_registration = LinkedGeCoWorkspace(
+                    self, temporary_manifest, coder, provider
+                )
+                for topic_name, specification in topic_models.items():
+                    if not isinstance(specification, Mapping):
+                        raise GeCoIntegrationError(
+                            f"Topic Model {topic_name!r} settings must be a mapping."
+                        )
+                    extra = set(specification) - {
+                        "membership", "dominant", "description", "topic_labels"
+                    }
+                    if extra:
+                        raise GeCoIntegrationError(
+                            f"Unknown Topic Model registration parameters: {sorted(extra)}."
+                        )
+                    if "membership" not in specification or "dominant" not in specification:
+                        raise GeCoIntegrationError(
+                            f"Topic Model {topic_name!r} requires membership and dominant."
+                        )
+                    linked_for_registration.add_topic_model(
+                        topic_name, **dict(specification)
+                    )
 
             manifest: dict[str, Any] = {
                 "schema_version": _LINK_SCHEMA_VERSION,
