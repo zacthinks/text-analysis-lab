@@ -23,7 +23,8 @@ import pandas as pd
 from scipy import sparse
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
-from text_analysis_lab.core.errors import ArtifactNotFoundError, PipelineError
+from text_analysis_lab.core.errors import ArtifactNotFoundError, LineageError, PipelineError
+from text_analysis_lab.core.lineage import basis_artifact_ids
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.core.utils import utc_now_iso
 from text_analysis_lab.translators.geco_predictor import GeCoPredictor
@@ -819,9 +820,16 @@ class LinkedGeCoWorkspace:
             raise GeCoIntegrationError("Topic ArgMax needs max_feature and max_value.")
         if int(matrix.n_rows or 0) != int(argmax.n_rows or 0):
             raise GeCoIntegrationError("Topic memberships and ArgMax row counts disagree.")
-        basis = argmax.descriptor.get("lineage", {}).get("basis_artifact_ids", [])
-        if basis and matrix.artifact_id not in basis:
-            raise GeCoIntegrationError("ArgMax provenance does not match membership artifact.")
+        try:
+            basis = basis_artifact_ids(argmax)
+        except LineageError as exc:
+            raise GeCoIntegrationError(
+                "Topic ArgMax must declare its membership artifact as a TeAL lineage basis."
+            ) from exc
+        if matrix.artifact_id not in basis:
+            raise GeCoIntegrationError(
+                "Topic ArgMax provenance does not match membership artifact."
+            )
         if terms is not None:
             if terms.artifact_type not in _MATRIX_TYPES:
                 raise GeCoIntegrationError("Topic descriptions must be a TeAL matrix.")
