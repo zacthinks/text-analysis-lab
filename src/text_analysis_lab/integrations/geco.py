@@ -23,7 +23,8 @@ import pandas as pd
 from scipy import sparse
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
-from text_analysis_lab.core.errors import ArtifactNotFoundError, PipelineError
+from text_analysis_lab.core.errors import ArtifactNotFoundError, LineageError, PipelineError
+from text_analysis_lab.core.lineage import basis_artifact_ids
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.core.utils import utc_now_iso
 from text_analysis_lab.translators.geco_predictor import GeCoPredictor
@@ -133,6 +134,88 @@ class TeALGeCoProvider:
                     "coordinates; Plotly cannot display this view reliably."
                 )
             return coordinates
+
+    def read_artifact(
+        self,
+        artifact_id: str,
+        ordered_user_keys: list[dict[str, Any]] | None,
+    ) -> Any:
+        """Read any registered topic matrix/table by compatible stable keys.
+
+        Sparse/dense membership matrices and keyed ArgMax tables retain only
+        matched requested keys. A subset primary key broadcasts ancestor rows
+        to compatible finer-grained GeCo observations without fake assignments.
+        Geometry and projection reads keep their existing strict contract.
+        """
+        # GeCo is an optional dependency and imported only on linked use.
+        from geometric_coder.topic_artifacts import ArtifactRows
+
+        if not isinstance(artifact_id, str) or not artifact_id.strip():
+            raise GeCoIntegrationError("Topic artifact ID must be a nonempty string.")
+        with self._project_session() as project:
+            try:
+                artifact = project.get_artifact(artifact_id)
+            except ArtifactNotFoundError as exc:
+                raise GeCoIntegrationError(
+                    f"Topic artifact {artifact_id!r} is not available."
+                ) from exc
+            if artifact.artifact_type not in {*_MATRIX_TYPES, ArtifactType.TABLE}:
+                raise GeCoIntegrationError(
+                    f"Topic artifact {artifact_id!r} must be a matrix or table."
+                )
+            columns = list(artifact.get_data_columns())
+            if ordered_user_keys is None:
+                if artifact.artifact_type not in _MATRIX_TYPES:
+                    raise GeCoIntegrationError(
+                        "Independent topic descriptions must be matrices."
+                    )
+                key_rows = artifact.query(
+                    key_columns=True, data_columns=False,
+                    metadata_columns=False, order_by="_position", form="table"
+                )
+                row_ids = (
+                    key_rows[str(artifact.primary_key[0])].tolist()
+                    if len(artifact.primary_key) == 1 else None
+                )
+                return ArtifactRows(
+                    kind="matrix", values=artifact.get_matrix().copy(),
+                    columns=columns, row_ids=row_ids,
+                )
+
+            if not artifact.primary_key:
+                raise GeCoIntegrationError(
+                    f"Topic artifact {artifact_id!r} has no primary key."
+                )
+            keys = _normalize_ordered_keys(
+                ordered_user_keys, artifact.primary_key
+            )
+            # This batched left-key query reports missing keys as nulls.
+            # Public positions_by_keys is strict and rejects partial coverage.
+            records = project.query._fetch_by_keys(
+                artifact, keys, select_exprs=["k._position AS _position"]
+            )
+            matched = [
+                (i, int(rec["_position"]))
+                for i, rec in enumerate(records)
+                if rec.get("_position") is not None
+            ]
+            matched_positions = [i for i, _ in matched]
+            positions = [p for _, p in matched]
+            if artifact.artifact_type in _MATRIX_TYPES:
+                return ArtifactRows(
+                    kind="matrix",
+                    values=artifact.get_matrix(positions=positions).copy(),
+                    columns=columns, positions=matched_positions,
+                )
+            frame = artifact.query(
+                key_columns=False, data_columns=True,
+                metadata_columns=False, positions=positions, form="table",
+            )
+            return ArtifactRows(
+                kind="table",
+                values=frame.loc[:, columns].reset_index(drop=True).copy(),
+                columns=columns, positions=matched_positions,
+            )
 
     def _matrix_artifact(
         self,
@@ -706,6 +789,76 @@ class LinkedGeCoWorkspace:
             )
         )
 
+    def add_topic_model(
+        self,
+        name: str,
+        *,
+        membership: BaseArtifact | str,
+        dominant: BaseArtifact | str,
+        description: BaseArtifact | str | None = None,
+        topic_labels: Mapping[str, str] | None = None,
+        if_exists: str = "error",
+    ) -> int:
+        """Register TeAL artifacts in GeCo's sole authoritative topic registry."""
+        if self._provider is None:
+            raise GeCoIntegrationError("Topic registration requires an external provider.")
+        model_name = _validate_resource_name(name, kind="topic model")
+        matrix = self._project.get_artifact(membership)
+        argmax = self._project.get_artifact(dominant)
+        terms = self._project.get_artifact(description) if description is not None else None
+        if matrix.artifact_type not in _MATRIX_TYPES:
+            raise GeCoIntegrationError("Topic membership must be a TeAL matrix.")
+        if not matrix.primary_key or not set(matrix.primary_key).issubset(
+            self.documents.primary_key
+        ):
+            raise GeCoIntegrationError("Topic membership keys must be contained in document keys.")
+        if argmax.artifact_type != ArtifactType.TABLE:
+            raise GeCoIntegrationError("Topic dominant assignments must be a TeAL ArgMax table.")
+        if argmax.primary_key != matrix.primary_key:
+            raise GeCoIntegrationError("Topic membership and ArgMax key schemas disagree.")
+        if not {"max_feature", "max_value"}.issubset(argmax.get_data_columns()):
+            raise GeCoIntegrationError("Topic ArgMax needs max_feature and max_value.")
+        if int(matrix.n_rows or 0) != int(argmax.n_rows or 0):
+            raise GeCoIntegrationError("Topic memberships and ArgMax row counts disagree.")
+        try:
+            basis = basis_artifact_ids(argmax)
+        except LineageError as exc:
+            raise GeCoIntegrationError(
+                "Topic ArgMax must declare its membership artifact as a TeAL lineage basis."
+            ) from exc
+        if matrix.artifact_id not in basis:
+            raise GeCoIntegrationError(
+                "Topic ArgMax provenance does not match membership artifact."
+            )
+        if terms is not None:
+            if terms.artifact_type not in _MATRIX_TYPES:
+                raise GeCoIntegrationError("Topic descriptions must be a TeAL matrix.")
+            names = matrix.get_data_columns()
+            if int(terms.n_rows or 0) != len(names):
+                raise GeCoIntegrationError("Topic description topic count does not match memberships.")
+            if len(terms.primary_key) == 1:
+                key_frame = terms.query(
+                    key_columns=True, data_columns=False, metadata_columns=False,
+                    order_by="_position", form="table",
+                )
+                ids = key_frame[str(terms.primary_key[0])].tolist()
+                suffixes = [re.fullmatch(r".*_(\d+)", n) for n in names]
+                if all(suffixes) and all(str(i).isdigit() for i in ids):
+                    expected = [int(m.group(1)) for m in suffixes if m is not None]
+                    if [int(i) for i in ids] != expected:
+                        raise GeCoIntegrationError("Topic description topic ordering differs from memberships.")
+        register = getattr(self._coder, "register_topic_model", None)
+        if not callable(register):
+            raise GeCoIntegrationError("Installed GeCo does not support topic registration.")
+        return int(register(
+            name=model_name,
+            membership_artifact_id=str(matrix.artifact_id),
+            dominant_artifact_id=str(argmax.artifact_id),
+            description_artifact_id=str(terms.artifact_id) if terms is not None else None,
+            topic_labels=topic_labels,
+            if_exists=if_exists,
+        ))
+
     def _geometries(self) -> list[dict[str, Any]]:
         method = getattr(self._coder, "geometries", None)
         if not callable(method):
@@ -777,6 +930,7 @@ class GeCoManager:
         text: BaseArtifact | str | None = None,
         display_text: BaseArtifact | str | None = None,
         projections: Mapping[str, BaseArtifact | str] | None = None,
+        topic_models: Mapping[str, Mapping[str, Any]] | None = None,
         metadata_fields: Sequence[str] | None = None,
         geometry_name: str | None = None,
         overwrite: bool = False,
@@ -910,6 +1064,37 @@ class GeCoManager:
                     name=view_name,
                     external_ref=_external_ref(view),
                 )
+
+            if topic_models:
+                # Registration is GeCo-owned, not repeated in TeAL's manifest.
+                temporary_manifest = {
+                    "name": workspace_name,
+                    "mode": "explore",
+                    "documents_artifact_id": documents_artifact.artifact_id,
+                    "workspace_path": str(workspace_path.relative_to(self.root)),
+                }
+                linked_for_registration = LinkedGeCoWorkspace(
+                    self, temporary_manifest, coder, provider
+                )
+                for topic_name, specification in topic_models.items():
+                    if not isinstance(specification, Mapping):
+                        raise GeCoIntegrationError(
+                            f"Topic Model {topic_name!r} settings must be a mapping."
+                        )
+                    extra = set(specification) - {
+                        "membership", "dominant", "description", "topic_labels"
+                    }
+                    if extra:
+                        raise GeCoIntegrationError(
+                            f"Unknown Topic Model registration parameters: {sorted(extra)}."
+                        )
+                    if "membership" not in specification or "dominant" not in specification:
+                        raise GeCoIntegrationError(
+                            f"Topic Model {topic_name!r} requires membership and dominant."
+                        )
+                    linked_for_registration.add_topic_model(
+                        topic_name, **dict(specification)
+                    )
 
             manifest: dict[str, Any] = {
                 "schema_version": _LINK_SCHEMA_VERSION,

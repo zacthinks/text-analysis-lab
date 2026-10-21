@@ -1,0 +1,28 @@
+name: Real GeCo integration (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref_note:
+        description: "Optional reason for running the real GeCo round-trip"
+        required: false
+        default: "manual verification"
+
+jobs:
+  real-geco-roundtrip:
+    # Manually dispatched only: no automatic push or PR triggers.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      - name: Install Python
+        run: uv python install 3.11
+      - name: Install TeAL with GeCo
+        run: uv sync --python 3.11 --all-extras
+      - name: Verify persisted TeAL-GeCo round-trip
+        env:
+          TEAL_RUN_REAL_GECO: "1"
+        run: uv run pytest tests/test_geco_real_optin.py -q -rs
