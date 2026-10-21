@@ -130,6 +130,32 @@ class _FakeGeometricCoder:
         }
         return view_id
 
+    def register_topic_model(
+        self, *, name, membership_artifact_id, dominant_artifact_id,
+        description_artifact_id=None, topic_labels=None, if_exists="error",
+    ):
+        if not hasattr(self, "_topics"):
+            self._topics = {}
+        previous = self._topics.get(name)
+        spec = {
+            "membership_artifact_id": membership_artifact_id,
+            "dominant_artifact_id": dominant_artifact_id,
+            "description_artifact_id": description_artifact_id,
+            "topic_labels": dict(topic_labels or {}),
+        }
+        if previous is not None:
+            if if_exists == "reuse" and previous == spec:
+                return list(self._topics).index(name) + 1
+            raise ValueError("Conflicting Topic Model registration")
+        self._topics[name] = spec
+        return len(self._topics)
+
+    def topic_models(self):
+        return [
+            {"topic_model_id": i + 1, "name": name, **spec}
+            for i, (name, spec) in enumerate(getattr(self, "_topics", {}).items())
+        ]
+
     def geometries(self, *, public_only=True):
         records = list(self._geometries.values())
         if public_only:
@@ -882,5 +908,100 @@ def test_linked_geco_replayable_geometry_supports_symmetric_query_and_text_trans
             query.toarray() if sparse.issparse(query) else query,
             query_as_text.toarray() if sparse.issparse(query_as_text) else query_as_text,
         )
+    finally:
+        project.close()
+
+
+def test_topic_model_registration_at_create_and_after_open(tmp_path: Path, monkeypatch) -> None:
+    from text_analysis_lab.translators.argmax import ArgMax
+    import text_analysis_lab.integrations.geco as bridge
+
+    _FakeGeometricCoder._registry.clear()
+    monkeypatch.setattr(bridge, "_load_geometric_coder", lambda: _FakeGeometricCoder)
+    monkeypatch.setattr(bridge, "_installed_geco_version", lambda: "0.next-test")
+    project = teal.Project.create(tmp_path / "project", name="topic_link")
+    try:
+        docs = _seed_table(project)
+        counts = project.translate(
+            CountVectorizer(text_field="text", min_df=1), docs
+        )["output"]
+        dominant = project.translate(ArgMax(), counts)["output"]
+        # These are ordinary TeAL artifacts, not a special topic-model class.
+        linked = project.geco.create(
+            "topics", documents=docs, text_field="text", geometry=counts,
+            topic_models={
+                "initial": {
+                    "membership": counts,
+                    "dominant": dominant,
+                    "topic_labels": {"document": "Document"},
+                },
+            },
+        )
+        assert linked.coder.topic_models()[0]["name"] == "initial"
+        assert linked.coder.topic_models()[0]["membership_artifact_id"] == counts.artifact_id
+        assert "topic_models" not in linked.manifest
+        assert linked.add_topic_model(
+            "second", membership=counts.artifact_id,
+            dominant=dominant.artifact_id,
+        ) == 2
+        linked.close()
+        reopened = project.geco.open("topics")
+        assert [r["name"] for r in reopened.coder.topic_models()] == [
+            "initial", "second",
+        ]
+        assert reopened.add_topic_model(
+            "second", membership=counts, dominant=dominant, if_exists="reuse"
+        ) == 2
+        with pytest.raises(ValueError, match="Conflicting"):
+            reopened.add_topic_model(
+                "second", membership=counts, dominant=dominant
+            )
+
+        keys = reopened.coder._ordered_keys()
+        packet = reopened.external_provider.read_artifact(counts.artifact_id, keys[:3])
+        assert packet.kind == "matrix"
+        assert packet.positions == [0, 1, 2]
+        np.testing.assert_array_equal(
+            packet.values.toarray() if sparse.issparse(packet.values) else packet.values,
+            counts.get_matrix(positions=[0, 1, 2]).toarray()
+            if sparse.issparse(counts.get_matrix(positions=[0, 1, 2]))
+            else counts.get_matrix(positions=[0, 1, 2]),
+        )
+        max_packet = reopened.external_provider.read_artifact(dominant.artifact_id, keys[:3])
+        assert max_packet.kind == "table"
+        assert max_packet.positions == [0, 1, 2]
+        assert {"max_feature", "max_value"}.issubset(max_packet.values.columns)
+    finally:
+        project.close()
+
+
+def test_bad_topic_registration_rolls_back_new_link(tmp_path: Path, monkeypatch) -> None:
+    from text_analysis_lab.translators.argmax import ArgMax
+    import text_analysis_lab.integrations.geco as bridge
+
+    _FakeGeometricCoder._registry.clear()
+    monkeypatch.setattr(bridge, "_load_geometric_coder", lambda: _FakeGeometricCoder)
+    monkeypatch.setattr(bridge, "_installed_geco_version", lambda: "0.next-test")
+    project = teal.Project.create(tmp_path / "project", name="invalid_topic")
+    try:
+        docs = _seed_table(project)
+        matrix = project.translate(
+            CountVectorizer(text_field="text", min_df=1), docs
+        )["output"]
+        argmax = project.translate(ArgMax(), matrix)["output"]
+        with pytest.raises(bridge.GeCoIntegrationError, match="must be a TeAL ArgMax"):
+            project.geco.create(
+                "invalid", documents=docs, text_field="text", geometry=matrix,
+                topic_models={"wrong": {"membership": matrix, "dominant": matrix}},
+            )
+        assert not (project.storage.teal_dir / "geco" / "links" / "invalid.json").exists()
+        assert not (project.storage.teal_dir / "geco" / "workspaces" / "invalid.geco").exists()
+        with pytest.raises(bridge.GeCoIntegrationError, match="requires membership"):
+            project.geco.create(
+                "also_invalid", documents=docs, text_field="text", geometry=matrix,
+                topic_models={"incomplete": {"membership": matrix}},
+            )
+        assert not (project.storage.teal_dir / "geco" / "links" / "also_invalid.json").exists()
+        assert argmax.artifact_type.value == "table"
     finally:
         project.close()
