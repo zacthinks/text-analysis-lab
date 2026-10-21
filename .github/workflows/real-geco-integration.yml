@@ -1,6 +1,8 @@
 name: Real GeCo integration (manual)
 
 on:
+  pull_request:
+    types: [labeled]
   workflow_dispatch:
     inputs:
       ref_note:
@@ -10,6 +12,9 @@ on:
 
 jobs:
   real-geco-roundtrip:
+    # Only an explicitly added PR label or an on-demand workflow dispatch runs this.
+    # Ordinary push/PR-update CI never invokes the persisted cross-project smoke.
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-real-geco'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
