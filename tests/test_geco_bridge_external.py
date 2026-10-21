@@ -1005,7 +1005,7 @@ def test_bad_topic_registration_rolls_back_new_link(tmp_path: Path, monkeypatch)
 
         unrelated = project.from_keyed_frame(
             docs,
-            dominant.query(
+            argmax.query(
                 key_columns=True, data_columns=["max_feature", "max_value"],
                 metadata_columns=False, form="table",
             ),
