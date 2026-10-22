@@ -127,7 +127,7 @@ def test_source_request_does_not_copy_data_or_metadata():
 
 def test_fullmatch_rejects_partial_match():
     # "word:word" may occur inside the input, but fullmatch must consume all.
-    t = PatternExtractor(r"(?P<metadata_label>\\w+):(?P<data_text>\\w+)")
+    t = PatternExtractor(r"(?P<metadata_label>\w+):(?P<data_text>\w+)")
     out = t.translate(["pre KEY:VALUE post", "KEY:VALUE"])
     assert out["data"]["text"].tolist() == ["", "VALUE"]
 
@@ -175,9 +175,9 @@ def test_snapshot_reuse_parallel_and_intermediate_state(tmp_path):
 
 
 def test_metadata_only_and_data_only_packets():
-    md = PatternExtractor(r"(?P<metadata_speaker>\\w+)")
+    md = PatternExtractor(r"(?P<metadata_speaker>\w+)")
     assert list(md.translate(["Ada"])) == ["metadata"]
-    data = PatternExtractor(r"(?P<data_text>\\w+)")
+    data = PatternExtractor(r"(?P<data_text>\w+)")
     assert list(data.translate(["Ada"])) == ["data"]
     empty = md.translate(pd.Series([], dtype="string"))
     assert len(empty["metadata"]) == 0
