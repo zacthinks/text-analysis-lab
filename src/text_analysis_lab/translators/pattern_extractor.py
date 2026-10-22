@@ -108,13 +108,15 @@ class PatternExtractor(BaseTranslator):
 
     def translate(
         self,
-        values: str | None | pd.Series | pd.DataFrame | Mapping[str, pd.DataFrame],
+        values: str | None | Sequence[str | None] | pd.Series | pd.DataFrame | Mapping[str, pd.DataFrame],
     ) -> dict[str, pd.DataFrame]:
         """Extract standalone values into only the specified output components."""
         if isinstance(values, pd.Series):
             text = values
         elif isinstance(values, str) or values is None:
             text = pd.Series([values], dtype="string")
+        elif isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
+            text = pd.Series(list(values), dtype="string")
         else:
             if isinstance(values, Mapping):
                 data = values.get("data")
@@ -134,7 +136,7 @@ class PatternExtractor(BaseTranslator):
             else:
                 raise TypeError(
                     "PatternExtractor.translate expects text, a pandas Series, "
-                    "a DataFrame, or a data/metadata DataFrame packet."
+                    "a sequence, a DataFrame, or a data/metadata DataFrame packet."
                 )
             if self.text_field not in data.columns:
                 raise ValueError(
