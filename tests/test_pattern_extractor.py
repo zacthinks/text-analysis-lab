@@ -1,14 +1,13 @@
 """Tests for declarative PatternExtractor capture routing and TeAL batch semantics."""
 
 import re
-import warnings
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
 from text_analysis_lab.core.errors import OperatorError
-from text_analysis_lab.core.operator import InputBatch, TranslationRequest
+from text_analysis_lab.core.operator import BaseOperator, InputBatch, TranslationRequest
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.translators import PatternExtractor
 
@@ -28,7 +27,7 @@ def test_standalone_named_groups_and_unnamed_captures():
 
 
 def test_fullmatch_only_fill_and_nulls():
-    source = pd.Series(["Ada: Hello", "prefix Ada: Hello trailing", None, "Bob: "])
+    source = pd.Series(["Ada: Hello", "not a speaker line", None, "Bob: "])
     output = PatternExtractor(PATTERN).translate(source)
     assert output["metadata"]["speaker"].tolist() == ["Ada", "", "", "Bob"]
     assert output["data"]["utterance"].tolist() == ["Hello", "", "", ""]
@@ -124,3 +123,71 @@ def test_source_request_does_not_copy_data_or_metadata():
     )
     with pytest.raises(OperatorError, match="conflicts"):
         t.input_request(sources={"source": collision_src}, mode="translate", request=TranslationRequest())
+
+
+def test_fullmatch_rejects_partial_match():
+    # "word:word" may occur inside the input, but fullmatch must consume all.
+    t = PatternExtractor(r"(?P<metadata_label>\\w+):(?P<data_text>\\w+)")
+    out = t.translate(["pre KEY:VALUE post", "KEY:VALUE"])
+    assert out["data"]["text"].tolist() == ["", "VALUE"]
+
+
+def test_snapshot_reuse_parallel_and_intermediate_state(tmp_path):
+    original = PatternExtractor(
+        PATTERN, text_field="text", on_unmatched="fill",
+        fill_value=None, flags=("IGNORECASE",),
+    )
+    assert original.requires_fit is False
+    assert original.is_fitted is True
+    caps = original.execution_capabilities()
+    assert caps.reusable and caps.artifact and caps.native and caps.portable
+    assert original.supports_parallel_translate
+    assert original.supports_resume(mode="translate", route="sequential")
+    assert original.supports_resume(mode="translate", route="parallel")
+    assert not original.supports_resume(mode="fit_translate", route="sequential")
+
+    snapshot_dir = tmp_path / "snapshot"
+    original.save_to_dir(snapshot_dir, operator_id="op_pattern")
+    loaded = BaseOperator.load_from_dir(snapshot_dir)
+    assert isinstance(loaded, PatternExtractor)
+    assert loaded.is_frozen
+    assert loaded.operator_id == "op_pattern"
+    assert loaded.to_json_state() == original.to_json_state()
+    worker = loaded.make_translate_worker(mode="translate", request=TranslationRequest())
+    assert isinstance(worker, PatternExtractor)
+    assert worker.to_json_state() == loaded.to_json_state()
+    assert worker.translate("Ada: Hello")["data"]["utterance"].iloc[0] == "Hello"
+    with pytest.raises(OperatorError, match="workers support translate"):
+        loaded.make_translate_worker(mode="fit_translate", request=TranslationRequest())
+
+    checkpoint_dir = tmp_path / "checkpoint"
+    loaded.save_intermediate_state(
+        checkpoint_dir, operator_id=loaded.operator_id,
+        mode="translate", route="sequential",
+    )
+    recovered = PatternExtractor.load_intermediate_state(
+        checkpoint_dir, operator_id=loaded.operator_id,
+        mode="translate", route="sequential",
+    )
+    assert recovered.operator_id == loaded.operator_id
+    assert recovered.to_json_state() == loaded.to_json_state()
+    assert pd.isna(recovered.translate("bad")["data"]["utterance"].iloc[0])
+
+
+def test_metadata_only_and_data_only_packets():
+    md = PatternExtractor(r"(?P<metadata_speaker>\\w+)")
+    assert list(md.translate(["Ada"])) == ["metadata"]
+    data = PatternExtractor(r"(?P<data_text>\\w+)")
+    assert list(data.translate(["Ada"])) == ["data"]
+    empty = md.translate(pd.Series([], dtype="string"))
+    assert len(empty["metadata"]) == 0
+    assert empty["metadata"].columns.tolist() == ["speaker"]
+
+
+@pytest.mark.parametrize("policy", ["fill", "warn", "fail"])
+def test_invalid_on_unmatched_value_type_is_rejected(policy):
+    assert PatternExtractor(PATTERN, on_unmatched=policy).on_unmatched == policy
+    with pytest.raises(ValueError, match="on_unmatched"):
+        PatternExtractor(PATTERN, on_unmatched="skip")
+    with pytest.raises(TypeError, match="fill_value"):
+        PatternExtractor(PATTERN, fill_value=0)
