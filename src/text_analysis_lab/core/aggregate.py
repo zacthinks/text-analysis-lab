@@ -393,15 +393,13 @@ def _aggregate_relational(
 ) -> BaseArtifact:
     label = validate_output_label(output_label)
 
-    include_data = any(not rule.is_literal for rule in data_rules.values())
-    # Field selectors use canonical labels from query_columns(metadata_mode="full").
-    # Do not change the naming universe merely because the caller omitted
-    # metadata aggregation rules; that would rename data-field collisions.
-    # DuckDB can prune unselected metadata values from the final projection.
+    # Resolve both namespaces before projecting aggregate expressions. Even
+    # metadata-only reductions must retain data columns in the naming universe.
+    # The outer aggregate SELECT still materializes only requested reductions.
     view = project.query.build_artifact_view_sql(
         artifact,
         metadata_mode="full",
-        include_data=include_data,
+        include_data=True,
     )
     resolved_data = _resolve_rule_sources(view, data_rules, namespace="data")
     resolved_metadata = _resolve_rule_sources(
