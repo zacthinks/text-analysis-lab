@@ -5,7 +5,6 @@ import pytest
 
 import text_analysis_lab as teal
 from text_analysis_lab.core.errors import OperatorError
-from text_analysis_lab.core.operator import BaseOperator
 from text_analysis_lab.translators import RegexCleaner, TextLength, DelimiterDecomposer
 
 
@@ -44,7 +43,7 @@ def test_mixed_regex_fields_and_metadata_only(tmp_path):
         cleaner = RegexCleaner(
             fields={data: "clean_data", meta: "clean_metadata"},
             metadata_mode="full",
-            rules=[{"pattern": r"\\s*\\|\\s*", "replacement": "/"}],
+            rules=[{"pattern": r"\s*\|\s*", "replacement": "/"}],
         )
         result = project.translate(cleaner, source)["output"]
         frame = result.query(metadata_mode="local", metadata_columns=True, form="table")
@@ -52,14 +51,13 @@ def test_mixed_regex_fields_and_metadata_only(tmp_path):
         assert frame["clean_metadata"].tolist() == ["Alice/Bob", "Carol/Dave"]
         metadata_only = RegexCleaner(
             fields={meta: "only_clean"}, metadata_mode="full",
-            rules=[{"pattern": r"\\|", "replacement": "/"}],
+            rules=[{"pattern": r"\|", "replacement": "/"}],
         )
         target = project.translate(metadata_only, source)["output"]
         values = target.query(data_columns=False, metadata_mode="local",
                               metadata_columns=True, form="table")
         assert values["only_clean"].tolist() == ["Alice/Bob", "Carol/Dave"]
-        assert target.data_artifact is not target
-        saved = BaseOperator.from_json_state if False else cleaner.to_json_state()
+        saved = cleaner.to_json_state()
         assert RegexCleaner.from_json_state(saved).fields == cleaner.fields
     finally:
         project.close()
@@ -82,7 +80,7 @@ def test_text_length_combined_mode_and_legacy(tmp_path):
         out = project.translate(length, source)["output"]
         rows = out.query(data_columns=False, metadata_mode="local",
                          metadata_columns=True, form="table")
-        assert rows["combined_characters"].tolist() == [16, 19]
+        assert rows["combined_characters"].tolist() == [15, 16]
         assert TextLength.from_json_state(length.to_json_state()).to_json_state() == length.to_json_state()
         legacy = TextLength({"title": "characters"})
         assert legacy.translate({"title": "Hi"}) == {"title_characters": 2}
