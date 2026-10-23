@@ -200,7 +200,9 @@ class RandomSplitTranslator(BaseTranslator):
             columns=columns,
             batch_size=None,
             form="table",
-            metadata_mode="full" if columns.metadata is not False else "none",
+            # Discovery always uses the complete full-metadata naming scope;
+            # omitting metadata from the projection must not rename data labels.
+            metadata_mode="full",
             include_position=True,
         )
 
