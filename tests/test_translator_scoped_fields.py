@@ -118,7 +118,7 @@ def test_regex_standalone_mixed_preview_matches_persisted(tmp_path):
         cleaner = RegexCleaner(
             fields={data_label: "clean_data", metadata_label: "clean_metadata"},
             metadata_mode="full",
-            rules=[{"pattern": r"\\s*\\|\\s*", "replacement": "/"}],
+            rules=[{"pattern": r"\s*\|\s*", "replacement": "/"}],
         )
         values = source.query(
             metadata_mode="full", data_columns=[data_label],
@@ -133,6 +133,11 @@ def test_regex_standalone_mixed_preview_matches_persisted(tmp_path):
         )
         assert preview["data"]["clean_data"].tolist() == output["clean_data"].tolist()
         assert preview["metadata"]["clean_metadata"].tolist() == output["clean_metadata"].tolist()
+        # Parity alone could pass if both paths silently failed to replace the pipe.
+        assert preview["data"]["clean_data"].tolist() == ["A/B", "C/D"]
+        assert preview["metadata"]["clean_metadata"].tolist() == ["Alice/Bob", "Carol/Dave"]
+        assert output["clean_data"].tolist() == ["A/B", "C/D"]
+        assert output["clean_metadata"].tolist() == ["Alice/Bob", "Carol/Dave"]
         only = RegexCleaner(fields={metadata_label: "clean_metadata"}, metadata_mode="full")
         assert only.translate({"metadata": values[[metadata_label]]})["metadata"]["clean_metadata"].tolist() == ["Alice|Bob", "Carol|Dave"]
     finally:
