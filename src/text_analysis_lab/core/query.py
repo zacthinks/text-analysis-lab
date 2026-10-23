@@ -1957,8 +1957,11 @@ class QueryEngine:
     ) -> list[ViewColumn]:
         if not with_artifacts or not _columns_requested(with_columns):
             return []
+        # Resolve attachment labels against the same complete naming universe
+        # advertised by query_columns(), independent of the caller's data
+        # projection. The query still fetches only requested values.
         view = self.build_composed_view_sql(
-            artifact, metadata_mode=metadata_mode, include_data=include_data,
+            artifact, metadata_mode=metadata_mode, include_data=True,
             with_artifacts=with_artifacts,
         )
         selected = self._select_namespace_columns(
@@ -2186,10 +2189,14 @@ class QueryEngine:
             metadata_mode=metadata_mode,
             metadata_columns=metadata_columns,
         )
+        # Naming must be independent of selected columns. The full view
+        # establishes key/data/metadata/attached output labels; projection below
+        # chooses values without re-resolving names. DuckDB prunes unselected
+        # relational columns at execution time.
         view = self.build_composed_view_sql(
             artifact,
             metadata_mode=metadata_mode,
-            include_data=_columns_requested(data_columns),
+            include_data=True,
             with_artifacts=with_artifacts,
         )
         selected = self._view_selected_columns(
