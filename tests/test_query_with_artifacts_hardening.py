@@ -227,3 +227,46 @@ def test_requested_width_is_deferred_and_narrow(monkeypatch, tmp_path):
         assert seen == [["f127"]]
     finally:
         project.close()
+
+
+def test_filtered_sampling_can_filter_on_projected_out_collision_field(tmp_path):
+    project = teal.Project.create(tmp_path / "sample_hidden", name="sample_hidden")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2, 3, 4]}),
+            "data": pd.DataFrame({
+                "text": ["A", "B", "C", "D"],
+                "data.text": ["skip", "keep", "keep", "skip"],
+            }),
+        }], artifact_type="table", primary_key="doc_id")
+        right = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3, 4],
+                          "text": ["right1", "right2", "right3", "right4"]}),
+            primary_key="doc_id", data_fields="text",
+        )
+        inventory = source.query_columns(metadata_mode="none", with_artifacts=right)
+        hidden = next(col["output_name"] for col in inventory["columns"]
+                      if col["namespace"] == "data"
+                      and col["base_name"] == "data.text")
+        attached = next(col["output_name"] for col in inventory["columns"]
+                        if col["namespace"] == "with"
+                        and col["base_name"] == "text")
+        arguments = dict(
+            metadata_mode="none", data_columns=False,
+            with_artifacts=right, with_columns=[attached],
+            where=f'"{hidden}" = \'keep\'', form="table",
+        )
+        full = source.query(**arguments)
+        assert full["doc_id"].tolist() == [2, 3]
+        assert full[attached].tolist() == ["right2", "right3"]
+        for sampling in ({"sample_n": 2}, {"sample_frac": 1.0}):
+            sampled = source.query(**arguments, **sampling, random_state=19)
+            assert set(sampled["doc_id"]) == {2, 3}
+            assert dict(zip(sampled["doc_id"], sampled[attached], strict=True)) == {
+                2: "right2", 3: "right3",
+            }
+            assert hidden not in sampled.columns
+    finally:
+        project.close()
+
+
