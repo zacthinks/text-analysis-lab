@@ -649,9 +649,11 @@ def _mask_has_na(arr: np.ndarray) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _source_column_info(source: BaseArtifact) -> Mapping[str, Any]:
+def _source_column_info(
+    source: BaseArtifact, *, metadata_mode: MetadataMode
+) -> Mapping[str, Any]:
     try:
-        return source.project.query.query_columns(source, metadata_mode="full")
+        return source.project.query.query_columns(source, metadata_mode=metadata_mode)
     except Exception as exc:
         raise ArtifactError(
             f"Cannot inspect columns for artifact {source.artifact_id!r}."
