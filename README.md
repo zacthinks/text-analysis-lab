@@ -172,6 +172,8 @@ parsed = project.translate(extractor, documents, alias="parsed_turns")["output"]
 
 The pattern uses a full match per row; unnamed groups are allowed but do not create fields. Extracted Artifacts contain only the new fields and unchanged keys, not copies of source columns. Configure `fill_value=None` for missing values instead of the default empty string.
 
+`PatternExtractor` accepts one input field from data or metadata. The default `field="text", metadata_mode="none"` selects the data-only view; use `metadata_mode="local"` or `"full"` and choose an exact field label from `source.query_columns(metadata_mode=...)` to extract from metadata, including inherited metadata. Output destinations remain controlled by the named regex groups (`data_...` and `metadata_...`) regardless of input namespace.
+
 Translators span preprocessing, linguistic processing, representations, statistical models, and custom operations. Browse the built-in classes by task (some appear in more than one family):
 
 <details>
