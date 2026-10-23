@@ -412,3 +412,21 @@ def test_literal_dotted_field_identity_in_consumers(tmp_path):
         project.close()
 
 
+
+
+def test_metadata_only_aggregation_preserves_full_scope_source_identity(tmp_path):
+    project = teal.Project.create(tmp_path / "metadata_agg", name="metadata_agg")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 1, 2, 2], "turn_id": [0, 1, 0, 1]}),
+            "data": pd.DataFrame({"text": ["wrong", "wrong", "wrong", "wrong"]}),
+            "metadata": pd.DataFrame({"text": ["alpha", "alpha", "beta", "beta"]}),
+        }], artifact_type="table", primary_key=["doc_id", "turn_id"])
+        meta = next(c["output_name"] for c in source.query_columns(metadata_mode="full")["columns"]
+                    if c["namespace"] == "metadata" and c["base_name"] == "text")
+        result = project.aggregate(
+            source, to_key="doc_id", metadata={"chosen": agg(meta, "first")}
+        ).query(metadata_mode="local", metadata_columns=True, form="table")
+        assert result["chosen"].tolist() == ["alpha", "beta"]
+    finally:
+        project.close()
