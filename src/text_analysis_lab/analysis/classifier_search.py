@@ -132,7 +132,7 @@ def _load_development_labels(
     batches = artifact.query(
         key_columns=True, data_columns=data if data else False,
         metadata_columns=metadata if metadata else False,
-        metadata_mode="full" if metadata else "none",
+        metadata_mode="full",
         form="table", iter_batches=True, batch_size=batch_size,
     )
     for frame in batches:
