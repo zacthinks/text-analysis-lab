@@ -224,4 +224,5 @@ def test_standalone_metadata_packet_field():
     t = PatternExtractor(r"(?P<data_value>.+)", field="source_note", metadata_mode="local")
     packet = {"data": pd.DataFrame({"text": ["ignored"]}), "metadata": pd.DataFrame({"source_note": ["chosen"]})}
     assert t.translate(packet)["data"]["value"].tolist() == ["chosen"]
+    assert t.translate({"metadata": packet["metadata"]})["data"]["value"].tolist() == ["chosen"]
 
