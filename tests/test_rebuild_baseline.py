@@ -871,3 +871,31 @@ def test_provenance_only_operator_is_not_reusable_frozen_transform(tmp_path: Pat
             )
     finally:
         project.close()
+
+
+def test_query_selection_prefers_exact_output_labels_over_qualified_aliases() -> None:
+    from types import SimpleNamespace
+    from text_analysis_lab.core.query import QueryEngine
+    from text_analysis_lab.core.errors import QueryError
+
+    # A literal data field named "data.text" coexists with another field "text".
+    # The qualified identity of "text" happens to equal the OTHER output label.
+    columns = [
+        SimpleNamespace(namespace="data", base_name="text",
+            qualified_name="data.text", output_name="text"),
+        SimpleNamespace(namespace="data", base_name="data.text",
+            qualified_name="data.data.text", output_name="data.text"),
+    ]
+    view = SimpleNamespace(columns=columns)
+    engine = QueryEngine(SimpleNamespace())
+    assert engine._select_namespace_columns(
+        view, namespace="data", requested="text", label="data columns"
+    ) == ["text"]
+    assert engine._select_namespace_columns(
+        view, namespace="data", requested="data.text", label="data columns"
+    ) == ["data.text"]
+    with pytest.raises(QueryError, match="not available"):
+        engine._select_namespace_columns(
+            view, namespace="data", requested="data.data.text", label="data columns"
+        )
+
