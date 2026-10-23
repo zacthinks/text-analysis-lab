@@ -226,3 +226,26 @@ def test_standalone_metadata_packet_field():
     assert t.translate(packet)["data"]["value"].tolist() == ["chosen"]
     assert t.translate({"metadata": packet["metadata"]})["data"]["value"].tolist() == ["chosen"]
 
+
+
+def test_persisted_metadata_source_with_colliding_data_field(tmp_path):
+    import text_analysis_lab as teal
+    project = teal.Project.create(tmp_path / "pattern_metadata", name="pattern_metadata")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": pd.DataFrame({"text": ["not chosen", "not chosen"]}),
+            "metadata": pd.DataFrame({"text": ["Ada: Hello", "Bob: Bye"]}),
+        }], artifact_type="table", primary_key="doc_id")
+        choices = source.query_columns(metadata_mode="full")["columns"]
+        label = next(item["output_name"] for item in choices
+                     if item["namespace"] == "metadata" and item["base_name"] == "text")
+        t = PatternExtractor(PATTERN, field=label, metadata_mode="full")
+        output = project.translate(t, source)["output"]
+        result = output.query(
+            data_columns=True, metadata_columns=True,
+            metadata_mode="local", form="table")
+        assert result["utterance"].tolist() == ["Hello", "Bye"]
+        assert result["speaker"].tolist() == ["Ada", "Bob"]
+    finally:
+        project.close()
