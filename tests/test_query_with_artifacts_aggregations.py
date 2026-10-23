@@ -10,6 +10,8 @@ pytest.importorskip("duckdb")
 pytest.importorskip("pyarrow")
 
 import text_analysis_lab as teal
+from text_analysis_lab import agg
+from text_analysis_lab.translators import FunctionMapper
 from text_analysis_lab.core.errors import ArtifactError, QueryError
 
 
@@ -328,3 +330,80 @@ def test_attached_names_do_not_change_after_projection(tmp_path):
         assert narrow[attached_group].tolist() == full[attached_group].tolist()
     finally:
         project.close()
+
+
+def test_literal_dotted_field_identity_in_consumers(tmp_path):
+    project = teal.Project.create(tmp_path / "consumer_identity", name="consumer_identity")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 1, 2, 2], "turn_id": [0, 1, 0, 1]}),
+            "data": pd.DataFrame({
+                "text": ["base_a", "base_a", "base_b", "base_b"],
+                "data.text": ["literal_x", "literal_x", "literal_y", "literal_y"],
+            }),
+            "metadata": pd.DataFrame({
+                "text": ["meta_a", "meta_a", "meta_b", "meta_b"],
+            }),
+        }], artifact_type="table", primary_key=["doc_id", "turn_id"])
+        info = source.query_columns(metadata_mode="full")
+        labels = {
+            (item["namespace"], item["base_name"]): item["output_name"]
+            for item in info["columns"]
+        }
+        short = labels["data", "text"]
+        dotted = labels["data", "data.text"]
+        assert short != dotted
+        assert source.query(metadata_mode="full", data_columns=[short, dotted],
+                            form="table")[dotted].tolist() == [
+                                "literal_x", "literal_x", "literal_y", "literal_y",
+                            ]
+
+        reduced = project.aggregate(
+            source, to_key="doc_id",
+            data={
+                "from_short": agg(short, "first"),
+                "from_dotted": agg(dotted, "first"),
+            },
+        )
+        result = reduced.query(form="table")
+        assert result["from_short"].tolist() == ["base_a", "base_b"]
+        assert result["from_dotted"].tolist() == ["literal_x", "literal_y"]
+
+        collapsed = project.collapse_runs(
+            source, by=dotted, data={"picked": agg(short, "first")},
+        )
+        spans = collapsed.query(metadata_mode="local", metadata_columns=True,
+                                form="table")
+        assert spans["picked"].tolist() == ["base_a", "base_b"]
+        assert spans[dotted].tolist() == ["literal_x", "literal_y"]
+
+        mapper = FunctionMapper(
+            lambda packet: {
+                "data": pd.DataFrame({
+                    "picked": packet["data"][dotted].reset_index(drop=True),
+                })
+            }
+        )
+        mapped = project.translate(
+            mapper, source, data_columns=[dotted], metadata_columns=False,
+            metadata_mode="full", batch_size=2,
+        )["output"]
+        assert mapped.query(form="table")["picked"].tolist() == [
+            "literal_x", "literal_x", "literal_y", "literal_y",
+        ]
+        # A qualified identity that was not advertised as an output must not
+        # be silently interpreted as the other source field.
+        nonvisible = next(
+            item["qualified_name"] for item in info["columns"]
+            if item["namespace"] == "data" and item["base_name"] == "text"
+        )
+        if nonvisible not in {short, dotted}:
+            with pytest.raises(ArtifactError, match="unknown"):
+                project.translate(
+                    FunctionMapper(lambda packet: {"data": packet["data"].copy()}),
+                    source, data_columns=[nonvisible], metadata_mode="full",
+                )
+    finally:
+        project.close()
+
+
