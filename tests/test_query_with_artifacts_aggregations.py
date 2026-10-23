@@ -375,7 +375,12 @@ def test_literal_dotted_field_identity_in_consumers(tmp_path):
         spans = collapsed.query(metadata_mode="local", metadata_columns=True,
                                 form="table")
         assert spans["picked"].tolist() == ["base_a", "base_b"]
-        assert spans[dotted].tolist() == ["literal_x", "literal_y"]
+        grouped_label = next(
+            item["output_name"]
+            for item in collapsed.query_columns(metadata_mode="local")["columns"]
+            if item["namespace"] == "metadata" and item["base_name"] == "data.text"
+        )
+        assert spans[grouped_label].tolist() == ["literal_x", "literal_y"]
 
         mapper = FunctionMapper(
             lambda packet: {
