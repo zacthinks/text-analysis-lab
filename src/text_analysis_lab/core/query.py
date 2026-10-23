@@ -2101,34 +2101,18 @@ class QueryEngine:
             if output_name not in selected:
                 selected.append(output_name)
 
+        # Column selectors are exact labels from query_columns() for this view.
+        # Qualified identities are not aliases: a literal data field called
+        # "data.text" must not select a different field whose qualified identity
+        # happens to be "data.text".
+        available = {column.output_name for column in columns}
         for name in requested_names:
-            exact_qualified = [
-                column for column in columns if column.qualified_name == name
-            ]
-            if len(exact_qualified) == 1:
-                add(exact_qualified[0].output_name)
-                continue
-
-            exact_output = [column for column in columns if column.output_name == name]
-            if len(exact_output) == 1:
-                add(exact_output[0].output_name)
-                continue
-
-            base_matches = [column for column in columns if column.base_name == name]
-            if len(base_matches) == 1:
-                add(base_matches[0].output_name)
-                continue
-            if len(base_matches) > 1:
-                options = [column.qualified_name for column in base_matches]
+            if name not in available:
                 raise QueryError(
-                    f"Requested {label} {name!r} is ambiguous. Use one of: {options}."
+                    f"Requested {label} is not available in this query scope: {name!r}. "
+                    f"Available {label}: {sorted(available)}."
                 )
-
-            available = sorted({column.output_name for column in columns})
-            raise QueryError(
-                f"Requested {label} is not available: {name!r}. "
-                f"Available {label}: {available}."
-            )
+            add(name)
 
         return selected
 
