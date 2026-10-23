@@ -155,7 +155,7 @@ class PatternExtractor(BaseTranslator):
             frame = metadata if component == "metadata" else data
             if not isinstance(frame, pd.DataFrame) or self.field not in frame.columns:
                 raise ValueError(f"PatternExtractor input is missing field {self.field!r}.")
-            if not data.columns.is_unique:
+            if not frame.columns.is_unique:
                 raise ValueError("PatternExtractor input DataFrame columns must be unique.")
             text = frame[self.field]
 
