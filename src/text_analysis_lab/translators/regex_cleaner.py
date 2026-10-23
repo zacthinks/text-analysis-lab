@@ -113,13 +113,51 @@ class RegexCleaner(BaseTranslator):
 
     def translate(
         self,
-        texts: str | None | Sequence[str | None] | pd.Series,
-    ) -> str | None | pd.Series:
+        texts: str | None | Sequence[str | None] | pd.Series | pd.DataFrame | Mapping[str, pd.DataFrame],
+    ) -> str | None | pd.Series | dict[str, pd.DataFrame]:
         """Clean ordinary text values without creating TeAL artifacts.
 
         Scalar input returns a scalar. A pandas Series returns a Series with its
         index preserved; other sequences return a new Series.
         """
+        if isinstance(texts, (pd.DataFrame, Mapping)):
+            if isinstance(texts, pd.DataFrame):
+                data, metadata = texts, None
+            else:
+                data, metadata = texts.get("data"), texts.get("metadata")
+                if data is not None and not isinstance(data, pd.DataFrame):
+                    raise TypeError("RegexCleaner preview data must be a DataFrame.")
+                if metadata is not None and not isinstance(metadata, pd.DataFrame):
+                    raise TypeError("RegexCleaner preview metadata must be a DataFrame.")
+                if data is None and metadata is None:
+                    raise ValueError("RegexCleaner preview packet requires data or metadata.")
+                if data is not None and metadata is not None and len(data) != len(metadata):
+                    raise ValueError("RegexCleaner preview components must be row-aligned.")
+            if data is not None and not data.columns.is_unique:
+                raise ValueError("RegexCleaner preview data column names must be unique.")
+            if metadata is not None and not metadata.columns.is_unique:
+                raise ValueError("RegexCleaner preview metadata column names must be unique.")
+            output: dict[str, pd.DataFrame] = {}
+            for label, destination in self.fields.items():
+                in_data = data is not None and label in data.columns
+                in_metadata = metadata is not None and label in metadata.columns
+                if in_data == in_metadata:
+                    raise ValueError(
+                        f"RegexCleaner preview field {label!r} must occur in exactly "
+                        "one of the data or metadata components."
+                    )
+                namespace = "data" if in_data else "metadata"
+                frame = data if in_data else metadata
+                assert frame is not None
+                if namespace not in output:
+                    output[namespace] = pd.DataFrame(index=frame.index)
+                if destination in output[namespace]:
+                    raise ValueError(
+                        f"RegexCleaner duplicate {namespace} output {destination!r}."
+                    )
+                output[namespace][destination] = cast(pd.Series, self.translate(frame[label]))
+            return output
+
         scalar = isinstance(texts, str) or texts is None
         if isinstance(texts, pd.Series):
             source = texts.copy()
