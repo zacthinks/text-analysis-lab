@@ -718,3 +718,45 @@ def test_matrix_row_aggregator_declares_feature_metadata_inheritance() -> None:
         request=TranslationRequest(),
     )
     assert spec.feature_metadata_mode == "inherit"
+
+
+@pytest.mark.parametrize("kind", ["sparse_matrix", "dense_matrix"])
+def test_matrix_transpose_colliding_key_and_metadata_labels(kind, tmp_path):
+    import text_analysis_lab as teal
+    project = teal.Project.create(tmp_path / kind, name="transpose_collision")
+    try:
+        payload = {
+            "keys": pd.DataFrame({"row_id": [0, 1, 2]}),
+            "data": {
+                "values": sparse.csr_matrix([[1., 2.], [3., 4.], [5., 6.]])
+                if kind == "sparse_matrix"
+                else np.array([[1., 2.], [3., 4.], [5., 6.]]),
+                "columns": ["a", "b"],
+            },
+            "metadata": pd.DataFrame({"row_id": [50, 60, 70]}),
+        }
+        source = project.register_external([payload], artifact_type=kind, primary_key="row_id")
+        names = source.query_columns(metadata_mode="full")["columns"]
+        key = next(c["output_name"] for c in names
+                   if c["namespace"] == "key" and c["base_name"] == "row_id")
+        meta = next(c["output_name"] for c in names
+                    if c["namespace"] == "metadata" and c["base_name"] == "row_id")
+        assert key != meta
+        for promotions, expected in [
+            ([key], {key: [0, 1, 2]}),
+            ([key, meta], {key: [0, 1, 2], meta: [50, 60, 70]}),
+        ]:
+            target = project.translate(
+                MatrixTranspose(), source, feature_metadata_columns=promotions
+            )["output"]
+            features = target.get_feature_metadata()
+            assert features["column"].tolist() == [
+                "row_id=0", "row_id=1", "row_id=2"
+            ]
+            for label, values in expected.items():
+                assert features[label].tolist() == values
+            matrix = target.get_matrix()
+            actual = matrix.toarray() if sparse.issparse(matrix) else np.asarray(matrix)
+            np.testing.assert_array_equal(actual, [[1., 3., 5.], [2., 4., 6.]])
+    finally:
+        project.close()
