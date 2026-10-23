@@ -79,7 +79,7 @@ def render_feature_matrix(
             key_columns=keys if keys else False,
             data_columns=data if data else False,
             metadata_columns=meta if meta else False,
-            metadata_mode="full" if meta else "none",
+            metadata_mode="full",
             form="table",
         )
         if len(fields) != len(chosen_positions):
