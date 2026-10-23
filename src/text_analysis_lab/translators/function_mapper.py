@@ -267,8 +267,8 @@ class FunctionMapper(BaseTranslator):
             mode="batches",
             columns=ColumnRequest(
                 keys=True,
-                data=data_selection,
-                metadata=metadata_selection,
+                data=list(self._data_columns) or False,
+                metadata=list(self._metadata_columns) or False,
             ),
             batch_size=request.batch_size or 10_000,
             # FunctionMapper's public callable contract is DataFrame-based even
