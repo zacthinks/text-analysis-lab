@@ -176,7 +176,10 @@ class FunctionSubsetTranslator(BaseTranslator):
             raise OperatorError(f"Unknown subset operation parameter(s): {unknown}.")
 
         source = _source_artifact(sources)
-        column_info = _source_column_info(source)
+        metadata_mode = _validate_metadata_mode(
+            cast(MetadataMode, params.get("metadata_mode", "none"))
+        )
+        column_info = _source_column_info(source, metadata_mode=metadata_mode)
         key_columns = _validate_column_select(
             cast(ColumnSelect, params.get("key_columns", True)),
             name="key_columns",
