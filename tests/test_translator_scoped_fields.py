@@ -107,3 +107,33 @@ def test_delimiter_decomposer_metadata_source(tmp_path):
             project.translate(DelimiterDecomposer(text_field=meta, delimiter="|"), source)
     finally:
         project.close()
+
+
+def test_regex_standalone_mixed_preview_matches_persisted(tmp_path):
+    project = teal.Project.create(tmp_path / "preview", name="preview")
+    try:
+        source = _source(project)
+        data_label = _label(source, "data", "text")
+        metadata_label = _label(source, "metadata", "text")
+        cleaner = RegexCleaner(
+            fields={data_label: "clean_data", metadata_label: "clean_metadata"},
+            metadata_mode="full",
+            rules=[{"pattern": r"\\s*\\|\\s*", "replacement": "/"}],
+        )
+        values = source.query(
+            metadata_mode="full", data_columns=[data_label],
+            metadata_columns=[metadata_label], key_columns=False, form="table",
+        )
+        preview = cleaner.translate({
+            "data": values[[data_label]],
+            "metadata": values[[metadata_label]],
+        })
+        output = project.translate(cleaner, source)["output"].query(
+            metadata_mode="local", metadata_columns=True, form="table",
+        )
+        assert preview["data"]["clean_data"].tolist() == output["clean_data"].tolist()
+        assert preview["metadata"]["clean_metadata"].tolist() == output["clean_metadata"].tolist()
+        only = RegexCleaner(fields={metadata_label: "clean_metadata"}, metadata_mode="full")
+        assert only.translate({"metadata": values[[metadata_label]]})["metadata"]["clean_metadata"].tolist() == ["Alice|Bob", "Carol|Dave"]
+    finally:
+        project.close()
