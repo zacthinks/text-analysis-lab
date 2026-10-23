@@ -552,42 +552,16 @@ def _resolved_namespace_columns(
     requested = (
         [selection] if isinstance(selection, str) else [str(v) for v in selection]
     )
+    available = {str(item["output_name"]) for item in columns}
     out: list[str] = []
     for name in requested:
-        matches = [
-            item
-            for item in columns
-            if name
-            in {
-                str(item.get("qualified_name")),
-                str(item.get("output_name")),
-                str(item.get("base_name")),
-            }
-        ]
-        # Prefer exact qualified/output matches before base-name resolution.
-        exact = [
-            item
-            for item in matches
-            if name in {str(item.get("qualified_name")), str(item.get("output_name"))}
-        ]
-        if len(exact) == 1:
-            resolved = str(exact[0]["output_name"])
-        elif len(matches) == 1:
-            resolved = str(matches[0]["output_name"])
-        elif len(matches) > 1:
-            choices = [str(item.get("qualified_name")) for item in matches]
-            raise ArtifactError(
-                f"FunctionMapper {parameter_name} name {name!r} is ambiguous; "
-                f"use one of {choices}."
-            )
-        else:
-            available = [str(item.get("output_name")) for item in columns]
+        if name not in available:
             raise ArtifactError(
                 f"FunctionMapper requested unknown {namespace} column {name!r}; "
-                f"available columns are {available}."
+                f"available columns are {sorted(available)}."
             )
-        if resolved not in out:
-            out.append(resolved)
+        if name not in out:
+            out.append(name)
     return out
 
 
