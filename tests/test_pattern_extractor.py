@@ -106,7 +106,7 @@ def test_source_request_does_not_copy_data_or_metadata():
         primary_key=("row_id",),
         query_columns=lambda **kwargs: {
             "data": ["text", "other"], "metadata": ["old"],
-            "columns": [{"namespace": "metadata", "base_name": "old"}],
+            "columns": [{"namespace": "data", "output_name": "text", "base_name": "text"}, {"namespace": "metadata", "output_name": "old", "base_name": "old"}],
         },
     )
     req = t.input_request(sources={"source": src}, mode="translate", request=TranslationRequest())
@@ -118,7 +118,7 @@ def test_source_request_does_not_copy_data_or_metadata():
         primary_key=("row_id",),
         query_columns=lambda **kwargs: {
             "data": ["text"], "metadata": ["speaker"],
-            "columns": [{"namespace": "metadata", "base_name": "speaker"}],
+            "columns": [{"namespace": "data", "output_name": "text", "base_name": "text"}, {"namespace": "metadata", "output_name": "speaker", "base_name": "speaker"}],
         },
     )
     with pytest.raises(OperatorError, match="conflicts"):
@@ -134,7 +134,7 @@ def test_fullmatch_rejects_partial_match():
 
 def test_snapshot_reuse_parallel_and_intermediate_state(tmp_path):
     original = PatternExtractor(
-        PATTERN, text_field="text", on_unmatched="fill",
+        PATTERN, field="text", on_unmatched="fill",
         fill_value=None, flags=("IGNORECASE",),
     )
     assert original.requires_fit is False
@@ -191,3 +191,37 @@ def test_invalid_on_unmatched_value_type_is_rejected(policy):
         PatternExtractor(PATTERN, on_unmatched="skip")
     with pytest.raises(TypeError, match="fill_value"):
         PatternExtractor(PATTERN, fill_value=0)
+
+def test_source_selection_scopes_data_and_inherited_metadata():
+    def query_columns(*, metadata_mode):
+        cols = [{"namespace": "data", "output_name": "data.text" if metadata_mode == "full" else "text", "base_name": "text"}]
+        if metadata_mode == "full":
+            cols.append({"namespace": "metadata", "output_name": "metadata.parent.text", "base_name": "text"})
+        if metadata_mode == "local":
+            cols.append({"namespace": "metadata", "output_name": "local_note", "base_name": "local_note"})
+        return {"columns": cols, "data": [c["output_name"] for c in cols if c["namespace"] == "data"]}
+
+    src = SimpleNamespace(artifact_type=ArtifactType.TABLE, primary_key=("row_id",), query_columns=query_columns)
+    t = PatternExtractor(r"(?P<data_result>.+)", field="metadata.parent.text", metadata_mode="full")
+    req = t.input_request(sources={"source": src}, mode="translate", request=TranslationRequest())
+    assert req.columns.data is False
+    assert req.columns.metadata == "metadata.parent.text"
+    assert req.metadata_mode == "full"
+    packet = InputBatch(source_label="source", artifact_id="src", primary_key=("row_id",),
+        data=pd.DataFrame({"row_id": [0], "metadata.parent.text": ["Hello"]}),
+        batch_index=0, batch_count=1, is_first=True, is_last=True)
+    output = t.translate_batch({"source": packet}, mode="translate", request=TranslationRequest()).outputs["output"]
+    assert output["data"]["result"].tolist() == ["Hello"]
+    worker = t.make_translate_worker(mode="translate", request=TranslationRequest())
+    assert worker.translate_batch({"source": packet}, mode="translate", request=TranslationRequest()).outputs["output"]["data"]["result"].tolist() == ["Hello"]
+    for metadata_mode in ("none", "local"):
+        missing = PatternExtractor(r"(?P<data_result>.+)", field="metadata.parent.text", metadata_mode=metadata_mode)
+        with pytest.raises(OperatorError, match="available fields"):
+            missing.input_request(sources={"source": src}, mode="translate", request=TranslationRequest())
+
+
+def test_standalone_metadata_packet_field():
+    t = PatternExtractor(r"(?P<data_value>.+)", field="source_note", metadata_mode="local")
+    packet = {"data": pd.DataFrame({"text": ["ignored"]}), "metadata": pd.DataFrame({"source_note": ["chosen"]})}
+    assert t.translate(packet)["data"]["value"].tolist() == ["chosen"]
+
