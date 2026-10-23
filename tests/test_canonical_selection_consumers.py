@@ -6,6 +6,7 @@ import pytest
 
 import text_analysis_lab as teal
 from text_analysis_lab.translators import FeatureMatrix
+from text_analysis_lab.core.errors import QueryError
 
 
 def _source(project):
@@ -88,7 +89,7 @@ def test_subset_validates_in_requested_metadata_scope(tmp_path, metadata_mode):
         assert selected["doc_id"].tolist() == [4, 5, 6, 7]
         if metadata_mode == "none":
             metadata_label = _label(source, "metadata", "score")
-            with pytest.raises((ValueError, Exception)):
+            with pytest.raises(QueryError, match="not available"):
                 project.subset(
                     source, lambda frame: frame[metadata_label] > 0,
                     data_columns=False, metadata_columns=[metadata_label],
