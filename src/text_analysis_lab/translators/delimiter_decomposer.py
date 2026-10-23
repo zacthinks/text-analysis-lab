@@ -22,7 +22,8 @@ from text_analysis_lab.core.operator import (
     TranslationMode,
     TranslationRequest,
 )
-from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL, MetadataMode
+from text_analysis_lab.translators._field_selection import resolve_text_fields
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -44,6 +45,7 @@ class DelimiterDecomposer(BaseTranslator):
         delimiter: str = "\n",
         new_key: str = "segment_id",
         text_field: str = "text",
+        metadata_mode: MetadataMode = "none",
         output_text_field: str | None = None,
         drop_empty: bool = True,
         strip: bool = True,
@@ -62,6 +64,9 @@ class DelimiterDecomposer(BaseTranslator):
 
         self.delimiter = delimiter
         self.new_key = new_key
+        if metadata_mode not in {"none", "local", "full"}:
+            raise ValueError("metadata_mode must be 'none', 'local', or 'full'.")
+        self.metadata_mode = metadata_mode
         self.text_field = text_field
         self.output_text_field = output_field
         self.drop_empty = bool(drop_empty)
@@ -174,13 +179,21 @@ class DelimiterDecomposer(BaseTranslator):
         source = _single_source(sources)
         if source.artifact_type.value != "table":
             raise OperatorError("DelimiterDecomposer requires a table artifact source.")
+        namespace = resolve_text_fields(
+            source, [self.text_field], metadata_mode=self.metadata_mode,
+            translator="DelimiterDecomposer",
+        )[self.text_field]
         return SourceRequest(
             artifact_type="table",
             mode="batches",
-            columns=ColumnRequest(keys=True, data=self.text_field, metadata=False),
+            columns=ColumnRequest(
+                keys=True,
+                data=self.text_field if namespace == "data" else False,
+                metadata=self.text_field if namespace == "metadata" else False,
+            ),
             batch_size=request.batch_size if request.batch_size is not None else 10_000,
             form="table",
-            metadata_mode="none",
+            metadata_mode=self.metadata_mode,
             include_position=False,
         )
 
@@ -258,6 +271,7 @@ class DelimiterDecomposer(BaseTranslator):
             "delimiter": self.delimiter,
             "new_key": self.new_key,
             "text_field": self.text_field,
+            "metadata_mode": self.metadata_mode,
             "output_text_field": self.output_text_field,
             "drop_empty": self.drop_empty,
             "strip": self.strip,
@@ -269,6 +283,7 @@ class DelimiterDecomposer(BaseTranslator):
             delimiter=str(state.get("delimiter", "\n")),
             new_key=str(state.get("new_key", "segment_id")),
             text_field=str(state.get("text_field", "text")),
+            metadata_mode=cast(MetadataMode, state.get("metadata_mode", "none")),
             output_text_field=str(
                 state.get("output_text_field", state.get("text_field", "text"))
             ),
