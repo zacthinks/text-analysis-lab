@@ -108,32 +108,13 @@ def resolve_batch_output_names(
     *,
     with_artifacts: Any,
 ) -> tuple[ResolvedField, ...]:
-    """Map selected field identities onto the actual narrow query view.
+    """Return canonical query labels unchanged by a narrower projection.
 
-    A full-view output name can change when caller data or metadata are omitted.
-    Qualified identities are used only internally to map a field onto the new
-    exact output label of the narrower view. Without attachments, no composed
-    narrower view exists, so the original projected names are authoritative.
+    Selection no longer changes output names, so no per-batch renaming is
+    necessary. Retain this helper for existing histogram/crosstab callers.
     """
-    if with_artifacts is None:
-        return fields
-    data_columns, metadata_columns = batch_query_columns(fields)
-    view = artifact.project.query.build_composed_view_sql(
-        artifact,
-        metadata_mode="full" if metadata_columns is not False else "none",
-        include_data=data_columns is not False,
-        with_artifacts=with_artifacts,
-    )
-    remapped: list[ResolvedField] = []
-    for field in fields:
-        output_name = view.mapping.get(field.qualified_name)
-        if output_name is None:
-            raise ArtifactError(
-                f"Selected field {field.qualified_name!r} is not present in "
-                "the aggregation's narrow query view."
-            )
-        remapped.append(replace(field, output_name=output_name))
-    return tuple(remapped)
+    _ = artifact, with_artifacts
+    return fields
 
 
 def batch_query_columns(
