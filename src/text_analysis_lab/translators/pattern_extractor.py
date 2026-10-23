@@ -24,7 +24,7 @@ from text_analysis_lab.core.operator import (
     TranslationMode,
     TranslationRequest,
 )
-from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL, MetadataMode
 from text_analysis_lab.translators.regex_cleaner import _compile_flags, _normalize_flags
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ class PatternExtractor(BaseTranslator):
     output field name. Unnamed capture groups are allowed but are not emitted.
     Every observation is evaluated with re.fullmatch: at most one match per row.
 
-    Standalone translate accepts a Series, a DataFrame containing text_field, or
+    Standalone translate accepts a Series, a DataFrame containing field, or
     a {"data": DataFrame, "metadata": DataFrame} preview packet. It returns
     component-separated DataFrames. Persisted execution adds TeAL-managed keys,
     and the source's other columns remain available through lineage rather than
@@ -50,12 +50,14 @@ class PatternExtractor(BaseTranslator):
     """
 
     operation_type = "translate"
+    frozen_runtime_fields = frozenset({"_source_field"})
 
     def __init__(
         self,
         pattern: str,
         *,
-        text_field: str = "text",
+        field: str = "text",
+        metadata_mode: MetadataMode = "none",
         on_unmatched: UnmatchedPolicy = "fill",
         fill_value: str | None = "",
         flags: Sequence[str] | str | int = (),
@@ -64,15 +66,19 @@ class PatternExtractor(BaseTranslator):
         super().__init__(operator_id=operator_id)
         if not isinstance(pattern, str) or not pattern:
             raise ValueError("PatternExtractor pattern must be a non-empty string.")
-        if not isinstance(text_field, str) or not text_field:
-            raise ValueError("text_field must be a non-empty string.")
+        if not isinstance(field, str) or not field:
+            raise ValueError("field must be a non-empty string.")
+        if metadata_mode not in {"none", "local", "full"}:
+            raise ValueError("metadata_mode must be 'none', 'local', or 'full'.")
         if on_unmatched not in {"fill", "warn", "fail"}:
             raise ValueError("on_unmatched must be 'fill', 'warn', or 'fail'.")
         if fill_value is not None and not isinstance(fill_value, str):
             raise TypeError("fill_value must be a string or None.")
 
         self.pattern = pattern
-        self.text_field = text_field
+        self.field = field
+        self.metadata_mode = metadata_mode
+        self._source_field: str | None = None
         self.on_unmatched: UnmatchedPolicy = on_unmatched
         self.fill_value = fill_value
         self.flags = _normalize_flags(flags)
@@ -138,13 +144,20 @@ class PatternExtractor(BaseTranslator):
                     "PatternExtractor.translate expects text, a pandas Series, "
                     "a sequence, a DataFrame, or a data/metadata DataFrame packet."
                 )
-            if self.text_field not in data.columns:
-                raise ValueError(
-                    f"PatternExtractor input is missing data field {self.text_field!r}."
-                )
+            component = "data"
+            if isinstance(values, Mapping):
+                in_data = self.field in data.columns
+                in_metadata = isinstance(metadata, pd.DataFrame) and self.field in metadata.columns
+                if in_data and in_metadata:
+                    raise ValueError(f"PatternExtractor preview field {self.field!r} is ambiguous across components.")
+                if in_metadata and not in_data:
+                    component = "metadata"
+            frame = metadata if component == "metadata" else data
+            if self.field not in frame.columns:
+                raise ValueError(f"PatternExtractor input is missing field {self.field!r}.")
             if not data.columns.is_unique:
                 raise ValueError("PatternExtractor input DataFrame columns must be unique.")
-            text = data[self.text_field]
+            text = frame[self.field]
 
         columns: dict[str, list[str | None]] = {
             name: [] for name, _domain, _field in self._destinations
@@ -240,20 +253,36 @@ class PatternExtractor(BaseTranslator):
             raise OperatorError("PatternExtractor requires a table or jsonl source.")
         self._validate_key_collisions(source.primary_key)
 
-        available = source.query_columns(metadata_mode="full")
-        available_data = {str(value) for value in available["data"]}
-        if self.text_field not in available_data:
+        available = source.query_columns(metadata_mode=self.metadata_mode)
+        matches = [
+            column for column in available.get("columns", [])
+            if column.get("namespace") in {"data", "metadata"}
+            and column.get("output_name") == self.field
+        ]
+        if len(matches) != 1:
+            choices = [
+                str(column["output_name"])
+                for column in available.get("columns", [])
+                if column.get("namespace") in {"data", "metadata"}
+            ]
             raise OperatorError(
-                f"PatternExtractor source data field {self.text_field!r} is unavailable; "
-                f"available fields: {sorted(available_data)}."
+                f"PatternExtractor field {self.field!r} is unavailable or ambiguous "
+                f"with metadata_mode={self.metadata_mode!r}; "
+                f"available fields: {sorted(choices)}."
             )
+        selected = matches[0]
+        self._source_field = str(selected["output_name"])
+        namespace = str(selected["namespace"])
 
+        # Output collision checks consider all inherited metadata regardless
+        # of whether it was included in the selected input view.
+        full_columns = source.query_columns(metadata_mode="full")
         # Creating a fresh data representation is allowed (e.g. data_text).
         # Creating same-named local metadata that shadows inherited metadata is
         # not: full-lineage queries would then be ambiguous.
         existing_metadata = {
             str(col["base_name"])
-            for col in available.get("columns", [])
+            for col in full_columns.get("columns", [])
             if col.get("namespace") == "metadata"
         }
         metadata_overlap = sorted(
@@ -269,10 +298,14 @@ class PatternExtractor(BaseTranslator):
         return SourceRequest(
             artifact_type=("table", "jsonl"),
             mode="batches",
-            columns=ColumnRequest(keys=True, data=self.text_field, metadata=False),
+            columns=ColumnRequest(
+                keys=True,
+                data=self.field if namespace == "data" else False,
+                metadata=self.field if namespace == "metadata" else False,
+            ),
             batch_size=request.batch_size if request.batch_size is not None else 10_000,
             form="table",
-            metadata_mode="none",
+            metadata_mode=self.metadata_mode,
             include_position=False,
         )
 
@@ -294,10 +327,11 @@ class PatternExtractor(BaseTranslator):
         frame = packet.data
         keys = [str(name) for name in packet.primary_key]
         self._validate_key_collisions(keys)
-        missing = [name for name in [*keys, self.text_field] if name not in frame]
+        source_field = self._source_field or self.field
+        missing = [name for name in [*keys, source_field] if name not in frame]
         if missing:
             raise ArtifactError(f"PatternExtractor source batch is missing {missing}.")
-        extracted = self.translate(frame[self.text_field])
+        extracted = self.translate(frame[source_field])
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
@@ -346,12 +380,15 @@ class PatternExtractor(BaseTranslator):
         _ = request
         if mode != "translate":
             raise OperatorError("PatternExtractor workers support translate mode only.")
-        return self.from_json_state(self.to_json_state())
+        worker = self.from_json_state(self.to_json_state())
+        worker._source_field = self._source_field
+        return worker
 
     def to_json_state(self) -> dict[str, Any]:
         return {
             "pattern": self.pattern,
-            "text_field": self.text_field,
+            "field": self.field,
+            "metadata_mode": self.metadata_mode,
             "on_unmatched": self.on_unmatched,
             "fill_value": self.fill_value,
             "flags": list(self.flags),
@@ -361,7 +398,8 @@ class PatternExtractor(BaseTranslator):
     def from_json_state(cls, state: Mapping[str, Any]) -> PatternExtractor:
         return cls(
             pattern=cast(str, state["pattern"]),
-            text_field=cast(str, state.get("text_field", "text")),
+            field=cast(str, state.get("field", state.get("text_field", "text"))),
+            metadata_mode=cast(MetadataMode, state.get("metadata_mode", "none")),
             on_unmatched=cast(UnmatchedPolicy, state.get("on_unmatched", "fill")),
             fill_value=cast(str | None, state.get("fill_value", "")),
             flags=cast(Sequence[str], state.get("flags", ())),
@@ -379,6 +417,7 @@ class PatternExtractor(BaseTranslator):
         intermediate_dir.mkdir(parents=True, exist_ok=True)
         state = self.to_json_state()
         state["operator_id"] = operator_id
+        state["source_field"] = self._source_field
         (intermediate_dir / "state.json").write_text(
             json.dumps(state, indent=2, sort_keys=True), encoding="utf-8"
         )
@@ -397,6 +436,7 @@ class PatternExtractor(BaseTranslator):
             (intermediate_dir / "state.json").read_text(encoding="utf-8")
         )
         obj = cls.from_json_state(state)
+        obj._source_field = state.get("source_field")
         obj.operator_id = operator_id
         return obj
 
