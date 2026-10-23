@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -24,7 +25,8 @@ from text_analysis_lab.core.operator import (
     TranslationMode,
     TranslationRequest,
 )
-from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL, MetadataMode
+from text_analysis_lab.translators._field_selection import resolve_text_fields
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -66,26 +68,45 @@ class RegexCleaner(BaseTranslator):
     """
 
     operation_type = "translate"
+    frozen_runtime_fields = frozenset({"_field_namespaces"})
 
     def __init__(
         self,
         *,
-        text_field: str = "text",
+        text_field: str | None = None,
         output_field: str | None = None,
+        fields: Mapping[str, str] | None = None,
+        metadata_mode: MetadataMode = "none",
         rules: Sequence[RuleInput] = (),
         strip: bool = True,
         preserve_null: bool = True,
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
-        if not isinstance(text_field, str) or not text_field:
-            raise ValueError("text_field must be a non-empty string.")
-        output = text_field if output_field is None else output_field
-        if not isinstance(output, str) or not output:
-            raise ValueError("output_field must be a non-empty string.")
-
-        self.text_field = text_field
-        self.output_field = output
+        if metadata_mode not in {"none", "local", "full"}:
+            raise ValueError("metadata_mode must be 'none', 'local', or 'full'.")
+        if fields is not None and (text_field is not None or output_field is not None):
+            raise ValueError("fields cannot be combined with text_field or output_field.")
+        legacy = fields is None
+        if legacy:
+            if text_field is not None or output_field is not None:
+                warnings.warn(
+                    "RegexCleaner text_field/output_field are deprecated; use fields. "
+                    "They will be removed in 1.0.0.", FutureWarning, stacklevel=2,
+                )
+            selected = "text" if text_field is None else text_field
+            fields = {selected: selected if output_field is None else output_field}
+        if not isinstance(fields, Mapping) or not fields:
+            raise ValueError("fields must be a nonempty input-to-output mapping.")
+        if any(not isinstance(k, str) or not k or not isinstance(v, str) or not v for k, v in fields.items()):
+            raise ValueError("fields must contain nonempty string input and output labels.")
+        self.fields = dict(fields)
+        self.metadata_mode = metadata_mode
+        self._field_namespaces: dict[str, str] = {}
+        # Retain legacy attributes for existing callers, without treating them
+        # as a second source of truth.
+        self.text_field = next(iter(self.fields))
+        self.output_field = self.fields[self.text_field]
         self.rules = tuple(_normalize_rule(rule) for rule in rules)
         self.strip = bool(strip)
         self.preserve_null = bool(preserve_null)
@@ -178,13 +199,26 @@ class RegexCleaner(BaseTranslator):
         source = _single_source(sources)
         if source.artifact_type.value != "table":
             raise OperatorError("RegexCleaner requires a table artifact source.")
+        namespaces = resolve_text_fields(source, list(self.fields), metadata_mode=self.metadata_mode,
+                                         translator="RegexCleaner")
+        for namespace in {"data", "metadata"}:
+            outputs = [self.fields[k] for k, v in namespaces.items() if v == namespace]
+            if len(set(outputs)) != len(outputs):
+                raise OperatorError(f"RegexCleaner duplicate {namespace} output destinations: {outputs}.")
+        if any(v in source.primary_key for v in self.fields.values()):
+            raise OperatorError("RegexCleaner outputs cannot collide with primary keys.")
+        self._field_namespaces = namespaces
         return SourceRequest(
             artifact_type="table",
             mode="batches",
-            columns=ColumnRequest(keys=True, data=self.text_field, metadata=False),
+            columns=ColumnRequest(
+                keys=True,
+                data=[name for name, domain in namespaces.items() if domain == "data"] or False,
+                metadata=[name for name, domain in namespaces.items() if domain == "metadata"] or False,
+            ),
             batch_size=request.batch_size if request.batch_size is not None else 10_000,
             form="table",
-            metadata_mode="none",
+            metadata_mode=self.metadata_mode,
             include_position=False,
         )
 
@@ -199,21 +233,25 @@ class RegexCleaner(BaseTranslator):
         packet = _single_input(inputs)
         frame = _require_frame(packet.data)
         key_columns = [str(name) for name in packet.primary_key]
-        missing = [
-            name
-            for name in [*key_columns, self.text_field]
-            if name not in frame.columns
-        ]
+        missing = [name for name in [*key_columns, *self.fields] if name not in frame.columns]
         if missing:
-            raise ArtifactError(
-                f"RegexCleaner source batch is missing columns {missing}."
-            )
-
-        cleaned = cast(pd.Series, self.translate(frame[self.text_field]))
-
-        keys = frame.loc[:, key_columns].reset_index(drop=True)
-        data = pd.DataFrame({self.output_field: cleaned.reset_index(drop=True)})
-        return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: {"keys": keys, "data": data}})
+            raise ArtifactError(f"RegexCleaner source batch is missing columns {missing}.")
+        namespaces = self._field_namespaces
+        if not namespaces:
+            if len(self.fields) != 1 or self.metadata_mode != "none":
+                raise OperatorError("RegexCleaner must resolve source namespaces before translating batches.")
+            namespaces = {self.text_field: "data"}
+        payload: dict[str, pd.DataFrame] = {
+            "keys": frame.loc[:, key_columns].reset_index(drop=True),
+        }
+        for domain in ("data", "metadata"):
+            output = {
+                self.fields[name]: cast(pd.Series, self.translate(frame[name])).reset_index(drop=True)
+                for name, source_domain in namespaces.items() if source_domain == domain
+            }
+            if output:
+                payload[domain] = pd.DataFrame(output)
+        return BatchResult(outputs={DEFAULT_OUTPUT_LABEL: payload})
 
     def handle_batch_result(
         self,
@@ -242,12 +280,14 @@ class RegexCleaner(BaseTranslator):
         request: TranslationRequest,
     ) -> RegexCleaner:
         _ = mode, request
-        return self.from_json_state(self.to_json_state())
+        worker = self.from_json_state(self.to_json_state())
+        worker._field_namespaces = dict(self._field_namespaces)
+        return worker
 
     def to_json_state(self) -> dict[str, Any]:
         return {
-            "text_field": self.text_field,
-            "output_field": self.output_field,
+            "fields": dict(self.fields),
+            "metadata_mode": self.metadata_mode,
             "rules": [asdict(rule) for rule in self.rules],
             "strip": self.strip,
             "preserve_null": self.preserve_null,
@@ -255,11 +295,17 @@ class RegexCleaner(BaseTranslator):
 
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> RegexCleaner:
+        if "fields" in state:
+            return cls(
+                fields=cast(Mapping[str, str], state["fields"]),
+                metadata_mode=cast(MetadataMode, state.get("metadata_mode", "none")),
+                rules=cast(Sequence[Mapping[str, Any]], state.get("rules", ())),
+                strip=bool(state.get("strip", True)),
+                preserve_null=bool(state.get("preserve_null", True)),
+            )
+        field = str(state.get("text_field", "text"))
         return cls(
-            text_field=str(state.get("text_field", "text")),
-            output_field=str(
-                state.get("output_field", state.get("text_field", "text"))
-            ),
+            fields={field: str(state.get("output_field", field))},
             rules=cast(Sequence[Mapping[str, Any]], state.get("rules", ())),
             strip=bool(state.get("strip", True)),
             preserve_null=bool(state.get("preserve_null", True)),
@@ -277,6 +323,7 @@ class RegexCleaner(BaseTranslator):
         intermediate_dir.mkdir(parents=True, exist_ok=True)
         payload = self.to_json_state()
         payload["operator_id"] = operator_id
+        payload["field_namespaces"] = self._field_namespaces
         (intermediate_dir / "state.json").write_text(
             json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
         )
@@ -296,6 +343,7 @@ class RegexCleaner(BaseTranslator):
         )
         obj = cls.from_json_state(cast(Mapping[str, Any], state))
         obj.operator_id = operator_id
+        obj._field_namespaces = dict(state.get("field_namespaces", {}))
         return obj
 
 
