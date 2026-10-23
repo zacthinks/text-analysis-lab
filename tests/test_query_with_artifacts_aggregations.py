@@ -241,3 +241,83 @@ def test_nonvisible_qualified_selectors_are_rejected(tmp_path):
         assert result.observed_count == 2
     finally:
         project.close()
+
+
+def test_query_labels_stay_fixed_when_selecting_data_metadata_and_keys(tmp_path):
+    project = teal.Project.create(tmp_path / "stable_labels", name="stable_labels")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"row_id": [1, 2]}),
+            "data": pd.DataFrame({
+                "text": ["data_a", "data_b"],
+                "data.text": ["literal_a", "literal_b"],
+            }),
+            "metadata": pd.DataFrame({
+                "text": ["meta_a", "meta_b"],
+                "row_id": ["meta_key_a", "meta_key_b"],
+            }),
+        }], artifact_type="table", primary_key="row_id")
+        schema = source.query_columns(metadata_mode="full")
+        data_text = next(c["output_name"] for c in schema["columns"]
+                         if c["namespace"] == "data" and c["base_name"] == "text")
+        literal = next(c["output_name"] for c in schema["columns"]
+                       if c["namespace"] == "data" and c["base_name"] == "data.text")
+        meta_text = next(c["output_name"] for c in schema["columns"]
+                         if c["namespace"] == "metadata" and c["base_name"] == "text")
+        meta_key = next(c["output_name"] for c in schema["columns"]
+                        if c["namespace"] == "metadata" and c["base_name"] == "row_id")
+        full = source.query(metadata_mode="full", metadata_columns=True, form="table")
+        assert full[data_text].tolist() == ["data_a", "data_b"]
+        assert full[literal].tolist() == ["literal_a", "literal_b"]
+        assert full[meta_text].tolist() == ["meta_a", "meta_b"]
+        assert full[meta_key].tolist() == ["meta_key_a", "meta_key_b"]
+        only_metadata = source.query(
+            key_columns=False, data_columns=False, metadata_columns=[meta_text, meta_key],
+            metadata_mode="full", form="table")
+        assert list(only_metadata.columns) == [meta_text, meta_key]
+        assert only_metadata[meta_text].tolist() == ["meta_a", "meta_b"]
+        assert only_metadata[meta_key].tolist() == ["meta_key_a", "meta_key_b"]
+        only_data = source.query(
+            key_columns=False, data_columns=[literal, data_text],
+            metadata_mode="full", form="table")
+        assert list(only_data.columns) == [literal, data_text]
+        only_keys = source.query(
+            key_columns=True, data_columns=False,
+            metadata_mode="full", form="table")
+        assert list(only_keys.columns) == schema["key"]
+        batches = list(source.query(
+            key_columns=False, data_columns=False, metadata_columns=[meta_text],
+            metadata_mode="full", form="table", iter_batches=True, batch_size=1))
+        assert [batch[meta_text].iloc[0] for batch in batches] == ["meta_a", "meta_b"]
+    finally:
+        project.close()
+
+
+def test_attached_names_do_not_change_after_projection(tmp_path):
+    project = teal.Project.create(tmp_path / "stable_attached", name="stable_attached")
+    try:
+        left = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": pd.DataFrame({"score": [10, 20]}),
+            "metadata": pd.DataFrame({"group": ["left_a", "left_b"]}),
+        }], artifact_type="table", primary_key="doc_id")
+        right = project.register_external(pd.DataFrame({
+            "doc_id": [1, 2], "score": [3, 4], "group": ["right_a", "right_b"]}),
+            primary_key="doc_id", data_fields=["score", "group"])
+        schema = left.query_columns(metadata_mode="full", with_artifacts=right)
+        cols = schema["columns"]
+        attached_score = next(c["output_name"] for c in cols
+                              if c["namespace"] == "with" and c["base_name"] == "score")
+        attached_group = next(c["output_name"] for c in cols
+                              if c["namespace"] == "with" and c["base_name"] == "group")
+        full = left.query(metadata_mode="full", metadata_columns=True,
+                          with_artifacts=right, form="table")
+        narrow = left.query(
+            key_columns=False, data_columns=False, metadata_columns=False,
+            metadata_mode="full", with_artifacts=right,
+            with_columns=[attached_score, attached_group], form="table")
+        assert narrow.columns.tolist() == [attached_score, attached_group]
+        assert narrow[attached_score].tolist() == full[attached_score].tolist()
+        assert narrow[attached_group].tolist() == full[attached_group].tolist()
+    finally:
+        project.close()
