@@ -915,29 +915,13 @@ def _resolve_rule_sources(
             continue
         assert rule.source_name is not None
         name = rule.source_name
-        exact_qualified = [
-            column for column in columns if column.qualified_name == name
-        ]
-        if len(exact_qualified) == 1:
-            resolved[output_name] = rule.resolved(exact_qualified[0].output_name)
-            continue
-        exact_output = [column for column in columns if column.output_name == name]
-        if len(exact_output) == 1:
-            resolved[output_name] = rule.resolved(exact_output[0].output_name)
-            continue
-        base_matches = [column for column in columns if column.base_name == name]
-        if len(base_matches) == 1:
-            resolved[output_name] = rule.resolved(base_matches[0].output_name)
-            continue
-        if len(base_matches) > 1:
-            options = [column.qualified_name for column in base_matches]
-            raise QueryError(
-                f"Requested aggregate {namespace} source {name!r} is ambiguous. Use one of: {options}."
+        matches = [column for column in columns if column.output_name == name]
+        if len(matches) != 1:
+            available = sorted({column.output_name for column in columns})
+            raise ArtifactError(
+                f"aggregate {namespace} source field {name!r} is not available; available={available}."
             )
-        available = sorted({column.output_name for column in columns})
-        raise ArtifactError(
-            f"aggregate {namespace} source field {name!r} is not available; available={available}."
-        )
+        resolved[output_name] = rule.resolved(matches[0].output_name)
     return resolved
 
 
