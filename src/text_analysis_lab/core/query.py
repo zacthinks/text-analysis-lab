@@ -2101,18 +2101,38 @@ class QueryEngine:
             if output_name not in selected:
                 selected.append(output_name)
 
-        # Column selectors are exact labels from query_columns() for this view.
-        # Qualified identities are not aliases: a literal data field called
-        # "data.text" must not select a different field whose qualified identity
-        # happens to be "data.text".
+        # Data, metadata and key selectors use the exact output labels
+        # advertised for this view. A literal data field named "data.text"
+        # must not select another field whose qualified identity is "data.text".
+        #
+        # Attached "with" fields also support their stable qualified identities:
+        # deferred matrix/visualization callers retain these handles while
+        # composing a narrower view where their output labels can change.
+        # In every namespace an output label always takes precedence.
         available = {column.output_name for column in columns}
         for name in requested_names:
-            if name not in available:
-                raise QueryError(
-                    f"Requested {label} is not available in this query scope: {name!r}. "
-                    f"Available {label}: {sorted(available)}."
-                )
-            add(name)
+            if name in available:
+                add(name)
+                continue
+            if namespace == "with":
+                qualified = [
+                    column for column in columns if column.qualified_name == name
+                ]
+                if len(qualified) == 1:
+                    add(qualified[0].output_name)
+                    continue
+                base_matches = [
+                    column for column in columns if column.base_name == name
+                ]
+                if len(base_matches) > 1:
+                    raise QueryError(
+                        f"Requested {label} {name!r} is ambiguous. "
+                        f"Use one of: {[column.qualified_name for column in base_matches]}."
+                    )
+            raise QueryError(
+                f"Requested {label} is not available in this query scope: {name!r}. "
+                f"Available {label}: {sorted(available)}."
+            )
 
         return selected
 
