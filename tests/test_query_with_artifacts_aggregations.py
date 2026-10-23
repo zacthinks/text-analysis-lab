@@ -197,6 +197,13 @@ def test_attached_metadata_collision_uses_projected_output_names(tmp_path):
         out = hist.to_frame()
         assert out.loc[out[rhs_cohort] == "right_A", "count"].tolist() == [1, 0]
         assert out.loc[out[rhs_cohort] == "right_B", "count"].tolist() == [0, 1]
+        # Both analytics queries must retain the full discovery naming
+        # universe even when caller metadata is not in the selected fields.
+        value_only = left.visualize.histogram(
+            rhs_value, with_artifacts=right,
+            bins=[0, 1.5, 3], batch_size=1, output="result",
+        )
+        assert value_only.observed_count == 2
         table = left.analysis.crosstab(
             rhs_cohort, rhs_value, with_artifacts=right, batch_size=1,
         )
