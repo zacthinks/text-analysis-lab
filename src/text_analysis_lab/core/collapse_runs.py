@@ -274,28 +274,13 @@ def _resolve_by_fields(
     """Return ``(namespace, resolved_output_name, local_metadata_name)`` per field."""
     resolved: list[tuple[str, str, str]] = []
     for requested in by_fields:
-        exact_qualified = [c for c in view.columns if c.qualified_name == requested]
-        if len(exact_qualified) == 1:
-            column = exact_qualified[0]
-        else:
-            exact_output = [c for c in view.columns if c.output_name == requested]
-            if len(exact_output) == 1:
-                column = exact_output[0]
-            else:
-                base_matches = [c for c in view.columns if c.base_name == requested]
-                if len(base_matches) == 1:
-                    column = base_matches[0]
-                elif len(base_matches) > 1:
-                    options = sorted(c.qualified_name for c in base_matches)
-                    raise QueryError(
-                        f"collapse_runs by field {requested!r} is ambiguous. Use one of: {options}."
-                    )
-                else:
-                    available = sorted({c.base_name for c in view.columns})
-                    raise ArtifactError(
-                        f"collapse_runs by field {requested!r} is not available; "
-                        f"available fields include: {available}."
-                    )
+        matches = [c for c in view.columns if c.output_name == requested]
+        if len(matches) != 1:
+            available = sorted({c.output_name for c in view.columns})
+            raise ArtifactError(
+                f"collapse_runs by field {requested!r} is unavailable; available={available}."
+            )
+        column = matches[0]
         local_name = str(column.base_name)
         resolved.append((str(column.namespace), str(column.output_name), local_name))
     local_names = [item[2] for item in resolved]
