@@ -70,14 +70,12 @@ class FeatureMatrix(BaseTranslator):
     def _resolve(self, source: Any) -> tuple[list[str], list[str], list[str], list[str]]:
         matrix = source.artifact_type.value in {"sparse_matrix", "dense_matrix"}
         matrix_cols = _selected(source.get_data_columns(), self.data_columns) if matrix else []
-        data_cols = [] if matrix else _selected(source.get_data_columns(), self.data_columns)
-        key_cols = _selected(source.primary_key, self.key_columns)
-        available = source.query_columns(metadata_mode="full")["metadata"]
-        meta_names = [
-            value["output_name"] if isinstance(value, dict) else value
-            for value in available
-        ]
-        meta_cols = _selected(meta_names, self.metadata_columns)
+        info = source.query_columns(metadata_mode="full")
+        # Relational fields, including keys, are selected from one complete
+        # naming universe. Matrix-native features retain their separate schema.
+        data_cols = [] if matrix else _selected(info["data"], self.data_columns)
+        key_cols = _selected(info["key"], self.key_columns)
+        meta_cols = _selected(info["metadata"], self.metadata_columns)
         return matrix_cols, data_cols, meta_cols, key_cols
 
     def fit_source(self, source: Any, *, batch_size: int = 10_000) -> None:
@@ -92,7 +90,7 @@ class FeatureMatrix(BaseTranslator):
             data_columns=data if data else False,
             metadata_columns=meta if meta else False,
             key_columns=key if key else False,
-            metadata_mode="full" if meta else "none",
+            metadata_mode="full",
             form="table", iter_batches=True, batch_size=batch_size,
         )
         self._encoder.fit_batches(batches, columns=[*key, *data, *meta])
