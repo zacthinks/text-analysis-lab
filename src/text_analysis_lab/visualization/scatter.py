@@ -319,35 +319,6 @@ def _resolve_selected_field(
     if name in selected:
         return name
 
-    info = (
-        artifact.query_columns(metadata_mode=metadata_mode)
-        if with_artifacts is None
-        else artifact.query_columns(
-            metadata_mode=metadata_mode, with_artifacts=with_artifacts,
-        )
-    )
-    candidates = [
-        column
-        for column in info["columns"]
-        if str(column["namespace"]) in {"key", "data", "metadata", "with"}
-        and str(column["output_name"]) in selected
-        and name
-        in {
-            str(column["base_name"]),
-            str(column["qualified_name"]),
-            str(column["output_name"]),
-        }
-    ]
-    output_names = {str(column["output_name"]) for column in candidates}
-    if len(output_names) == 1:
-        return next(iter(output_names))
-    if len(output_names) > 1:
-        options = sorted(str(column["qualified_name"]) for column in candidates)
-        raise ArtifactError(
-            f"Scatter field {name!r} is ambiguous among the selected columns. "
-            f"Use one of: {options}."
-        )
-
     raise ArtifactError(
         f"Scatter field {name!r} was not selected. Choose it with key_columns, "
         "data_columns, metadata_columns, or with_columns (and relevant sources) "
