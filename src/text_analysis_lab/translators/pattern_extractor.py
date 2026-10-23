@@ -43,7 +43,7 @@ class PatternExtractor(BaseTranslator):
     Every observation is evaluated with re.fullmatch: at most one match per row.
 
     Standalone translate accepts a Series, a DataFrame containing field, or
-    a {"data": DataFrame, "metadata": DataFrame} preview packet. It returns
+    a {"data": DataFrame, "metadata": DataFrame} preview packet (either component optional). It returns
     component-separated DataFrames. Persisted execution adds TeAL-managed keys,
     and the source's other columns remain available through lineage rather than
     being duplicated.
@@ -127,13 +127,13 @@ class PatternExtractor(BaseTranslator):
             if isinstance(values, Mapping):
                 data = values.get("data")
                 metadata = values.get("metadata")
-                if not isinstance(data, pd.DataFrame):
-                    raise TypeError(
-                        "PatternExtractor preview packets require a 'data' DataFrame."
-                    )
-                if metadata is not None and (
-                    not isinstance(metadata, pd.DataFrame) or len(metadata) != len(data)
-                ):
+                if data is not None and not isinstance(data, pd.DataFrame):
+                    raise TypeError("PatternExtractor preview data must be a DataFrame.")
+                if metadata is not None and not isinstance(metadata, pd.DataFrame):
+                    raise TypeError("PatternExtractor preview metadata must be a DataFrame.")
+                if data is None and metadata is None:
+                    raise ValueError("PatternExtractor preview packet requires data or metadata.")
+                if data is not None and metadata is not None and len(metadata) != len(data):
                     raise ValueError(
                         "PatternExtractor preview metadata must be a row-aligned DataFrame."
                     )
@@ -146,14 +146,14 @@ class PatternExtractor(BaseTranslator):
                 )
             component = "data"
             if isinstance(values, Mapping):
-                in_data = self.field in data.columns
+                in_data = isinstance(data, pd.DataFrame) and self.field in data.columns
                 in_metadata = isinstance(metadata, pd.DataFrame) and self.field in metadata.columns
                 if in_data and in_metadata:
                     raise ValueError(f"PatternExtractor preview field {self.field!r} is ambiguous across components.")
                 if in_metadata and not in_data:
                     component = "metadata"
             frame = metadata if component == "metadata" else data
-            if self.field not in frame.columns:
+            if not isinstance(frame, pd.DataFrame) or self.field not in frame.columns:
                 raise ValueError(f"PatternExtractor input is missing field {self.field!r}.")
             if not data.columns.is_unique:
                 raise ValueError("PatternExtractor input DataFrame columns must be unique.")
