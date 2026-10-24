@@ -8,10 +8,11 @@ from typing import Any
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
-from text_analysis_lab.core.query_scope import QueryScope
 from text_analysis_lab.core.operator import BaseTranslator, BatchResult
 from text_analysis_lab.translators._feature_matrix_encoding import FeatureMatrixEncoding
-from text_analysis_lab.translators._feature_matrix_provider import render_feature_matrix
+from text_analysis_lab.translators._feature_matrix_provider import (
+    _recipe_query_scope, render_feature_matrix,
+)
 
 
 def _selected(available: Sequence[str], request: Any) -> list[str]:
@@ -71,9 +72,9 @@ class FeatureMatrix(BaseTranslator):
     def _resolve(self, source: Any) -> tuple[list[str], list[str], list[str], list[str]]:
         matrix = source.artifact_type.value in {"sparse_matrix", "dense_matrix"}
         matrix_cols = _selected(source.get_data_columns(), self.data_columns) if matrix else []
-        data_cols = [] if matrix else _selected(QueryScope(source, metadata_mode="full").columns()["data"], self.data_columns)
+        scope = _recipe_query_scope(source, self.metadata_columns)
+        data_cols = [] if matrix else _selected(scope.columns()["data"], self.data_columns)
         key_cols = _selected(source.primary_key, self.key_columns)
-        scope = QueryScope(source, metadata_mode="full")
         available = scope.columns()["metadata"]
         meta_names = [
             value["output_name"] if isinstance(value, dict) else value
@@ -90,7 +91,7 @@ class FeatureMatrix(BaseTranslator):
         self.scalar_data_columns = data
         self.scalar_metadata_columns = meta
         self.scalar_key_columns = key
-        scope = QueryScope(source, metadata_mode="full")
+        scope = _recipe_query_scope(source, self.metadata_columns)
         batches = scope.query(
             data_columns=data if data else False,
             metadata_columns=meta if meta else False,
