@@ -433,53 +433,87 @@ class OpenAIResponsesTranslator(BaseTranslator):
         return obj
 
     def _bind_template_fields(self, source: BaseArtifact) -> None:
-        # Simple placeholders stay user-facing raw names. Bind each one to
-        # the actual scope-resolved packet column before executing the request.
-        keys = {str(value) for value in source.primary_key}
-        data = {str(value) for value in source.get_data_columns()}
-        metadata = {str(value) for value in source.get_full_metadata_columns()}
-        unknown = sorted(self.template_fields - keys - data - metadata)
+        # Prompt placeholders remain simple raw field names. The query's
+        # structured inventory, not get_data_columns() (which may already
+        # return qualified output labels), decides the field's namespace.
+        # Preserve the existing data > key > metadata precedence.
+        has_scope = callable(getattr(source, "query_columns", None))
+        if has_scope:
+            full_scope = QueryScope(source, metadata_mode="full")
+            inventory = full_scope.columns()["columns"]
+            names = {
+                namespace: {
+                    str(column["base_name"])
+                    for column in inventory if column["namespace"] == namespace
+                }
+                for namespace in ("key", "data", "metadata")
+            }
+        else:
+            # Existing standalone test doubles expose only raw inventories.
+            inventory = []
+            names = {
+                "key": {str(value) for value in source.primary_key},
+                "data": {str(value) for value in source.get_data_columns()},
+                "metadata": {
+                    str(value) for value in source.get_full_metadata_columns()
+                },
+            }
+
+        unknown = sorted(
+            self.template_fields - names["key"] - names["data"] - names["metadata"]
+        )
         if unknown:
             raise OperatorError(
                 f"Prompt template references unknown source field(s) {unknown}; "
-                f"keys={sorted(keys)}, data={sorted(data)}, metadata={sorted(metadata)}."
+                f"keys={sorted(names['key'])}, data={sorted(names['data'])}, "
+                f"metadata={sorted(names['metadata'])}."
             )
-        wants_metadata = bool((self.template_fields - data - keys) & metadata)
-        scope = QueryScope(
-            source, metadata_mode="full" if wants_metadata else "none"
-        )
-        if callable(getattr(source, "query_columns", None)):
-            fields = scope.columns()["columns"]
-            def output_for(namespace: str, name: str) -> str:
-                matches = [
-                    field for field in fields
-                    if field["namespace"] == namespace and field["base_name"] == name
-                ]
-                if len(matches) != 1:
-                    raise OperatorError(
-                        f"Prompt field {name!r} is not unique in {namespace!r}."
-                    )
-                return str(matches[0]["output_name"])
-        else:
-            # Lightweight standalone artifact adapters provide only raw schema.
-            def output_for(namespace: str, name: str) -> str:
-                return name
-        self._prompt_input_names = {}
-        self._data_fields = tuple(
-            sorted(output_for("data", name) for name in self.template_fields & data)
-        )
-        self._metadata_fields = tuple(
-            sorted(output_for("metadata", name)
-                   for name in (self.template_fields - data - keys) & metadata)
-        )
-        for name in self.template_fields:
-            namespace = (
-                "data" if name in data
-                else "key" if name in keys
+
+        namespace_by_name = {
+            name: (
+                "data" if name in names["data"]
+                else "key" if name in names["key"]
                 else "metadata"
             )
-            self._prompt_input_names[name] = output_for(namespace, name)
+            for name in self.template_fields
+        }
+        wants_metadata = "metadata" in namespace_by_name.values()
+        if has_scope:
+            # The requested metadata domain fixes the naming scope. Rebuild
+            # the inventory for data/key-only prompts, so projections never
+            # implicitly switch a data-only operation into full scope.
+            scope = full_scope if wants_metadata else QueryScope(
+                source, metadata_mode="none"
+            )
+            inventory = scope.columns()["columns"]
 
+        def output_for(namespace: str, name: str) -> str:
+            if not has_scope:
+                return name
+            matches = [
+                field for field in inventory
+                if field["namespace"] == namespace and field["base_name"] == name
+            ]
+            if len(matches) != 1:
+                raise OperatorError(
+                    f"Prompt field {name!r} is not unique in {namespace!r}."
+                )
+            return str(matches[0]["output_name"])
+
+        self._prompt_input_names = {
+            name: output_for(namespace, name)
+            for name, namespace in namespace_by_name.items()
+        }
+        self._data_fields = tuple(sorted(
+            self._prompt_input_names[name]
+            for name, namespace in namespace_by_name.items()
+            if namespace == "data"
+        ))
+        self._metadata_fields = tuple(sorted(
+            self._prompt_input_names[name]
+            for name, namespace in namespace_by_name.items()
+            if namespace == "metadata"
+        ))
 
     def _structured_fields(self) -> tuple[str, ...]:
         assert self.json_schema is not None
