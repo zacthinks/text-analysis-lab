@@ -10,29 +10,42 @@ import text_analysis_lab as teal
 from text_analysis_lab.core.errors import QueryError
 
 
+from text_analysis_lab.core.writer import create_artifact_writer
+
+
 @pytest.fixture
 def corpus(tmp_path):
     project = teal.Project.create(tmp_path / "scoped_names", name="scoped_names")
     try:
-        artifact = project.register_external(
-            [{
-                "keys": pd.DataFrame({"doc_id": [1, 2]}),
-                "data": pd.DataFrame({
-                    "doc_id": ["datum1", "datum2"],
-                    "text": ["alpha", "beta"],
-                }),
-                "metadata": pd.DataFrame({
-                    "doc_id": [101, 102],
-                    "group": ["A", "B"],
-                }),
-            }],
+        writer = create_artifact_writer(
             artifact_type="table",
-            primary_key="doc_id",
+            artifact_dir=project.storage.artifact_dir("scoped_source"),
+            artifact_id="scoped_source",
+            label="source",
+            lineage_mode="new_key",
         )
-        yield artifact
+        writer.write({
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": pd.DataFrame({
+                "doc_id": ["datum1", "datum2"],
+                "text": ["alpha", "beta"],
+            }),
+            "metadata": pd.DataFrame({
+                "doc_id": [101, 102],
+                "group": ["A", "B"],
+            }),
+        })
+        writer.finalize()
+        project.catalog.register_artifact(
+            artifact_id="scoped_source",
+            artifact_type="table",
+            label="source",
+            lineage_mode="new_key",
+            status="complete",
+        )
+        yield project.get_artifact("scoped_source")
     finally:
         project.close()
-
 
 @pytest.mark.parametrize("include_data", [False, True])
 @pytest.mark.parametrize("metadata_mode", ["none", "local", "full"])
