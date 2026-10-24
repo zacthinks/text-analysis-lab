@@ -378,6 +378,18 @@ def test_openai_template_raw_placeholders_bind_scoped_data_and_metadata(tmp_path
         monkeypatch.setattr(OpenAIResponsesTranslator, "_request", fake_request)
         result = project.translate(operator, source)["output"]
         assert calls == ["Text: DATA; Party: P"]
+        from text_analysis_lab.translators.openai_responses import OpenAIResponsesTranslator as OpenAITranslator
+        saved = tmp_path / "saved_prompt"
+        operator.save_intermediate_state(
+            saved, operator_id="optr_prompt",
+            mode="translate", route="sequential",
+        )
+        restored = OpenAITranslator.load_intermediate_state(
+            saved, operator_id="optr_prompt",
+            mode="translate", route="sequential",
+        )
+        assert restored._prompt_input_names == operator._prompt_input_names
+
         assert result.query(data_columns=["response"], form="table")["response"].tolist() == ["ok"]
     finally:
         project.close()
