@@ -93,11 +93,17 @@ class FinalizedClassifier:
 
 
 def _field_request(inventory: Mapping[str, Any], name: str) -> dict[str, Any]:
-    matches = [
+    candidates = [
         item for item in inventory["columns"]
         if item["namespace"] in {"key", "data", "metadata"}
-        and name in (item["base_name"], item["output_name"], item["qualified_name"])
     ]
+    # The displayed output name is authoritative, including literal dotted
+    # source field names that resemble another column's qualified identity.
+    matches = [item for item in candidates if item["output_name"] == name]
+    if not matches:
+        matches = [item for item in candidates if item["qualified_name"] == name]
+    if not matches:
+        matches = [item for item in candidates if item["base_name"] == name]
     unique = {(m["namespace"], m["qualified_name"]): m for m in matches}
     if len(unique) != 1:
         raise ValueError(
