@@ -370,12 +370,12 @@ def test_openai_template_raw_placeholders_bind_scoped_data_and_metadata(tmp_path
         }], artifact_type="table", primary_key="row_id")
         calls = []
         operator = OpenAIResponsesTranslator("test-model", "Text: {text}; Party: {party}")
-        def fake_request(prompt):
+        def fake_request(self, prompt):
             calls.append(prompt)
             return SimpleNamespace(
                 id="fake", model="test-model", output_text="ok", usage=None
             )
-        monkeypatch.setattr(operator, "_request", fake_request)
+        monkeypatch.setattr(OpenAIResponsesTranslator, "_request", fake_request)
         result = project.translate(operator, source)["output"]
         assert calls == ["Text: DATA; Party: P"]
         assert result.query(data_columns=["response"], form="table")["response"].tolist() == ["ok"]
