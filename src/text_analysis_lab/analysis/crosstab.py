@@ -67,8 +67,9 @@ def crosstab(
         batch_size=int(batch_size),
         key_columns=False,
         data_columns=data_columns,
+        include_data=True,
         metadata_columns=metadata_columns,
-        metadata_mode="full" if metadata_columns is not False else "none",
+        metadata_mode="full",
         where=where, positions=positions, limit=limit, include_position=False,
     )
     batches = (
