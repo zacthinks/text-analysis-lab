@@ -319,3 +319,65 @@ def test_matrix_transpose_promotes_key_and_colliding_metadata(matrix_type, tmp_p
         np.testing.assert_array_equal(dense, [[1, 3], [2, 4]])
     finally:
         project.close()
+
+
+@pytest.mark.parametrize("kind", ["RegexCleaner", "DelimiterDecomposer", "TextLength"])
+def test_existing_text_translators_bind_data_name_when_key_is_text(tmp_path, kind):
+    from text_analysis_lab.translators import RegexCleaner, DelimiterDecomposer, TextLength
+    project = teal.Project.create(tmp_path / kind, name="text_key_collision")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"text": [10, 20]}),
+            "data": pd.DataFrame({"text": ["one two", "three four"]}),
+        }], artifact_type="table", primary_key="text")
+        if kind == "RegexCleaner":
+            operator = RegexCleaner(text_field="text", output_field="cleaned",
+                                    rules=[{"pattern": " ", "replacement": "_"}])
+        elif kind == "DelimiterDecomposer":
+            operator = DelimiterDecomposer(text_field="text", delimiter=" ",
+                                           new_key="part_id", output_text_field="word")
+        else:
+            operator = TextLength({"text": "words"})
+        result = project.translate(operator, source)["output"]
+        assert result.primary_key[0] == "text"
+        if kind == "RegexCleaner":
+            frame = result.query(data_columns=["cleaned"], form="table")
+            assert frame["cleaned"].tolist() == ["one_two", "three_four"]
+            assert frame["text"].tolist() == [10, 20]
+        elif kind == "DelimiterDecomposer":
+            frame = result.query(data_columns=["word"], form="table")
+            assert frame["word"].tolist() == ["one", "two", "three", "four"]
+            assert frame["text"].tolist() == [10, 10, 20, 20]
+        else:
+            frame = result.query(data_columns=False, metadata_columns=True,
+                                 metadata_mode="local", form="table")
+            assert frame["text_words"].tolist() == [2, 2]
+            assert frame["text"].tolist() == [10, 20]
+    finally:
+        project.close()
+
+
+def test_openai_template_raw_placeholders_bind_scoped_data_and_metadata(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from text_analysis_lab.translators import OpenAIResponsesTranslator
+
+    project = teal.Project.create(tmp_path / "prompt_scoped", name="prompt_scoped")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"row_id": [1]}),
+            "data": pd.DataFrame({"text": ["DATA"]}),
+            "metadata": pd.DataFrame({"text": ["META"], "party": ["P"]}),
+        }], artifact_type="table", primary_key="row_id")
+        calls = []
+        operator = OpenAIResponsesTranslator("test-model", "Text: {text}; Party: {party}")
+        def fake_request(prompt):
+            calls.append(prompt)
+            return SimpleNamespace(
+                id="fake", model="test-model", output_text="ok", usage=None
+            )
+        monkeypatch.setattr(operator, "_request", fake_request)
+        result = project.translate(operator, source)["output"]
+        assert calls == ["Text: DATA; Party: P"]
+        assert result.query(data_columns=["response"], form="table")["response"].tolist() == ["ok"]
+    finally:
+        project.close()
