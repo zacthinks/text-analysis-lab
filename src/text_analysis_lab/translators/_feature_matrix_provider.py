@@ -14,9 +14,21 @@ import pandas as pd
 from scipy import sparse
 
 from text_analysis_lab.core.errors import ArtifactError
+from text_analysis_lab.core.query_scope import QueryScope
 from text_analysis_lab.translators._feature_matrix_encoding import (
     FeatureMatrixEncoding, append_feature_columns,
 )
+
+
+def _recipe_query_scope(source: Any, metadata_columns: Any) -> QueryScope:
+    """Use the recipe's *full* selected domains, not the current projection.
+
+    A lazy feature read may request only data columns even though the recipe
+    was fitted with metadata in scope. Names must remain those used at fit.
+    """
+    return QueryScope(
+        source, metadata_mode="full" if metadata_columns else "none"
+    )
 
 
 def render_feature_matrix(
@@ -74,12 +86,13 @@ def render_feature_matrix(
     data = [name for name in needed_scalar_names if name in (data_columns if data_columns is not False else [])]
     meta = [name for name in needed_scalar_names if name in (metadata_columns if metadata_columns is not False else [])]
     if needed_scalar_names:
-        fields = source.query(
+        # Do not let partial lazy projections change the recipe's naming scope.
+        scope = _recipe_query_scope(source, metadata_columns)
+        fields = scope.query(
             positions=chosen_positions,
             key_columns=keys if keys else False,
             data_columns=data if data else False,
             metadata_columns=meta if meta else False,
-            metadata_mode="full" if meta else "none",
             form="table",
         )
         if len(fields) != len(chosen_positions):
