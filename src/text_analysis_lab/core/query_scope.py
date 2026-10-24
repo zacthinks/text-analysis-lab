@@ -43,6 +43,32 @@ class QueryScope:
         """Discover canonical output labels in this exact naming scope."""
         return self.artifact.query_columns(**self._scope_kwargs())
 
+    def data_output_name(self, name: str) -> str:
+        """Bind an existing data-field selector to its advertised output name.
+
+        A legacy raw name may collide with a structural key; an exact data
+        output label takes precedence, then the original data field name.
+        This consults the canonical columns inventory, not a second resolver.
+        """
+        fields = [
+            column for column in self.columns()["columns"]
+            if column["namespace"] == "data"
+        ]
+        matches = [
+            column for column in fields if column["output_name"] == name
+        ]
+        if not matches:
+            matches = [
+                column for column in fields if column["base_name"] == name
+            ]
+        if len(matches) != 1:
+            available = sorted(str(column["output_name"]) for column in fields)
+            raise ValueError(
+                f"Data field {name!r} is not uniquely available in the query "
+                f"scope; advertised data fields: {available}."
+            )
+        return str(matches[0]["output_name"])
+
     def query(self, **projection_and_execution: Any) -> Any:
         """Execute with this scope; each call may select different columns."""
         unexpected = _SCOPE_KEYS.intersection(projection_and_execution)
