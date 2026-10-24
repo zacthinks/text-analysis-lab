@@ -41,9 +41,7 @@ class QueryScope:
 
     def columns(self) -> dict[str, Any]:
         """Discover canonical output labels in this exact naming scope."""
-        return self.artifact.project.query.query_columns(
-            self.artifact, **self._scope_kwargs()
-        )
+        return self.artifact.query_columns(**self._scope_kwargs())
 
     def query(self, **projection_and_execution: Any) -> Any:
         """Execute with this scope; each call may select different columns."""
