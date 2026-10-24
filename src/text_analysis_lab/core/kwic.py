@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal, get_args
 import numpy as np
 import pandas as pd
 
+from text_analysis_lab.core.query_scope import QueryScope
 from text_analysis_lab.core.errors import ArtifactError
 from text_analysis_lab.core.types import (
     ColumnSelect,
@@ -415,7 +416,8 @@ def keyword_in_context(
     )
     requested_search_columns = _normalize_search_columns(search_columns)
 
-    query_info = artifact.query_columns(metadata_mode=metadata_mode)
+    scope = QueryScope(artifact, metadata_mode=metadata_mode)
+    query_info = scope.columns()
     key_output_columns = {str(col) for col in query_info.get("key", [])}
     metadata_output_columns = {str(col) for col in query_info.get("metadata", [])}
 
@@ -423,12 +425,11 @@ def keyword_in_context(
     saw_any_row = False
     saw_searchable_text = False
 
-    for batch in artifact.iter_table_batches(
-        batch_size=int(batch_size),
+    for batch in scope.query(
+        form="table", iter_batches=True, batch_size=int(batch_size),
         key_columns=key_columns,
         data_columns=data_columns,
         metadata_columns=metadata_columns,
-        metadata_mode=metadata_mode,
         where=where,
         order_by=order_by,
         positions=positions,
