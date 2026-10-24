@@ -55,7 +55,7 @@ def crosstab(
         artifact, (row_field, column_field), with_artifacts=with_artifacts,
     )
     data_columns, metadata_columns = batch_query_columns(
-        (row_field, column_field), qualified=with_artifacts is not None,
+        (row_field, column_field),
     )
 
     counts: dict[tuple[Any, Any], int] = defaultdict(int)
@@ -68,7 +68,7 @@ def crosstab(
         key_columns=False,
         data_columns=data_columns,
         metadata_columns=metadata_columns,
-        metadata_mode="full" if metadata_columns is not False else "none",
+        metadata_mode="full",
         where=where, positions=positions, limit=limit, include_position=False,
     )
     batches = (

@@ -98,25 +98,11 @@ def _resolve_level_columns(
     )
     resolved: list[tuple[str, str, str]] = []
     for name in source_names:
-        matches = [
-            column
-            for column in view.columns
-            if name in {column.base_name, column.output_name, column.qualified_name}
-        ]
-        # Deduplicate the same column if more than one naming form matched.
-        unique = {(c.namespace, c.qualified_name, c.output_name): c for c in matches}
-        matches = list(unique.values())
-        if not matches:
-            available = sorted({column.base_name for column in view.columns})
+        matches = [column for column in view.columns if column.output_name == name]
+        if len(matches) != 1:
+            available = sorted({column.output_name for column in view.columns})
             raise ArtifactError(
-                f"set_primary_keys level column {name!r} is not available. "
-                f"Available fields include: {available}."
-            )
-        if len(matches) > 1:
-            options = sorted(column.qualified_name for column in matches)
-            raise ArtifactError(
-                f"set_primary_keys level column {name!r} is ambiguous. "
-                f"Use one of: {options}."
+                f"set_primary_keys level column {name!r} is unavailable; available={available}."
             )
         column = matches[0]
         resolved.append((column.namespace, column.qualified_name, column.output_name))

@@ -57,12 +57,7 @@ def resolve_tabular_fields(
             info
             for info in columns
             if info["namespace"] in {"data", "metadata", "with"}
-            and name
-            in {
-                str(info["base_name"]),
-                str(info["qualified_name"]),
-                str(info["output_name"]),
-            }
+            and name == str(info["output_name"])
         ]
         unique = {
             (str(info["namespace"]), str(info["output_name"])) for info in candidates
@@ -74,7 +69,7 @@ def resolve_tabular_fields(
                 if info["namespace"] in {"data", "metadata", "with"}
             )
             raise ArtifactError(
-                f"Field {name!r} is not available as artifact data or metadata. "
+                f"Field {name!r} is not an exact output label in this query scope. "
                 f"Available fields: {available}."
             )
         if len(unique) > 1:
@@ -84,7 +79,7 @@ def resolve_tabular_fields(
                 if info["namespace"] in {"data", "metadata", "with"}
             )
             raise ArtifactError(
-                f"Field {name!r} is ambiguous. Use one of the qualified names: {options}."
+                f"Field {name!r} is ambiguous. Available output labels: {options}."
             )
         namespace, output_name = next(iter(unique))
         if namespace == "with" and allowed_with is not None:
@@ -113,49 +108,27 @@ def resolve_batch_output_names(
     *,
     with_artifacts: Any,
 ) -> tuple[ResolvedField, ...]:
-    """Map selected field identities onto the actual narrow query view.
+    """Return canonical query labels unchanged by a narrower projection.
 
-    A full-view output name can change when caller data or metadata are omitted.
-    Qualified field identities remain stable across those projections.
+    Selection no longer changes output names, so no per-batch renaming is
+    necessary. Retain this helper for existing histogram/crosstab callers.
     """
-    if with_artifacts is None:
-        return fields
-    data_columns, metadata_columns = batch_query_columns(fields)
-    view = artifact.project.query.build_composed_view_sql(
-        artifact,
-        metadata_mode="full" if metadata_columns is not False else "none",
-        include_data=data_columns is not False,
-        with_artifacts=with_artifacts,
-    )
-    remapped: list[ResolvedField] = []
-    for field in fields:
-        output_name = view.mapping.get(field.qualified_name)
-        if output_name is None:
-            raise ArtifactError(
-                f"Selected field {field.qualified_name!r} is not present in "
-                "the aggregation's narrow query view."
-            )
-        remapped.append(replace(field, output_name=output_name))
-    return tuple(remapped)
+    _ = artifact, with_artifacts
+    return fields
 
 
 def batch_query_columns(
     fields: tuple[ResolvedField, ...],
-    *,
-    qualified: bool = False,
 ) -> tuple[list[str] | bool, list[str] | bool]:
-    data = [
-        field.qualified_name if qualified else field.requested_name
-        for field in fields if field.namespace == "data"
-    ]
+    """Pass the exact output labels of the planned query view."""
+    data = [field.output_name for field in fields if field.namespace == "data"]
     metadata = [
-        field.qualified_name if qualified else field.requested_name
-        for field in fields if field.namespace == "metadata"
+        field.output_name for field in fields if field.namespace == "metadata"
     ]
     return (data or False, metadata or False)
 
 
 def batch_with_columns(fields: tuple[ResolvedField, ...]) -> list[str] | bool:
-    """Project only fields needed by the aggregation."""
-    selected = [field.qualified_name for field in fields if field.namespace == "with"]
+    """Project attached fields using the planned view's exact output labels."""
+    selected = [field.output_name for field in fields if field.namespace == "with"]
     return selected or False

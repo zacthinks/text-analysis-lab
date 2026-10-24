@@ -1,0 +1,144 @@
+"""Regression tests for scoped field selection in text translators."""
+
+import pandas as pd
+import pytest
+
+import text_analysis_lab as teal
+from text_analysis_lab.core.errors import OperatorError
+from text_analysis_lab.translators import RegexCleaner, TextLength, DelimiterDecomposer
+
+
+def _source(project):
+    return project.register_external([{
+        "keys": pd.DataFrame({"doc_id": [1, 2]}),
+        "data": pd.DataFrame({"text": ["A | B", "C | D"], "title": ["One", "Two"]}),
+        "metadata": pd.DataFrame({"text": ["Alice|Bob", "Carol|Dave"]}),
+    }], artifact_type="table", primary_key="doc_id")
+
+
+def _label(artifact, namespace, base):
+    return next(c["output_name"] for c in artifact.query_columns(metadata_mode="full")["columns"]
+                if c["namespace"] == namespace and c["base_name"] == base)
+
+
+def test_regex_cleaner_legacy_and_new_api():
+    with pytest.warns(FutureWarning, match="deprecated"):
+        old = RegexCleaner(text_field="text", output_field="clean")
+    assert old.fields == {"text": "clean"}
+    assert RegexCleaner.from_json_state({
+        "text_field": "text", "output_field": "clean"
+    }).fields == old.fields
+    with pytest.raises(ValueError, match="cannot be combined"):
+        RegexCleaner(fields={"text": "clean"}, text_field="text")
+    with pytest.raises(ValueError, match="nonempty"):
+        RegexCleaner(fields={})
+
+
+def test_mixed_regex_fields_and_metadata_only(tmp_path):
+    project = teal.Project.create(tmp_path / "regex", name="regex")
+    try:
+        source = _source(project)
+        data = _label(source, "data", "text")
+        meta = _label(source, "metadata", "text")
+        cleaner = RegexCleaner(
+            fields={data: "clean_data", meta: "clean_metadata"},
+            metadata_mode="full",
+            rules=[{"pattern": r"\s*\|\s*", "replacement": "/"}],
+        )
+        result = project.translate(cleaner, source)["output"]
+        frame = result.query(metadata_mode="local", metadata_columns=True, form="table")
+        assert frame["clean_data"].tolist() == ["A/B", "C/D"]
+        assert frame["clean_metadata"].tolist() == ["Alice/Bob", "Carol/Dave"]
+        metadata_only = RegexCleaner(
+            fields={meta: "only_clean"}, metadata_mode="full",
+            rules=[{"pattern": r"\|", "replacement": "/"}],
+        )
+        target = project.translate(metadata_only, source)["output"]
+        values = target.query(data_columns=False, metadata_mode="local",
+                              metadata_columns=True, form="table")
+        assert values["only_clean"].tolist() == ["Alice/Bob", "Carol/Dave"]
+        saved = cleaner.to_json_state()
+        assert RegexCleaner.from_json_state(saved).fields == cleaner.fields
+    finally:
+        project.close()
+
+
+def test_text_length_combined_mode_and_legacy(tmp_path):
+    project = teal.Project.create(tmp_path / "length", name="length")
+    try:
+        source = _source(project)
+        title = _label(source, "data", "title")
+        text = _label(source, "metadata", "text")
+        length = TextLength(
+            fields=[title, text],
+            units=["characters", "words"],
+            output_field="combined", delimiter=" / ", metadata_mode="full",
+        )
+        assert length.translate({title: "Hi", text: "there"}) == {
+            "combined_characters": 10, "combined_words": 3,
+        }
+        out = project.translate(length, source)["output"]
+        rows = out.query(data_columns=False, metadata_mode="local",
+                         metadata_columns=True, form="table")
+        assert rows["combined_characters"].tolist() == [15, 16]
+        assert TextLength.from_json_state(length.to_json_state()).to_json_state() == length.to_json_state()
+        legacy = TextLength({"title": "characters"})
+        assert legacy.translate({"title": "Hi"}) == {"title_characters": 2}
+        assert TextLength.from_json_state(legacy.to_json_state()).lengths == legacy.lengths
+    finally:
+        project.close()
+
+
+def test_delimiter_decomposer_metadata_source(tmp_path):
+    project = teal.Project.create(tmp_path / "decompose", name="decompose")
+    try:
+        source = _source(project)
+        meta = _label(source, "metadata", "text")
+        t = DelimiterDecomposer(
+            text_field=meta, metadata_mode="full", delimiter="|",
+            output_text_field="part",
+        )
+        target = project.translate(t, source)["output"]
+        rows = target.query(metadata_mode="none", form="table")
+        assert rows["part"].tolist() == ["Alice", "Bob", "Carol", "Dave"]
+        assert rows["segment_id"].tolist() == [0, 1, 0, 1]
+        assert DelimiterDecomposer.from_json_state(t.to_json_state()).metadata_mode == "full"
+        with pytest.raises(OperatorError, match="unavailable"):
+            project.translate(DelimiterDecomposer(text_field=meta, delimiter="|"), source)
+    finally:
+        project.close()
+
+
+def test_regex_standalone_mixed_preview_matches_persisted(tmp_path):
+    project = teal.Project.create(tmp_path / "preview", name="preview")
+    try:
+        source = _source(project)
+        data_label = _label(source, "data", "text")
+        metadata_label = _label(source, "metadata", "text")
+        cleaner = RegexCleaner(
+            fields={data_label: "clean_data", metadata_label: "clean_metadata"},
+            metadata_mode="full",
+            rules=[{"pattern": r"\s*\|\s*", "replacement": "/"}],
+        )
+        values = source.query(
+            metadata_mode="full", data_columns=[data_label],
+            metadata_columns=[metadata_label], key_columns=False, form="table",
+        )
+        preview = cleaner.translate({
+            "data": values[[data_label]],
+            "metadata": values[[metadata_label]],
+        })
+        output = project.translate(cleaner, source)["output"].query(
+            metadata_mode="local", metadata_columns=True, form="table",
+        )
+        assert preview["data"]["clean_data"].tolist() == output["clean_data"].tolist()
+        assert preview["metadata"]["clean_metadata"].tolist() == output["clean_metadata"].tolist()
+        # Parity alone could pass if both paths silently failed to replace the pipe.
+        assert preview["data"]["clean_data"].tolist() == ["A/B", "C/D"]
+        assert preview["metadata"]["clean_metadata"].tolist() == ["Alice/Bob", "Carol/Dave"]
+        assert output["clean_data"].tolist() == ["A/B", "C/D"]
+        assert output["clean_metadata"].tolist() == ["Alice/Bob", "Carol/Dave"]
+        only = RegexCleaner(fields={metadata_label: "clean_metadata"}, metadata_mode="full")
+        assert only.translate({"metadata": values[[metadata_label]]})["metadata"]["clean_metadata"].tolist() == ["Alice|Bob", "Carol|Dave"]
+    finally:
+        project.close()

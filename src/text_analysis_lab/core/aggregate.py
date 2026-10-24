@@ -393,11 +393,13 @@ def _aggregate_relational(
 ) -> BaseArtifact:
     label = validate_output_label(output_label)
 
-    include_data = any(not rule.is_literal for rule in data_rules.values())
+    # Resolve both namespaces before projecting aggregate expressions. Even
+    # metadata-only reductions must retain data columns in the naming universe.
+    # The outer aggregate SELECT still materializes only requested reductions.
     view = project.query.build_artifact_view_sql(
         artifact,
-        metadata_mode="full" if metadata_rules else "none",
-        include_data=include_data,
+        metadata_mode="full",
+        include_data=True,
     )
     resolved_data = _resolve_rule_sources(view, data_rules, namespace="data")
     resolved_metadata = _resolve_rule_sources(
@@ -429,11 +431,23 @@ def _aggregate_relational(
 
     data_names = list(resolved_data)
     metadata_names = list(resolved_metadata)
-    source_order = ", ".join(quote_identifier(name) for name in artifact.primary_key)
-    group_exprs = [quote_identifier(name) for name in retained_key]
+    key_names = {
+        column.base_name: column.output_name
+        for column in view.columns
+        if column.namespace == "key"
+    }
+    source_order = ", ".join(
+        quote_identifier(key_names[name]) for name in artifact.primary_key
+    )
+    group_exprs = [quote_identifier(key_names[name]) for name in retained_key]
 
     try:
-        select_exprs = list(group_exprs)
+        # SQL groups by canonical view labels, but the new artifact retains
+        # the source's structural key names.
+        select_exprs = [
+            f"{quote_identifier(key_names[name])} AS {quote_identifier(name)}"
+            for name in retained_key
+        ]
         postprocess: dict[str, tuple[str, str]] = {}
 
         for output_name, rule in resolved_data.items():
@@ -915,29 +929,13 @@ def _resolve_rule_sources(
             continue
         assert rule.source_name is not None
         name = rule.source_name
-        exact_qualified = [
-            column for column in columns if column.qualified_name == name
-        ]
-        if len(exact_qualified) == 1:
-            resolved[output_name] = rule.resolved(exact_qualified[0].output_name)
-            continue
-        exact_output = [column for column in columns if column.output_name == name]
-        if len(exact_output) == 1:
-            resolved[output_name] = rule.resolved(exact_output[0].output_name)
-            continue
-        base_matches = [column for column in columns if column.base_name == name]
-        if len(base_matches) == 1:
-            resolved[output_name] = rule.resolved(base_matches[0].output_name)
-            continue
-        if len(base_matches) > 1:
-            options = [column.qualified_name for column in base_matches]
-            raise QueryError(
-                f"Requested aggregate {namespace} source {name!r} is ambiguous. Use one of: {options}."
+        matches = [column for column in columns if column.output_name == name]
+        if len(matches) != 1:
+            available = sorted({column.output_name for column in columns})
+            raise ArtifactError(
+                f"aggregate {namespace} source field {name!r} is not available; available={available}."
             )
-        available = sorted({column.output_name for column in columns})
-        raise ArtifactError(
-            f"aggregate {namespace} source field {name!r} is not available; available={available}."
-        )
+        resolved[output_name] = rule.resolved(matches[0].output_name)
     return resolved
 
 

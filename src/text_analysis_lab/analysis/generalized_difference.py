@@ -756,39 +756,67 @@ def _variance_unavailable(note: str) -> tuple[None, None, str]:
 
 
 def _frame(artifact: BaseArtifact, field: str) -> pd.DataFrame:
+    has_schema = hasattr(artifact, "query_columns")
+    schema = artifact.query_columns(metadata_mode="full") if has_schema else None
     value = artifact.query(
         key_columns=True,
         data_columns=[field],
         metadata_columns=False,
+        metadata_mode="full" if has_schema else "none",
         form="table",
         include_position=False,
     )
     if not isinstance(value, pd.DataFrame):
         raise ArtifactError(f"Could not materialize {field!r} as a table.")
+    if schema is not None:
+        key_names = [
+            item["output_name"] for item in schema["columns"]
+            if item["namespace"] == "key"
+        ]
+        value = value.loc[:, [*key_names, field]].copy()
+        value.columns = [*artifact.primary_key, field]
     return value.reset_index(drop=True)
 
 
 def _field_frame(artifact: BaseArtifact, field: str, *, role: str) -> pd.DataFrame:
-    data_columns = [str(value) for value in artifact.get_data_columns()]
-    if field in data_columns:
-        return _frame(artifact, field)
-    metadata_columns = [str(value) for value in artifact.get_full_metadata_columns()]
-    if field not in metadata_columns:
+    # One full-scope inventory determines both the field's namespace and
+    # the labels used by the materialization query. Do not mix a data-only
+    # inventory with an inherited-metadata inventory.
+    if not hasattr(artifact, "query_columns"):
+        data_columns = [str(value) for value in artifact.get_data_columns()]
+        if field in data_columns:
+            return _frame(artifact, field)
+        raise ArtifactError(f"{role} field {field!r} is unavailable.")
+
+    info = artifact.query_columns(metadata_mode="full")
+    matches = [
+        column for column in info["columns"]
+        if column["output_name"] == field
+        and column["namespace"] in {"data", "metadata"}
+    ]
+    if len(matches) != 1:
         raise ArtifactError(
-            f"{role} artifact does not expose field {field!r} as data or inherited metadata; "
-            f"data={data_columns}, metadata={metadata_columns}."
+            f"{role} field {field!r} is not a uniquely queryable data/metadata field. "
+            f"Available fields: {info['data'] + info['metadata']}."
         )
+    namespace = matches[0]["namespace"]
+    key_names = [
+        column["output_name"] for column in info["columns"]
+        if column["namespace"] == "key"
+    ]
     value = artifact.query(
         key_columns=True,
-        data_columns=False,
-        metadata_columns=[field],
+        data_columns=[field] if namespace == "data" else False,
+        metadata_columns=[field] if namespace == "metadata" else False,
         metadata_mode="full",
         form="table",
         include_position=False,
     )
     if not isinstance(value, pd.DataFrame):
         raise ArtifactError(f"Could not materialize {role} field {field!r} as a table.")
-    return value.loc[:, [*artifact.primary_key, field]].reset_index(drop=True)
+    selected = value.loc[:, [*key_names, field]].copy()
+    selected.columns = [*artifact.primary_key, field]
+    return selected.reset_index(drop=True)
 
 
 def _key_only_frame(artifact: BaseArtifact) -> pd.DataFrame:
@@ -806,7 +834,10 @@ def _key_only_frame(artifact: BaseArtifact) -> pd.DataFrame:
 
 
 def _require_field(artifact: BaseArtifact, field: str, *, role: str) -> None:
-    columns = [str(value) for value in artifact.get_data_columns()]
+    if hasattr(artifact, "query_columns"):
+        columns = artifact.query_columns(metadata_mode="full")["data"]
+    else:
+        columns = [str(value) for value in artifact.get_data_columns()]
     if field not in columns:
         raise ArtifactError(
             f"{role} artifact must expose data field {field!r}; available fields are {columns}."

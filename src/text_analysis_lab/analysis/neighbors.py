@@ -220,24 +220,15 @@ def _selected_context_output_columns(
         else:
             requested = [request] if isinstance(request, str) else list(request)
             names = []
+            available = {str(c["output_name"]) for c in cols}
             for raw in requested:
                 name = str(raw)
-                exact = [
-                    c
-                    for c in cols
-                    if name in {str(c.get("qualified_name")), str(c.get("output_name"))}
-                ]
-                base = [c for c in cols if str(c.get("base_name")) == name]
-                matches = exact if exact else base
-                if len(matches) != 1:
-                    if not matches:
-                        raise ArtifactError(
-                            f"Unknown context {namespace} column {name!r}."
-                        )
+                if name not in available:
                     raise ArtifactError(
-                        f"Ambiguous context {namespace} column {name!r}; use a qualified name."
+                        f"Unknown context {namespace} column {name!r}; "
+                        f"available columns: {sorted(available)}."
                     )
-                names.append(str(matches[0]["output_name"]))
+                names.append(name)
         for name in names:
             if name not in selected:
                 selected.append(name)

@@ -225,6 +225,16 @@ def test_translator_specs_and_source_modes_match_lineage_contracts() -> None:
     source = SimpleNamespace(
         artifact_type=ArtifactType.TABLE,
         primary_key=["doc_id"],
+        query_columns=lambda *, metadata_mode: {
+            "columns": [
+                {"namespace": "key", "output_name": "doc_id"},
+                {"namespace": "data", "output_name": "text"},
+            ],
+            "key": ["doc_id"],
+            "data": ["text"],
+            "metadata": [],
+            "output": ["doc_id", "text"],
+        },
     )
     sources = {"source": source}
     request = TranslationRequest()

@@ -1037,7 +1037,9 @@ class BaseArtifact(ABC):
                 self,
                 where=where,
                 metadata_mode=metadata_mode,
-                include_data=self._query_can_include_data(data_columns),
+                # Column identities must use the full discovery naming universe,
+                # even if the final projection excludes caller data.
+                include_data=True,
                 positions=positions,
                 sample_n=sample_n,
                 sample_frac=sample_frac,

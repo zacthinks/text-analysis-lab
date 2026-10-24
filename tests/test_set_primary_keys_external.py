@@ -499,15 +499,38 @@ def test_validation_rejects_collisions_nulls_duplicate_names_and_ambiguous_sourc
             keys=pd.DataFrame({"row_id": [0, 1]}),
             data=pd.DataFrame({"child": ["data-a", "data-b"], "x": [1, 2]}),
             metadata=pd.DataFrame(
-                {"child": ["meta-a", "meta-b"], "group": ["A", None]}
+                {"child": ["meta-b", "meta-a"], "group": ["A", None]}
             ),
         )
-        with pytest.raises(ArtifactError, match="ambiguous"):
+        # Public selectors must match output labels from the same full scope:
+        # the unqualified name is not a guess between data and metadata.
+        inventory = source.query_columns(metadata_mode="full")["columns"]
+        data_child = next(
+            c["output_name"] for c in inventory
+            if c["namespace"] == "data" and c["base_name"] == "child"
+        )
+        metadata_child = next(
+            c["output_name"] for c in inventory
+            if c["namespace"] == "metadata" and c["base_name"] == "child"
+        )
+        with pytest.raises(ArtifactError, match="unavailable"):
             project.set_primary_keys(
                 source,
                 levels={"child": "child_id"},
                 leaf_key="turn_id",
             )
+        # Verify actual values, not just that similarly named fields are
+        # accepted. Their group numbering deliberately differs.
+        data_rekeyed = project.set_primary_keys(
+            source, levels={data_child: "child_id"}, leaf_key="turn_id",
+            output_label="data_rekeyed",
+        )
+        metadata_rekeyed = project.set_primary_keys(
+            source, levels={metadata_child: "child_id"}, leaf_key="turn_id",
+            output_label="metadata_rekeyed",
+        )
+        assert _full(data_rekeyed)["child_id"].tolist() == [0, 1]
+        assert _full(metadata_rekeyed)["child_id"].tolist() == [1, 0]
         with pytest.raises(ArtifactError, match="contains null"):
             project.set_primary_keys(
                 source,

@@ -547,3 +547,28 @@ def test_search_kwargs_and_invalid_strategy(labeled_representations):
         n_jobs=1,
     ).fit(labels, target="label")
     assert search.results()["status"].tolist() == ["ok"]
+
+
+def test_development_labels_use_full_scope_when_only_data_requested(tmp_path):
+    from text_analysis_lab.analysis.classifier_search import _load_development_labels
+    project = Project.create(tmp_path / "collision", name="collision")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2, 3, 4]}),
+            "data": pd.DataFrame({"label": [0, 1, 0, 1], "group": [2, 2, 3, 3]}),
+            "metadata": pd.DataFrame({"label": [99, 99, 99, 99],
+                                      "group": [88, 88, 88, 88]}),
+        }], artifact_type="table", primary_key="doc_id")
+        cols = source.query_columns(metadata_mode="full")["columns"]
+        data_label = next(c["output_name"] for c in cols
+                          if c["namespace"] == "data" and c["base_name"] == "label")
+        data_group = next(c["output_name"] for c in cols
+                          if c["namespace"] == "data" and c["base_name"] == "group")
+        keys, targets, groups = _load_development_labels(
+            source, data_label, data_group, batch_size=2
+        )
+        assert [k["doc_id"] for k in keys] == [1, 2, 3, 4]
+        assert targets.tolist() == [0, 1, 0, 1]
+        assert groups.tolist() == [2, 2, 3, 3]
+    finally:
+        project.close()

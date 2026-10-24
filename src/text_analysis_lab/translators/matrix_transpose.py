@@ -53,7 +53,7 @@ class MatrixTranspose(BaseTranslator):
 
     operation_type = "translate"
 
-    frozen_runtime_fields = frozenset(['_source_type','_source_features','_source_feature_metadata','_promoted_feature_columns'])
+    frozen_runtime_fields = frozenset(['_source_type','_source_features','_source_feature_metadata','_promoted_feature_columns','_source_key_output_names'])
 
     def __init__(
         self,
@@ -69,6 +69,7 @@ class MatrixTranspose(BaseTranslator):
         self._source_features: tuple[str, ...] | None = None
         self._source_feature_metadata: pd.DataFrame | None = None
         self._promoted_feature_columns: tuple[str, ...] = ()
+        self._source_key_output_names: tuple[str, ...] | None = None
 
     def translate(
         self,
@@ -325,6 +326,19 @@ class MatrixTranspose(BaseTranslator):
             str(value) for value in request.params.get("metadata_columns", ())
         ]
         self._promoted_feature_columns = promoted
+        # Resolve structural keys to displayed labels in the SAME full scope
+        # as promoted fields. Store mapping separately from raw primary keys.
+        inventory = getattr(source, "query_columns", None)
+        if callable(inventory):
+            columns = inventory(metadata_mode="full")["columns"]
+            key_by_base = {
+                str(col["base_name"]): str(col["output_name"])
+                for col in columns if col["namespace"] == "key"
+            }
+            self._source_key_output_names = tuple(key_by_base[k] for k in source.primary_key)
+        else:
+            # Legacy lightweight test doubles without query schema introspection.
+            self._source_key_output_names = tuple(str(k) for k in source.primary_key)
 
         return SourceRequest(
             artifact_type=("sparse_matrix", "dense_matrix"),
@@ -336,7 +350,7 @@ class MatrixTranspose(BaseTranslator):
             ),
             batch_size=None,
             form="native",
-            metadata_mode="full" if metadata_request else "none",
+            metadata_mode="full",
             include_position=True,
         )
 
@@ -352,7 +366,10 @@ class MatrixTranspose(BaseTranslator):
             raise OperatorError(f"Unsupported MatrixTranspose mode {mode!r}.")
 
         packet = single_input(inputs, name="MatrixTranspose")
-        info, matrix, key_columns = native_matrix_packet(packet, name="MatrixTranspose")
+        info, matrix, key_columns = native_matrix_packet(
+            packet, name="MatrixTranspose",
+            key_output_names=self._source_key_output_names,
+        )
         source_features = self._require_source_features()
         feature_metadata = self._require_source_feature_metadata()
         if int(matrix.shape[1]) != len(source_features):
@@ -367,6 +384,7 @@ class MatrixTranspose(BaseTranslator):
             info,
             key_columns,
             row_names=embedded_row_names,
+            structural_key_names=packet.primary_key,
         )
         translated = self.translate(
             matrix,
@@ -438,6 +456,7 @@ class MatrixTranspose(BaseTranslator):
         key_columns: Sequence[str],
         *,
         row_names: Any = None,
+        structural_key_names: Sequence[str] | None = None,
     ) -> list[str]:
         if row_names is not None:
             if isinstance(row_names, (str, bytes)) or not isinstance(
@@ -465,16 +484,20 @@ class MatrixTranspose(BaseTranslator):
                 f"MatrixTranspose source packet is missing key columns {missing}."
             )
 
+        structural_names = (
+            [str(name) for name in structural_key_names]
+            if structural_key_names is not None else list(key_columns)
+        )
         if len(key_columns) == 1:
             column = key_columns[0]
-            return [f"{column}={_scalar_key(value)}" for value in info[column].tolist()]
+            return [f"{structural_names[0]}={_scalar_key(value)}" for value in info[column].tolist()]
 
         labels: list[str] = []
         for values in info.loc[:, list(key_columns)].itertuples(index=False, name=None):
             labels.append(
                 "|".join(
                     f"{name}={_scalar_key(value)}"
-                    for name, value in zip(key_columns, values, strict=True)
+                    for name, value in zip(structural_names, values, strict=True)
                 )
             )
         return labels

@@ -200,9 +200,15 @@ def collapse_runs(
     writer = operation["writer"]
 
     try:
+        key_names = {
+            column.base_name: column.output_name
+            for column in view.columns
+            if column.namespace == "key"
+        }
         sql, postprocess = _collapse_sql(
             view_sql=view.sql,
             source_pk=source_pk,
+            key_output_names=tuple(key_names[name] for name in source_pk),
             resolved_by=resolved_by,
             resolved_data=resolved_data,
             resolved_metadata=resolved_metadata,
@@ -274,28 +280,13 @@ def _resolve_by_fields(
     """Return ``(namespace, resolved_output_name, local_metadata_name)`` per field."""
     resolved: list[tuple[str, str, str]] = []
     for requested in by_fields:
-        exact_qualified = [c for c in view.columns if c.qualified_name == requested]
-        if len(exact_qualified) == 1:
-            column = exact_qualified[0]
-        else:
-            exact_output = [c for c in view.columns if c.output_name == requested]
-            if len(exact_output) == 1:
-                column = exact_output[0]
-            else:
-                base_matches = [c for c in view.columns if c.base_name == requested]
-                if len(base_matches) == 1:
-                    column = base_matches[0]
-                elif len(base_matches) > 1:
-                    options = sorted(c.qualified_name for c in base_matches)
-                    raise QueryError(
-                        f"collapse_runs by field {requested!r} is ambiguous. Use one of: {options}."
-                    )
-                else:
-                    available = sorted({c.base_name for c in view.columns})
-                    raise ArtifactError(
-                        f"collapse_runs by field {requested!r} is not available; "
-                        f"available fields include: {available}."
-                    )
+        matches = [c for c in view.columns if c.output_name == requested]
+        if len(matches) != 1:
+            available = sorted({c.output_name for c in view.columns})
+            raise ArtifactError(
+                f"collapse_runs by field {requested!r} is unavailable; available={available}."
+            )
+        column = matches[0]
         local_name = str(column.base_name)
         resolved.append((str(column.namespace), str(column.output_name), local_name))
     local_names = [item[2] for item in resolved]
@@ -332,14 +323,19 @@ def _collapse_sql(
     *,
     view_sql: str,
     source_pk: Sequence[str],
+    key_output_names: Sequence[str],
     resolved_by: Sequence[tuple[str, str, str]],
     resolved_data: Mapping[str, Any],
     resolved_metadata: Mapping[str, Any],
 ) -> tuple[str, dict[str, tuple[str, str]]]:
-    parent_cols = [str(value) for value in source_pk[:-1]]
-    leaf_col = str(source_pk[-1])
-    start_col = f"{leaf_col}_start"
-    end_col = f"{leaf_col}_end"
+    # The view can qualify structural keys when they collide with data or
+    # metadata. Keep those query labels for all SQL expressions, while the
+    # resulting span-key names still derive from the physical key schema.
+    parent_cols = [str(value) for value in key_output_names[:-1]]
+    leaf_col = str(key_output_names[-1])
+    raw_leaf = str(source_pk[-1])
+    start_col = f"{raw_leaf}_start"
+    end_col = f"{raw_leaf}_end"
     by_source_names = [item[1] for item in resolved_by]
     by_output_names = [item[2] for item in resolved_by]
 
@@ -390,8 +386,8 @@ def _collapse_sql(
 
     final_select: list[str] = [
         *[
-            f"m.{quote_identifier(name)} AS {quote_identifier(name)}"
-            for name in parent_cols
+            f"m.{quote_identifier(query_name)} AS {quote_identifier(raw_name)}"
+            for query_name, raw_name in zip(parent_cols, source_pk[:-1], strict=True)
         ],
         f"m.{quote_identifier(start_col)} AS {quote_identifier(start_col)}",
         f"m.{quote_identifier(end_col)} AS {quote_identifier(end_col)}",

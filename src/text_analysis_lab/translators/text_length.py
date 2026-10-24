@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
+from text_analysis_lab.translators._field_selection import canonical_key_output_names, structural_key_frame
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
@@ -23,7 +24,8 @@ from text_analysis_lab.core.operator import (
     TranslationMode,
     TranslationRequest,
 )
-from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL, MetadataMode
+from text_analysis_lab.translators._field_selection import resolve_text_fields
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -44,15 +46,44 @@ class TextLength(BaseTranslator):
     """
 
     operation_type = "translate"
+    frozen_runtime_fields = frozenset({"_field_namespaces"})
 
     def __init__(
         self,
-        lengths: LengthRequest,
+        lengths: LengthRequest | None = None,
         *,
+        fields: Sequence[str] | None = None,
+        units: LengthUnit | Sequence[LengthUnit] = "characters",
+        output_field: str | None = None,
+        delimiter: str = " ",
+        metadata_mode: MetadataMode = "none",
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
-        self.lengths = _normalize_lengths(lengths)
+        if metadata_mode not in {"none", "local", "full"}:
+            raise ValueError("metadata_mode must be 'none', 'local', or 'full'.")
+        if (lengths is None) == (fields is None):
+            raise ValueError("Provide exactly one of lengths or fields.")
+        if not isinstance(delimiter, str):
+            raise TypeError("delimiter must be a string.")
+        self.combined_fields: tuple[str, ...] | None = None
+        self.output_field = output_field
+        self.delimiter = delimiter
+        self.metadata_mode = metadata_mode
+        self._field_namespaces: dict[str, str] = {}
+        if fields is not None:
+            if isinstance(fields, str) or not fields or any(not isinstance(v, str) or not v for v in fields):
+                raise ValueError("fields must be a nonempty sequence of field labels.")
+            if len(set(fields)) != len(fields):
+                raise ValueError("fields cannot contain repeated labels.")
+            if not isinstance(output_field, str) or not output_field:
+                raise ValueError("Combined TextLength needs an explicit output_field.")
+            self.combined_fields = tuple(fields)
+            self.lengths = _normalize_lengths({output_field: units})
+        else:
+            if output_field is not None or delimiter != " ":
+                raise ValueError("output_field and delimiter require combined fields.")
+            self.lengths = _normalize_lengths(cast(LengthRequest, lengths))
 
     @property
     def supports_parallel_translate(self) -> bool:
@@ -82,12 +113,15 @@ class TextLength(BaseTranslator):
         sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
-        _ = sources, mode
+        _ = mode
         if params:
             raise OperatorError(
                 f"TextLength does not accept operation parameters; got {sorted(params)}."
             )
-        return {}
+        source = _single_source(sources)
+        return {"key_output_names": canonical_key_output_names(
+            source, metadata_mode=self.metadata_mode, translator="TextLength"
+        )}
 
     def input_request(
         self,
@@ -101,14 +135,11 @@ class TextLength(BaseTranslator):
         if source.artifact_type.value not in {"table", "jsonl"}:
             raise OperatorError("TextLength requires a table or jsonl artifact source.")
 
+        selected = list(self.combined_fields) if self.combined_fields else list(self.lengths)
+        namespaces = resolve_text_fields(source, selected, metadata_mode=self.metadata_mode,
+                                         translator="TextLength")
+        self._field_namespaces = namespaces
         available = source.query_columns(metadata_mode="full")
-        available_data = {str(name) for name in available["data"]}
-        missing = [field for field in self.lengths if field not in available_data]
-        if missing:
-            raise OperatorError(
-                f"TextLength source data field(s) are unavailable: {missing}. "
-                f"Available data fields: {sorted(available_data)}."
-            )
         existing = {str(name) for name in available["output"]}
         collisions = sorted(existing.intersection(self.output_columns))
         if collisions:
@@ -122,10 +153,14 @@ class TextLength(BaseTranslator):
         return SourceRequest(
             artifact_type=("table", "jsonl"),
             mode="batches",
-            columns=ColumnRequest(keys=True, data=list(self.lengths), metadata=False),
+            columns=ColumnRequest(
+                keys=True,
+                data=[n for n, kind in namespaces.items() if kind == "data"] or False,
+                metadata=[n for n, kind in namespaces.items() if kind == "metadata"] or False,
+            ),
             batch_size=request.batch_size if request.batch_size is not None else 10_000,
             form="table",
-            metadata_mode="none",
+            metadata_mode=self.metadata_mode,
             include_position=False,
         )
 
@@ -164,13 +199,23 @@ class TextLength(BaseTranslator):
         return measured
 
     def _measure_frame(self, frame: pd.DataFrame) -> pd.DataFrame:
-        missing = [field for field in self.lengths if field not in frame.columns]
+        selected = self.combined_fields if self.combined_fields is not None else self.lengths
+        missing = [field for field in selected if field not in frame.columns]
         if missing:
             raise ValueError(f"TextLength input is missing field(s) {missing}.")
 
         metadata: dict[str, Any] = {}
+        if self.combined_fields is not None:
+            assert self.output_field is not None
+            pieces = [frame[n].fillna("").astype("string") for n in self.combined_fields]
+            joined = pieces[0]
+            for piece in pieces[1:]:
+                joined = joined + self.delimiter + piece
+            sources = {self.output_field: joined}
+        else:
+            sources = {n: frame[n].fillna("").astype("string") for n in self.lengths}
         for field, units in self.lengths.items():
-            source = frame[field].fillna("").astype("string")
+            source = sources[field]
             for unit in units:
                 base_unit = unit.removeprefix("log_")
                 if base_unit == "characters":
@@ -199,8 +244,13 @@ class TextLength(BaseTranslator):
         if not isinstance(packet.data, pd.DataFrame):
             raise ArtifactError("TextLength expected a table-form pandas batch.")
         frame = packet.data
-        key_columns = [str(name) for name in packet.primary_key]
-        missing = [name for name in [*key_columns, *self.lengths] if name not in frame]
+        keys = structural_key_frame(
+            frame, packet.primary_key,
+            output_names=request.params.get("key_output_names"),
+            translator="TextLength",
+        )
+        selected = self.combined_fields if self.combined_fields is not None else self.lengths
+        missing = [name for name in selected if name not in frame]
         if missing:
             raise ArtifactError(
                 f"TextLength source batch is missing columns {missing}."
@@ -211,7 +261,7 @@ class TextLength(BaseTranslator):
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
-                    "keys": frame.loc[:, key_columns].reset_index(drop=True),
+                    "keys": keys,
                     "metadata": metadata,
                 }
             }
@@ -246,19 +296,37 @@ class TextLength(BaseTranslator):
         _ = request
         if mode != "translate":
             raise OperatorError("TextLength workers support translate mode only.")
-        return TextLength(self.lengths)
+        worker = self.from_json_state(self.to_json_state())
+        worker._field_namespaces = dict(self._field_namespaces)
+        return worker
 
     def to_json_state(self) -> dict[str, Any]:
-        return {
-            "lengths": {field: list(units) for field, units in self.lengths.items()}
+        state: dict[str, Any] = {
+            "lengths": {field: list(units) for field, units in self.lengths.items()},
+            "metadata_mode": self.metadata_mode,
         }
+        if self.combined_fields is not None:
+            state["fields"] = list(self.combined_fields)
+            state["output_field"] = self.output_field
+            state["delimiter"] = self.delimiter
+        return state
 
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> TextLength:
         raw = state.get("lengths")
         if not isinstance(raw, Mapping):
             raise OperatorError("TextLength state is missing its lengths mapping.")
-        return cls(cast(LengthRequest, raw))
+        metadata_mode = cast(MetadataMode, state.get("metadata_mode", "none"))
+        if "fields" in state:
+            stem = str(state["output_field"])
+            return cls(
+                fields=cast(Sequence[str], state["fields"]),
+                units=cast(Sequence[LengthUnit], raw[stem]),
+                output_field=stem,
+                delimiter=str(state.get("delimiter", " ")),
+                metadata_mode=metadata_mode,
+            )
+        return cls(cast(LengthRequest, raw), metadata_mode=metadata_mode)
 
     def save_intermediate_state(
         self,
@@ -274,6 +342,7 @@ class TextLength(BaseTranslator):
         intermediate_dir.mkdir(parents=True, exist_ok=True)
         payload = self.to_json_state()
         payload["operator_id"] = operator_id
+        payload["field_namespaces"] = self._field_namespaces
         (intermediate_dir / "state.json").write_text(
             json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
         )
@@ -295,6 +364,7 @@ class TextLength(BaseTranslator):
         )
         obj = cls.from_json_state(cast(Mapping[str, Any], state))
         obj.operator_id = operator_id
+        obj._field_namespaces = dict(state.get("field_namespaces", {}))
         return obj
 
 

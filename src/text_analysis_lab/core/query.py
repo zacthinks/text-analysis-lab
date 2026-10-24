@@ -1957,8 +1957,11 @@ class QueryEngine:
     ) -> list[ViewColumn]:
         if not with_artifacts or not _columns_requested(with_columns):
             return []
+        # Resolve attachment labels against the same complete naming universe
+        # advertised by query_columns(), independent of the caller's data
+        # projection. The query still fetches only requested values.
         view = self.build_composed_view_sql(
-            artifact, metadata_mode=metadata_mode, include_data=include_data,
+            artifact, metadata_mode=metadata_mode, include_data=True,
             with_artifacts=with_artifacts,
         )
         selected = self._select_namespace_columns(
@@ -2101,33 +2104,25 @@ class QueryEngine:
             if output_name not in selected:
                 selected.append(output_name)
 
+        # Only visible output labels are selectable, in every namespace.
+        # In particular, a literal field named "data.text" must not be
+        # confused with the qualified identity of a separate field "text".
+        available = {column.output_name for column in columns}
         for name in requested_names:
-            exact_qualified = [
-                column for column in columns if column.qualified_name == name
+            if name in available:
+                add(name)
+                continue
+            base_matches = [
+                column for column in columns if column.base_name == name
             ]
-            if len(exact_qualified) == 1:
-                add(exact_qualified[0].output_name)
-                continue
-
-            exact_output = [column for column in columns if column.output_name == name]
-            if len(exact_output) == 1:
-                add(exact_output[0].output_name)
-                continue
-
-            base_matches = [column for column in columns if column.base_name == name]
-            if len(base_matches) == 1:
-                add(base_matches[0].output_name)
-                continue
             if len(base_matches) > 1:
-                options = [column.qualified_name for column in base_matches]
                 raise QueryError(
-                    f"Requested {label} {name!r} is ambiguous. Use one of: {options}."
+                    f"Requested {label} {name!r} is ambiguous in this query scope. "
+                    f"Available {label}: {sorted(available)}."
                 )
-
-            available = sorted({column.output_name for column in columns})
             raise QueryError(
-                f"Requested {label} is not available: {name!r}. "
-                f"Available {label}: {available}."
+                f"Requested {label} is not available in this query scope: {name!r}. "
+                f"Available {label}: {sorted(available)}."
             )
 
         return selected
@@ -2194,10 +2189,14 @@ class QueryEngine:
             metadata_mode=metadata_mode,
             metadata_columns=metadata_columns,
         )
+        # Naming must be independent of selected columns. The full view
+        # establishes key/data/metadata/attached output labels; projection below
+        # chooses values without re-resolving names. DuckDB prunes unselected
+        # relational columns at execution time.
         view = self.build_composed_view_sql(
             artifact,
             metadata_mode=metadata_mode,
-            include_data=_columns_requested(data_columns),
+            include_data=True,
             with_artifacts=with_artifacts,
         )
         selected = self._view_selected_columns(

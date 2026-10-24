@@ -361,7 +361,7 @@ def test_collapse_runs_rejects_invalid_by_and_duplicate_local_output(
         )
         with pytest.raises(ValueError, match="at least one"):
             project.collapse_runs(source, by=[])
-        with pytest.raises(Exception, match="not available"):
+        with pytest.raises(Exception, match="unavailable"):
             project.collapse_runs(source, by="missing")
         with pytest.raises(Exception, match="carried automatically"):
             project.collapse_runs(

@@ -96,15 +96,16 @@ def _field_request(artifact: Any, name: str) -> dict[str, Any]:
     matches = [
         item for item in inventory["columns"]
         if item["namespace"] in {"key", "data", "metadata"}
-        and name in (item["base_name"], item["output_name"], item["qualified_name"])
+        and name == item["output_name"]
     ]
-    unique = {(m["namespace"], m["qualified_name"]): m for m in matches}
-    if len(unique) != 1:
+    if len(matches) != 1:
+        available = sorted(item["output_name"] for item in inventory["columns"]
+                           if item["namespace"] in {"key", "data", "metadata"})
         raise ValueError(
-            f"Expected one accessible label/group field {name!r}; "
-            f"found {len(unique)}. Select an unambiguous field name."
+            f"Expected an exact accessible label/group field {name!r}; "
+            f"available fields: {available}."
         )
-    item = next(iter(unique.values()))
+    item = matches[0]
     namespace = item["namespace"]
     if namespace == "key":
         # Keys are always loaded to preserve stable identity.
@@ -131,7 +132,7 @@ def _load_development_labels(
     batches = artifact.query(
         key_columns=True, data_columns=data if data else False,
         metadata_columns=metadata if metadata else False,
-        metadata_mode="full" if metadata else "none",
+        metadata_mode="full",
         form="table", iter_batches=True, batch_size=batch_size,
     )
     for frame in batches:

@@ -157,7 +157,8 @@ def single_input(inputs: Mapping[str, InputBatch], *, name: str) -> InputBatch:
 
 
 def native_matrix_packet(
-    packet: InputBatch, *, name: str
+    packet: InputBatch, *, name: str,
+    key_output_names: Sequence[str] | None = None,
 ) -> tuple[pd.DataFrame, Any, list[str]]:
     if not isinstance(packet.data, Mapping):
         raise ArtifactError(f"{name} expected a native matrix packet.")
@@ -175,7 +176,17 @@ def native_matrix_packet(
         raise ArtifactError(
             f"{name} key row count {len(info)} != matrix row count {matrix.shape[0]}."
         )
-    key_columns = [str(value) for value in packet.primary_key]
+    # Ordinary native packets use raw structural primary-key names. A caller
+    # selecting keys in a metadata-visible scope may instead receive the exact
+    # displayed query labels (e.g. key.row_id). Accept that explicit mapping
+    # without inferring aliases from the packet's contents.
+    structural = [str(value) for value in packet.primary_key]
+    key_columns = (
+        structural if key_output_names is None
+        else [str(value) for value in key_output_names]
+    )
+    if len(key_columns) != len(structural) or len(set(key_columns)) != len(key_columns):
+        raise ArtifactError(f"{name} source key-label mapping is invalid.")
     missing = [column for column in key_columns if column not in info.columns]
     if missing:
         raise ArtifactError(f"{name} source batch is missing key columns {missing}.")

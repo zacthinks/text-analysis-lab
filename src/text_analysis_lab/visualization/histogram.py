@@ -215,15 +215,13 @@ def _iter_values(
     batch_size: int,
 ):
     fields = (value_field,) if group_field is None else (value_field, group_field)
-    data_columns, metadata_columns = batch_query_columns(
-        fields, qualified=with_artifacts is not None,
-    )
+    data_columns, metadata_columns = batch_query_columns(fields)
     query_kwargs = dict(
         batch_size=batch_size,
         key_columns=False,
         data_columns=data_columns,
         metadata_columns=metadata_columns,
-        metadata_mode="full" if metadata_columns is not False else "none",
+        metadata_mode="full",
         where=where,
         positions=positions,
         limit=limit,
@@ -241,7 +239,7 @@ def _iter_values(
         key_columns=False,
         data_columns=data_columns,
         metadata_columns=metadata_columns,
-        metadata_mode="full" if metadata_columns is not False else "none",
+        metadata_mode="full",
         where=where,
         positions=positions,
         limit=limit,

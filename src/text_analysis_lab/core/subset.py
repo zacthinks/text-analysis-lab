@@ -176,7 +176,10 @@ class FunctionSubsetTranslator(BaseTranslator):
             raise OperatorError(f"Unknown subset operation parameter(s): {unknown}.")
 
         source = _source_artifact(sources)
-        column_info = _source_column_info(source)
+        metadata_mode = _validate_metadata_mode(
+            cast(MetadataMode, params.get("metadata_mode", "none"))
+        )
+        column_info = _source_column_info(source, metadata_mode=metadata_mode)
         key_columns = _validate_column_select(
             cast(ColumnSelect, params.get("key_columns", True)),
             name="key_columns",
@@ -199,9 +202,7 @@ class FunctionSubsetTranslator(BaseTranslator):
             "key_columns": _json_column_select(key_columns),
             "data_columns": _json_column_select(data_columns),
             "metadata_columns": _json_column_select(metadata_columns),
-            "metadata_mode": _validate_metadata_mode(
-                cast(MetadataMode, params.get("metadata_mode", "none"))
-            ),
+            "metadata_mode": metadata_mode,
             "form": _validate_form(str(params.get("form", "table"))),
             "iter_batches": _validate_bool(
                 params.get("iter_batches", True), name="iter_batches"
@@ -648,9 +649,11 @@ def _mask_has_na(arr: np.ndarray) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _source_column_info(source: BaseArtifact) -> Mapping[str, Any]:
+def _source_column_info(
+    source: BaseArtifact, *, metadata_mode: MetadataMode
+) -> Mapping[str, Any]:
     try:
-        return source.project.query.query_columns(source, metadata_mode="full")
+        return source.project.query.query_columns(source, metadata_mode=metadata_mode)
     except Exception as exc:
         raise ArtifactError(
             f"Cannot inspect columns for artifact {source.artifact_id!r}."
