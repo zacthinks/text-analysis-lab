@@ -2113,12 +2113,28 @@ class QueryEngine:
 
         available = {column.output_name for column in columns}
         for name in requested_names:
+            # A public output label takes precedence over an internal address.
+            # Both fully qualified and unambiguous base addresses remain valid
+            # explicit selectors for callers such as attached visualizations.
             if name in available:
                 add(name)
                 continue
+            qualified = [col for col in columns if col.qualified_name == name]
+            if len(qualified) == 1:
+                add(qualified[0].output_name)
+                continue
+            base = [col for col in columns if col.base_name == name]
+            if len(base) == 1:
+                add(base[0].output_name)
+                continue
+            if len(base) > 1:
+                options = [col.qualified_name for col in base]
+                raise QueryError(
+                    f"Requested {label} {name!r} is ambiguous. Use one of: {options}."
+                )
             raise QueryError(
-                f"Requested {label} {name!r} is not an advertised output name "
-                f"in this query scope. Available {label}: {sorted(available)}."
+                f"Requested {label} is not available: {name!r}. "
+                f"Available {label}: {sorted(available)}."
             )
 
         return selected
