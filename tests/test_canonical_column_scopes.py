@@ -114,3 +114,34 @@ def test_keys_only_scope_ignores_data_collision(corpus):
         metadata_columns=False, form="table",
     )
     assert frame["doc_id"].tolist() == [1, 2]
+
+def test_unadvertised_alias_is_not_a_query_selector(corpus):
+    available = corpus.query_columns(include_data=True)["columns"]
+    field = next(col for col in available if col["namespace"] == "data"
+                 and col["base_name"] == "text")
+    assert field["output_name"] == "text"
+    with pytest.raises(QueryError, match="not an advertised output name"):
+        corpus.query(data_columns=["data.text"], form="table")
+
+
+def test_histogram_crosstab_data_metadata_collision(tmp_path):
+    project = teal.Project.create(tmp_path / "analytics_names", name="analytics_names")
+    try:
+        item = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2, 3]}),
+            "data": pd.DataFrame({"score": [1.0, 2.0, 3.0],
+                                  "kind": ["A", "A", "B"]}),
+            "metadata": pd.DataFrame({"score": ["m1", "m2", "m3"],
+                                      "kind": ["X", "Y", "X"]}),
+        }], artifact_type="table", primary_key="doc_id")
+        histogram = item.visualize.histogram(
+            "data.score", bins=[0, 1.5, 2.5, 3.5], output="result"
+        )
+        assert histogram.observed_count == 3
+        assert histogram.counts[next(iter(histogram.counts))].tolist() == [1, 1, 1]
+        cross = item.analysis.crosstab("data.kind", "metadata." + str(item.artifact_id) + ".score")
+        assert cross.loc["A", "m1"] == 1
+        assert cross.loc["A", "m2"] == 1
+        assert cross.loc["B", "m3"] == 1
+    finally:
+        project.close()
