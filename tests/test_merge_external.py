@@ -499,3 +499,55 @@ def test_merge_of_merges_flattens_native_structural_branches(tmp_path: Path) -> 
         assert frame["row_id"].astype(int).tolist() == [0, 1, 2, 3]
     finally:
         reopened.close()
+
+
+def test_merge_owner_qualified_metadata_collision_preserves_values_and_reopens(tmp_path):
+    project_path = tmp_path / "owner_qualified_merge"
+    project = teal.Project.create(project_path, name="owner_qualified_merge")
+    output_id = None
+    try:
+        left = _register_table(
+            project, artifact_id="art_merge_left_collision", label="left",
+            keys=pd.DataFrame({"doc_id": [1, 2]}),
+            data=pd.DataFrame({"score": [11, 22]}),
+            metadata=pd.DataFrame({"doc_id": ["left-a", "left-b"]}),
+        )
+        right = _register_table(
+            project, artifact_id="art_merge_right_collision", label="right",
+            keys=pd.DataFrame({"doc_id": [3, 4]}),
+            data=pd.DataFrame({"score": [33, 44]}),
+            metadata=pd.DataFrame({"doc_id": ["right-a", "right-b"]}),
+        )
+        assert left.query_columns(metadata_mode="full")["metadata"] != (
+            right.query_columns(metadata_mode="full")["metadata"]
+        )
+        merged = project.merge([left, right])
+        output_id = merged.artifact_id
+        info = merged.query_columns(metadata_mode="full")
+        assert info["key"] == ["doc_id"]
+        assert info["data"] == ["score"]
+        assert len(info["metadata"]) == 1
+        metadata_name = info["metadata"][0]
+        assert metadata_name != "doc_id"
+        frame = merged.query(
+            metadata_mode="full", metadata_columns=[metadata_name], form="table"
+        )
+        assert frame["doc_id"].tolist() == [1, 2, 3, 4]
+        assert frame["score"].tolist() == [11, 22, 33, 44]
+        assert frame[metadata_name].tolist() == [
+            "left-a", "left-b", "right-a", "right-b"
+        ]
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(project_path)
+    try:
+        merged = reopened.get_artifact(output_id)
+        name = merged.query_columns(metadata_mode="full")["metadata"][0]
+        frame = merged.query(
+            metadata_mode="full", metadata_columns=[name], form="table"
+        )
+        assert frame["doc_id"].tolist() == [1, 2, 3, 4]
+        assert frame[name].tolist() == ["left-a", "left-b", "right-a", "right-b"]
+    finally:
+        reopened.close()
