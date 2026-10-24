@@ -103,3 +103,131 @@ def test_classifier_search_uses_full_scope_for_data_only_labels(source):
     assert keys == [{"doc_id": 1}, {"doc_id": 2}]
     assert labels.tolist() == [11, 22]
     assert groups is None
+
+
+def test_scope_with_two_attached_artifacts_selects_exact_outputs(tmp_path):
+    project = teal.Project.create(tmp_path / "attached_scope", name="attached_scope")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3], "score": [100, 200, 300]}),
+            primary_key="doc_id", data_fields="score",
+        )
+        right = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2], "score": [10, 20]}),
+            primary_key="doc_id", data_fields="score",
+        )
+        other = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3], "score": [1, 2, 3]}),
+            primary_key="doc_id", data_fields="score",
+        )
+        scope = QueryScope(
+            left, include_data=True, metadata_mode="none",
+            with_artifacts=[right, other],
+        )
+        fields = scope.columns()["columns"]
+        caller_name = next(
+            c["output_name"] for c in fields
+            if c["namespace"] == "data" and c["base_name"] == "score"
+        )
+        right_name = next(
+            c["output_name"] for c in fields
+            if c["namespace"] == "with" and c["base_name"] == "score"
+            and c["source_artifact_id"] == right.artifact_id
+        )
+        other_name = next(
+            c["output_name"] for c in fields
+            if c["namespace"] == "with" and c["base_name"] == "score"
+            and c["source_artifact_id"] == other.artifact_id
+        )
+        assert len({caller_name, right_name, other_name}) == 3
+        first = scope.query(
+            key_columns=True, data_columns=[caller_name],
+            metadata_columns=False, with_columns=[right_name], form="table",
+        )
+        assert first["doc_id"].tolist() == [1, 2, 3]
+        assert first[caller_name].tolist() == [100, 200, 300]
+        assert first[right_name].iloc[:2].tolist() == [10, 20]
+        assert pd.isna(first[right_name].iloc[2])
+        second = list(scope.query(
+            key_columns=False, data_columns=False, metadata_columns=False,
+            with_columns=[other_name], form="table", iter_batches=True,
+            batch_size=1,
+        ))
+        assert [v for batch in second for v in batch[other_name].tolist()] == [1, 2, 3]
+        with pytest.raises(TypeError, match="naming-scope"):
+            scope.query(with_artifacts=right, data_columns=False)
+        with pytest.raises(ValueError, match="with_artifacts"):
+            scope.source_request(
+                columns=ColumnRequest(data=False), mode="full_artifact",
+            )
+    finally:
+        project.close()
+
+
+def test_scope_with_attached_sparse_matrix_materializes_values(tmp_path):
+    from scipy import sparse
+
+    project = teal.Project.create(tmp_path / "attached_sparse_scope", name="attached_sparse_scope")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2, 3]}), primary_key="doc_id",
+        )
+        right = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {
+                "values": sparse.csr_matrix([[0, 9], [5, 8]]),
+                "columns": ["feature", "other"],
+            },
+        }], artifact_type="sparse_matrix", primary_key="doc_id")
+        scope = QueryScope(left, with_artifacts=right)
+        features = [
+            c for c in scope.columns()["columns"]
+            if c["namespace"] == "with" and c["base_name"] == "feature"
+        ]
+        assert len(features) == 1
+        label = features[0]["output_name"]
+        result = scope.query(
+            key_columns=True, data_columns=False, metadata_columns=False,
+            with_columns=[label], form="table",
+        )
+        assert result["doc_id"].tolist() == [1, 2, 3]
+        assert result[label].iloc[:2].tolist() == [0, 5]
+        assert pd.isna(result[label].iloc[2])
+    finally:
+        project.close()
+
+
+def test_function_mapper_prefers_literal_dotted_data_output(tmp_path):
+    from text_analysis_lab.translators import FunctionMapper
+
+    project = teal.Project.create(tmp_path / "mapper_dotted", name="mapper_dotted")
+    try:
+        source = project.register_external(
+            pd.DataFrame({
+                "doc_id": [1, 2],
+                "text": ["wrong_a", "wrong_b"],
+                "data.text": ["correct_a", "correct_b"],
+            }),
+            primary_key="doc_id", data_fields=["text", "data.text"],
+        )
+        inventory = QueryScope(source).columns()
+        names = {
+            c["base_name"]: c["output_name"]
+            for c in inventory["columns"] if c["namespace"] == "data"
+        }
+        assert names == {"text": "text", "data.text": "data.text"}
+        mapper = FunctionMapper(
+            lambda packet: {
+                "data": pd.DataFrame({
+                    "picked": packet["data"]["data.text"].tolist(),
+                }),
+            },
+        )
+        result = project.translate(
+            mapper, source, data_columns=["data.text"],
+        )["output"]
+        assert result.query(data_columns=["picked"], form="table")["picked"].tolist() == [
+            "correct_a", "correct_b",
+        ]
+    finally:
+        project.close()
