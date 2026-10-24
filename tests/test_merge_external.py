@@ -499,3 +499,120 @@ def test_merge_of_merges_flattens_native_structural_branches(tmp_path: Path) -> 
         assert frame["row_id"].astype(int).tolist() == [0, 1, 2, 3]
     finally:
         reopened.close()
+
+
+def test_merge_owner_qualified_metadata_collision_preserves_values_and_reopens(tmp_path):
+    project_path = tmp_path / "owner_qualified_merge"
+    project = teal.Project.create(project_path, name="owner_qualified_merge")
+    output_id = None
+    try:
+        left = _register_table(
+            project, artifact_id="art_merge_left_collision", label="left",
+            keys=pd.DataFrame({"doc_id": [1, 2]}),
+            data=pd.DataFrame({"score": [11, 22]}),
+            metadata=pd.DataFrame({"doc_id": ["left-a", "left-b"]}),
+        )
+        right = _register_table(
+            project, artifact_id="art_merge_right_collision", label="right",
+            keys=pd.DataFrame({"doc_id": [3, 4]}),
+            data=pd.DataFrame({"score": [33, 44]}),
+            metadata=pd.DataFrame({"doc_id": ["right-a", "right-b"]}),
+        )
+        assert left.query_columns(metadata_mode="full")["metadata"] != (
+            right.query_columns(metadata_mode="full")["metadata"]
+        )
+        merged = project.merge([left, right])
+        output_id = merged.artifact_id
+        info = merged.query_columns(metadata_mode="full")
+        assert info["key"] == ["doc_id"]
+        assert info["data"] == ["score"]
+        assert len(info["metadata"]) == 1
+        metadata_name = info["metadata"][0]
+        assert metadata_name != "doc_id"
+        frame = merged.query(
+            metadata_mode="full", metadata_columns=[metadata_name], form="table"
+        )
+        assert frame["doc_id"].tolist() == [1, 2, 3, 4]
+        assert frame["score"].tolist() == [11, 22, 33, 44]
+        assert frame[metadata_name].tolist() == [
+            "left-a", "left-b", "right-a", "right-b"
+        ]
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(project_path)
+    try:
+        merged = reopened.get_artifact(output_id)
+        name = merged.query_columns(metadata_mode="full")["metadata"][0]
+        frame = merged.query(
+            metadata_mode="full", metadata_columns=[name], form="table"
+        )
+        assert frame["doc_id"].tolist() == [1, 2, 3, 4]
+        assert frame[name].tolist() == ["left-a", "left-b", "right-a", "right-b"]
+    finally:
+        reopened.close()
+
+
+def test_merge_preserves_canonical_data_name_and_translator_values(tmp_path):
+    from text_analysis_lab.translators import RegexCleaner, DelimiterDecomposer, TextLength
+
+    project_path = tmp_path / "merge_key_data_collision"
+    project = teal.Project.create(project_path, name="merge_key_data_collision")
+    merged_id = None
+    try:
+        left = _register_table(
+            project, artifact_id="art_merge_text_left", label="left",
+            keys=pd.DataFrame({"text": [1, 2]}),
+            data=pd.DataFrame({"text": ["first word", "second line"]}),
+        )
+        right = _register_table(
+            project, artifact_id="art_merge_text_right", label="right",
+            keys=pd.DataFrame({"text": [3, 4]}),
+            data=pd.DataFrame({"text": ["third word", "fourth line"]}),
+        )
+        merged = project.merge([left, right])
+        merged_id = merged.artifact_id
+        info = merged.query_columns(metadata_mode="none")
+        assert info["key"] == ["text"]
+        assert info["data"] == ["data.text"]
+        frame = merged.query(data_columns=["data.text"], form="table")
+        assert frame["text"].tolist() == [1, 2, 3, 4]
+        assert frame["data.text"].tolist() == [
+            "first word", "second line", "third word", "fourth line"
+        ]
+        cleaned = project.translate(
+            RegexCleaner(text_field="text", output_field="cleaned",
+                         rules=[{"pattern": " ", "replacement": "_"}]),
+            merged,
+        )["output"]
+        out = cleaned.query(data_columns=["cleaned"], form="table")
+        assert out["text"].tolist() == [1, 2, 3, 4]
+        assert out["cleaned"].tolist() == [
+            "first_word", "second_line", "third_word", "fourth_line"
+        ]
+        decomposed = project.translate(
+            DelimiterDecomposer(text_field="text", delimiter=" ",
+                                output_text_field="word", new_key="part_id"),
+            merged,
+        )["output"]
+        parts = decomposed.query(data_columns=["word"], form="table")
+        assert parts["word"].tolist() == [
+            "first", "word", "second", "line", "third", "word", "fourth", "line"
+        ]
+        lengths = project.translate(TextLength({"text": "words"}), merged)["output"]
+        measured = lengths.query(
+            data_columns=False, metadata_columns=["text_words"],
+            metadata_mode="local", form="table",
+        )
+        assert measured["text_words"].tolist() == [2, 2, 2, 2]
+    finally:
+        project.close()
+    reopened = teal.Project.open(project_path)
+    try:
+        merged = reopened.get_artifact(merged_id)
+        assert merged.query_columns(metadata_mode="none")["data"] == ["data.text"]
+        assert merged.query(data_columns=["data.text"], form="table")[
+            "data.text"
+        ].tolist() == ["first word", "second line", "third word", "fourth line"]
+    finally:
+        reopened.close()

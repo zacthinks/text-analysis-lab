@@ -20,6 +20,7 @@ import cloudpickle
 import numpy as np
 import pandas as pd
 
+from text_analysis_lab.core.query_scope import QueryScope
 from text_analysis_lab.core.errors import ArtifactError, OperatorError, QueryError
 from text_analysis_lab.core.operator import (
     BaseTranslator,
@@ -176,7 +177,10 @@ class FunctionSubsetTranslator(BaseTranslator):
             raise OperatorError(f"Unknown subset operation parameter(s): {unknown}.")
 
         source = _source_artifact(sources)
-        column_info = _source_column_info(source)
+        scope = QueryScope(
+            source, metadata_mode=cast(MetadataMode, params.get("metadata_mode", "none"))
+        )
+        column_info = _source_column_info(source, scope=scope)
         key_columns = _validate_column_select(
             cast(ColumnSelect, params.get("key_columns", True)),
             name="key_columns",
@@ -231,7 +235,8 @@ class FunctionSubsetTranslator(BaseTranslator):
             if iter_batches
             else None
         )
-        return SourceRequest(
+        scope = QueryScope(source, metadata_mode=cast(MetadataMode, params["metadata_mode"]))
+        return scope.source_request(
             artifact_type=source.artifact_type,
             mode="batches" if iter_batches else "full_artifact",
             columns=ColumnRequest(
@@ -245,7 +250,6 @@ class FunctionSubsetTranslator(BaseTranslator):
             ),
             batch_size=effective_batch_size,
             form=cast(QueryForm, params["form"]),
-            metadata_mode=cast(MetadataMode, params["metadata_mode"]),
             include_position=bool(params["include_position"]),
         )
 
@@ -648,9 +652,11 @@ def _mask_has_na(arr: np.ndarray) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _source_column_info(source: BaseArtifact) -> Mapping[str, Any]:
+def _source_column_info(
+    source: BaseArtifact, *, scope: QueryScope | None = None,
+) -> Mapping[str, Any]:
     try:
-        return source.project.query.query_columns(source, metadata_mode="full")
+        return (scope or QueryScope(source, metadata_mode="full")).columns()
     except Exception as exc:
         raise ArtifactError(
             f"Cannot inspect columns for artifact {source.artifact_id!r}."

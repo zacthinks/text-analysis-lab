@@ -648,11 +648,11 @@ def test_artifact_view_column_names_promote_ambiguous_names() -> None:
     )
 
     assert [column.output_name for column in columns] == [
-        "key.text",
+        "text",
         "data.text",
         "metadata.a0.text",
     ]
-    assert ambiguous["text"] == ("key.text", "data.text", "metadata.a0.text")
+    assert ambiguous["text"] == ("text", "data.text", "metadata.a0.text")
     assert mapping["data.text"] == "data.text"
 
 

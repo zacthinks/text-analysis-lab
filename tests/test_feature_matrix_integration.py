@@ -270,3 +270,60 @@ def test_fitted_predictor_consumes_recipe_backed_sparse_matrix(tmp_path):
         np.testing.assert_array_equal(actual, fitted.predict(x))
     finally:
         project.close()
+
+
+@pytest.mark.parametrize("include_metadata", [False, True])
+def test_feature_matrix_scope_collision_survives_lazy_render_and_reopen(
+    tmp_path, include_metadata,
+):
+    """The recipe's scope must not change for narrowed lazy reads."""
+    project_path = tmp_path / ("with_meta" if include_metadata else "only_data")
+    project = Project.create(project_path, name="recipe_scope_collision")
+    source_id = computed_id = None
+    expected = None
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": pd.DataFrame({"score": [11, 22]}),
+            "metadata": pd.DataFrame({"score": [101, 202]}),
+        }], artifact_type="table", primary_key="doc_id")
+        scope_mode = "full" if include_metadata else "none"
+        discovered = source.query_columns(metadata_mode=scope_mode)["columns"]
+        data_name = next(
+            c["output_name"] for c in discovered
+            if c["namespace"] == "data" and c["base_name"] == "score"
+        )
+        metadata_names = (
+            [next(
+                c["output_name"] for c in discovered
+                if c["namespace"] == "metadata" and c["base_name"] == "score"
+            )] if include_metadata else False
+        )
+        operator = FeatureMatrix(
+            data_columns=[data_name], metadata_columns=metadata_names,
+            matrix_type="dense",
+        )
+        computed = project.translate(operator, source)["output"]
+        expected = np.array(
+            [[11, 101], [22, 202]] if include_metadata else [[11], [22]]
+        )
+        np.testing.assert_array_equal(computed.get_matrix(), expected)
+        np.testing.assert_array_equal(
+            computed.get_matrix(positions=[1, 0], data_columns=[data_name]),
+            [[22], [11]],
+        )
+        source_id, computed_id = source.artifact_id, computed.artifact_id
+    finally:
+        project.close()
+
+    reopened = Project.open(project_path)
+    try:
+        restored = reopened.get_artifact(computed_id)
+        assert restored.get_data_columns()[0] == data_name
+        np.testing.assert_array_equal(restored.get_matrix(), expected)
+        np.testing.assert_array_equal(
+            restored.get_matrix(positions=[1], data_columns=[data_name]),
+            [[22]],
+        )
+    finally:
+        reopened.close()

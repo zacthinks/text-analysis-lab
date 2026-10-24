@@ -514,12 +514,25 @@ def test_validation_rejects_collisions_nulls_duplicate_names_and_ambiguous_sourc
                 levels={"group": "group_id"},
                 leaf_key="turn_id",
             )
-        with pytest.raises(ArtifactError, match="must not collide"):
-            project.set_primary_keys(
-                source,
-                levels={"data.child": "x"},
-                leaf_key="turn_id",
-            )
+        rekeyed = project.set_primary_keys(
+            source,
+            levels={"data.child": "x"},
+            leaf_key="turn_id",
+        )
+        assert rekeyed.primary_key == ["x", "turn_id"]
+        resolved = rekeyed.query_columns(metadata_mode="full")
+        assert resolved["key"] == ["x", "turn_id"]
+        data_x = next(
+            col["output_name"] for col in resolved["columns"]
+            if col["namespace"] == "data" and col["base_name"] == "x"
+        )
+        assert data_x != "x"
+        result = rekeyed.query(
+            data_columns=[data_x], metadata_columns=False,
+            metadata_mode="full", form="table",
+        )
+        assert result["x"].tolist() == [0, 1]
+        assert result[data_x].tolist() == [1, 2]
         with pytest.raises(ArtifactError, match="must be unique"):
             project.set_primary_keys(
                 source,
@@ -729,5 +742,24 @@ def test_merged_virtual_branches_can_be_rekeyed_and_still_resolve_branch_data(
         ]
         assert frame["score"].astype(int).tolist() == [10, 12, 14, 16, 11, 13, 15, 17]
         assert frame["child"].tolist() == ["B", "A", "B", "A", "A", "A", "B", "A"]
+    finally:
+        project.close()
+
+
+def test_rekey_uses_exact_dotted_output_even_when_another_field_has_matching_identity(tmp_path):
+    project = teal.Project.create(tmp_path / "dotted", name="dotted_rekey")
+    try:
+        source = _register_table(
+            project, artifact_id="art_dotted", label="dotted",
+            keys=pd.DataFrame({"row_id": [0, 1]}),
+            data=pd.DataFrame({"text": ["a", "b"], "data.text": ["z", "y"]}),
+        )
+        info = source.query_columns(metadata_mode="full")
+        assert "data.text" in info["data"]
+        output = project.set_primary_keys(
+            source, levels={"data.text": "group_id"}, leaf_key="item_id"
+        )
+        frame = output.query(data_columns=False, metadata_columns=False, form="table")
+        assert frame["group_id"].tolist() == [1, 0]
     finally:
         project.close()

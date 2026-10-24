@@ -188,6 +188,7 @@ def merge(
             batches = source.query(
                 key_columns=True,
                 data_columns=False,
+        include_data=False,
                 metadata_columns=False,
                 metadata_mode="none",
                 order_by="_position",
@@ -344,18 +345,14 @@ def _validate_sources(project: Project, sources: Sequence[BaseArtifact]) -> None
 
 def _effective_schema(
     project: Project, artifact: BaseArtifact
-) -> tuple[tuple[str, str, str], ...]:
+) -> tuple[tuple[str, str], ...]:
     columns = project.query.query_columns(artifact, metadata_mode="full")["columns"]
-    # Metadata qualified names encode the concrete owning artifact ID. Disjoint
-    # merge branches may therefore expose the same logical metadata field under
-    # different qualified names. Compatibility is about the effective logical
-    # schema and the resolved output names needed for UNION alignment, not owner
-    # identity. Output names still preserve ambiguity-induced qualification.
+    # Compare logical namespace and base-name slots, not displayed labels
+    # qualified with the concrete owner artifact ID.
     return tuple(
         (
             str(column["namespace"]),
             str(column["base_name"]),
-            str(column["output_name"]),
         )
         for column in columns
         if str(column["namespace"]) != "key"

@@ -17,6 +17,7 @@ import cloudpickle
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
+from text_analysis_lab.core.query_scope import QueryScope
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
@@ -226,7 +227,8 @@ class FunctionMapper(BaseTranslator):
         data_selection = cast(ColumnSelect, request.params["data_columns"])
         metadata_selection = cast(ColumnSelect, request.params["metadata_columns"])
         metadata_mode = cast(MetadataMode, request.params["metadata_mode"])
-        query_info = source.query_columns(metadata_mode=metadata_mode)
+        scope = QueryScope(source, metadata_mode=metadata_mode)
+        query_info = scope.columns()
         # Matrix representation columns are stored outside the relational DuckDB
         # view, so query_columns() correctly reports no SQL ``data`` namespace
         # for them. Resolve matrix features from the artifact's representation
@@ -262,20 +264,19 @@ class FunctionMapper(BaseTranslator):
             raise OperatorError(
                 "FunctionMapper selection resolved to no data or metadata columns."
             )
-        return SourceRequest(
+        return scope.source_request(
             artifact_type=_SUPPORTED_TYPES,
             mode="batches",
             columns=ColumnRequest(
                 keys=True,
-                data=data_selection,
-                metadata=metadata_selection,
+                data=(list(self._data_columns) or False),
+                metadata=(list(self._metadata_columns) or False),
             ),
             batch_size=request.batch_size or 10_000,
             # FunctionMapper's public callable contract is DataFrame-based even
             # for matrix sources. Matrix artifacts preserve sparsity in pandas
             # sparse DataFrames when materialized in table form.
             form="table",
-            metadata_mode=metadata_mode,
             include_position=False,
         )
 
@@ -554,25 +555,24 @@ def _resolved_namespace_columns(
     )
     out: list[str] = []
     for name in requested:
+        # A displayed output label is authoritative, even if it happens to be
+        # another column's internal qualified identity or physical base name.
         matches = [
-            item
-            for item in columns
-            if name
-            in {
-                str(item.get("qualified_name")),
-                str(item.get("output_name")),
-                str(item.get("base_name")),
-            }
+            item for item in columns if name == str(item["output_name"])
         ]
-        # Prefer exact qualified/output matches before base-name resolution.
-        exact = [
-            item
-            for item in matches
-            if name in {str(item.get("qualified_name")), str(item.get("output_name"))}
-        ]
-        if len(exact) == 1:
-            resolved = str(exact[0]["output_name"])
-        elif len(matches) == 1:
+        if not matches:
+            # Preserve the historical input conveniences only when there is no
+            # advertised output label with that spelling.
+            matches = [
+                item for item in columns
+                if name == str(item.get("qualified_name"))
+            ]
+        if not matches:
+            matches = [
+                item for item in columns
+                if name == str(item.get("base_name"))
+            ]
+        if len(matches) == 1:
             resolved = str(matches[0]["output_name"])
         elif len(matches) > 1:
             choices = [str(item.get("qualified_name")) for item in matches]

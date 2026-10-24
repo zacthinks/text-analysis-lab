@@ -1474,6 +1474,7 @@ def _query_group_source(
         data_columns=request.columns.data,
         metadata_columns=request.columns.metadata,
         metadata_mode=request.metadata_mode,
+        include_data=request.include_data,
         positions=positions,
         form=request.form,
         iter_batches=False,
@@ -1492,6 +1493,7 @@ def _query_source(
         data_columns=request.columns.data,
         metadata_columns=request.columns.metadata,
         metadata_mode=request.metadata_mode,
+        include_data=request.include_data,
         where=where,
         form=request.form,
         iter_batches=False,
@@ -2680,6 +2682,7 @@ def _source_request_to_dict(request: SourceRequest) -> dict[str, Any]:
         "min_batch_by": request.min_batch_by,
         "form": request.form,
         "metadata_mode": request.metadata_mode,
+        "include_data": request.include_data,
         "include_position": request.include_position,
     }
 
@@ -2694,6 +2697,7 @@ def _source_request_from_dict(data: Mapping[str, Any]) -> SourceRequest:
         min_batch_by=data.get("min_batch_by"),
         form=data["form"],
         metadata_mode=data["metadata_mode"],
+        include_data=bool(data.get("include_data", True)),
         include_position=bool(data["include_position"]),
     )
 

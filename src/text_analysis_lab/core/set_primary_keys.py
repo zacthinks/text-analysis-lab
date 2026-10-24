@@ -19,6 +19,7 @@ from text_analysis_lab.core.errors import ArtifactError, QueryError
 from text_analysis_lab.core.failure_cleanup import mark_operation_failed_best_effort
 from text_analysis_lab.core.ids import next_id
 from text_analysis_lab.core.lineage import validate_primary_key_relationship
+from text_analysis_lab.core.query_scope import QueryScope
 from text_analysis_lab.core.operator import (
     BaseOperator,
     OutputSpec,
@@ -91,35 +92,28 @@ def _resolve_level_columns(
     """Resolve user field names to (namespace, qualified_name, output_name)."""
     if not source_names:
         return []
-    view = project.query.build_artifact_view_sql(
-        artifact,
-        metadata_mode="full",
-        include_data=True,
-    )
+    inventory = QueryScope(artifact, metadata_mode="full").columns()
+    columns = inventory["columns"]
+    by_output = {str(column["output_name"]): column for column in columns}
     resolved: list[tuple[str, str, str]] = []
     for name in source_names:
-        matches = [
-            column
-            for column in view.columns
-            if name in {column.base_name, column.output_name, column.qualified_name}
-        ]
-        # Deduplicate the same column if more than one naming form matched.
-        unique = {(c.namespace, c.qualified_name, c.output_name): c for c in matches}
-        matches = list(unique.values())
-        if not matches:
-            available = sorted({column.base_name for column in view.columns})
+        column = by_output.get(name)
+        if column is None:
+            ambiguous = inventory.get("ambiguous", {})
+            if name in ambiguous:
+                raise ArtifactError(
+                    f"set_primary_keys level column {name!r} is ambiguous. "
+                    f"Use one of: {list(ambiguous[name])}."
+                )
             raise ArtifactError(
-                f"set_primary_keys level column {name!r} is not available. "
-                f"Available fields include: {available}."
+                f"set_primary_keys level column {name!r} is not an advertised "
+                f"output name. Available fields: {sorted(by_output)}."
             )
-        if len(matches) > 1:
-            options = sorted(column.qualified_name for column in matches)
-            raise ArtifactError(
-                f"set_primary_keys level column {name!r} is ambiguous. "
-                f"Use one of: {options}."
-            )
-        column = matches[0]
-        resolved.append((column.namespace, column.qualified_name, column.output_name))
+        resolved.append((
+            str(column["namespace"]),
+            str(column["qualified_name"]),
+            str(column["output_name"]),
+        ))
     return resolved
 
 
@@ -245,14 +239,6 @@ def set_primary_keys(
     view = project.query.build_artifact_view_sql(
         artifact, metadata_mode="full", include_data=True
     )
-    existing_base_names = {column.base_name for column in view.columns}
-    collisions = [name for name in all_new_names if name in existing_base_names]
-    if collisions:
-        raise ArtifactError(
-            "Generated primary-key names must not collide with existing accessible "
-            f"fields: {collisions}."
-        )
-
     selected_output_names = [item[2] for item in resolved]
     # Reject null grouping values explicitly. DuckDB has deterministic NULL sort
     # rules, but treating missing substantive group labels as a real key level

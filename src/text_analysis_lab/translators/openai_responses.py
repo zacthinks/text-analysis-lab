@@ -12,11 +12,13 @@ import json
 import os
 import string
 from collections.abc import Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
+from text_analysis_lab.core.query_scope import QueryScope
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     ExecutionCapabilities,
@@ -107,6 +109,7 @@ class OpenAIResponsesTranslator(BaseTranslator):
         self.template_fields = _template_fields(prompt)
         self._data_fields: tuple[str, ...] = ()
         self._metadata_fields: tuple[str, ...] = ()
+        self._prompt_input_names: dict[str, str] = {}
 
     def translate(self, record: Mapping[str, Any]) -> dict[str, pd.DataFrame]:
         """Send one ordinary record through the configured Responses request."""
@@ -201,7 +204,10 @@ class OpenAIResponsesTranslator(BaseTranslator):
         _ = mode, request
         source = _single_source(sources)
         self._bind_template_fields(source)
-        return SourceRequest(
+        scope = QueryScope(
+            source, metadata_mode="full" if self._metadata_fields else "none"
+        )
+        return scope.source_request(
             artifact_type=("table", "jsonl"),
             mode="batches",
             columns=ColumnRequest(
@@ -214,7 +220,6 @@ class OpenAIResponsesTranslator(BaseTranslator):
             # One billable request per durable TeAL batch gives true per-row resume.
             batch_size=1,
             form="table",
-            metadata_mode="full" if self._metadata_fields else "none",
             include_position=False,
         )
 
@@ -239,7 +244,18 @@ class OpenAIResponsesTranslator(BaseTranslator):
                 "OpenAIResponsesTranslator requires exactly one input row per execution batch "
                 "so completed API calls can be resumed without duplicate billing."
             )
-        translated = self.translate(frame.iloc[0].to_dict())
+        raw_record = frame.iloc[0].to_dict()
+        # Standalone translate_batch accepts an ordinary record without a
+        # preceding artifact binding. Bound project runs use only their
+        # canonical packet labels, even when keys/data/metadata collide.
+        record = (
+            {
+                name: raw_record[output_name]
+                for name, output_name in self._prompt_input_names.items()
+            }
+            if self._prompt_input_names else raw_record
+        )
+        translated = self.translate(record)
         keys = frame.loc[:, list(packet.primary_key)].reset_index(drop=True)
         return BatchResult(
             outputs={
@@ -370,20 +386,134 @@ class OpenAIResponsesTranslator(BaseTranslator):
             store=bool(state.get("store", False)),
         )
 
+    def save_intermediate_state(
+        self,
+        intermediate_dir: Path,
+        *,
+        operator_id: str,
+        mode: TranslationMode,
+        route: RunRoute,
+    ) -> None:
+        """Checkpoint source bindings for resumable per-row API requests."""
+        _ = mode, route
+        intermediate_dir.mkdir(parents=True, exist_ok=True)
+        state = self.to_json_state()
+        state["prompt_input_names"] = dict(self._prompt_input_names)
+        state["data_fields"] = list(self._data_fields)
+        state["metadata_fields"] = list(self._metadata_fields)
+        state["operator_id"] = operator_id
+        (intermediate_dir / "state.json").write_text(
+            json.dumps(state, indent=2, sort_keys=True), encoding="utf-8"
+        )
+
+    @classmethod
+    def load_intermediate_state(
+        cls,
+        intermediate_dir: Path,
+        *,
+        operator_id: str,
+        mode: TranslationMode,
+        route: RunRoute,
+    ) -> OpenAIResponsesTranslator:
+        """Restore the same placeholder-to-output mapping after interruption."""
+        _ = mode, route
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
+        obj = cls.from_json_state(cast(Mapping[str, Any], state))
+        obj._prompt_input_names = {
+            str(name): str(output)
+            for name, output in state.get("prompt_input_names", {}).items()
+        }
+        obj._data_fields = tuple(str(name) for name in state.get("data_fields", ()))
+        obj._metadata_fields = tuple(
+            str(name) for name in state.get("metadata_fields", ())
+        )
+        obj.operator_id = operator_id
+        return obj
+
     def _bind_template_fields(self, source: BaseArtifact) -> None:
-        keys = {str(value) for value in source.primary_key}
-        data = {str(value) for value in source.get_data_columns()}
-        metadata = {str(value) for value in source.get_full_metadata_columns()}
-        unknown = sorted(self.template_fields - keys - data - metadata)
+        # Prompt placeholders remain simple raw field names. The query's
+        # structured inventory, not get_data_columns() (which may already
+        # return qualified output labels), decides the field's namespace.
+        # Preserve the existing data > key > metadata precedence.
+        has_scope = callable(getattr(source, "query_columns", None))
+        if has_scope:
+            full_scope = QueryScope(source, metadata_mode="full")
+            inventory = full_scope.columns()["columns"]
+            names = {
+                namespace: {
+                    str(column["base_name"])
+                    for column in inventory if column["namespace"] == namespace
+                }
+                for namespace in ("key", "data", "metadata")
+            }
+        else:
+            # Existing standalone test doubles expose only raw inventories.
+            inventory = []
+            names = {
+                "key": {str(value) for value in source.primary_key},
+                "data": {str(value) for value in source.get_data_columns()},
+                "metadata": {
+                    str(value) for value in source.get_full_metadata_columns()
+                },
+            }
+
+        unknown = sorted(
+            self.template_fields - names["key"] - names["data"] - names["metadata"]
+        )
         if unknown:
             raise OperatorError(
                 f"Prompt template references unknown source field(s) {unknown}; "
-                f"keys={sorted(keys)}, data={sorted(data)}, metadata={sorted(metadata)}."
+                f"keys={sorted(names['key'])}, data={sorted(names['data'])}, "
+                f"metadata={sorted(names['metadata'])}."
             )
-        self._data_fields = tuple(sorted(self.template_fields & data))
-        self._metadata_fields = tuple(
-            sorted((self.template_fields - data - keys) & metadata)
-        )
+
+        namespace_by_name = {
+            name: (
+                "data" if name in names["data"]
+                else "key" if name in names["key"]
+                else "metadata"
+            )
+            for name in self.template_fields
+        }
+        wants_metadata = "metadata" in namespace_by_name.values()
+        if has_scope:
+            # The requested metadata domain fixes the naming scope. Rebuild
+            # the inventory for data/key-only prompts, so projections never
+            # implicitly switch a data-only operation into full scope.
+            scope = full_scope if wants_metadata else QueryScope(
+                source, metadata_mode="none"
+            )
+            inventory = scope.columns()["columns"]
+
+        def output_for(namespace: str, name: str) -> str:
+            if not has_scope:
+                return name
+            matches = [
+                field for field in inventory
+                if field["namespace"] == namespace and field["base_name"] == name
+            ]
+            if len(matches) != 1:
+                raise OperatorError(
+                    f"Prompt field {name!r} is not unique in {namespace!r}."
+                )
+            return str(matches[0]["output_name"])
+
+        self._prompt_input_names = {
+            name: output_for(namespace, name)
+            for name, namespace in namespace_by_name.items()
+        }
+        self._data_fields = tuple(sorted(
+            self._prompt_input_names[name]
+            for name, namespace in namespace_by_name.items()
+            if namespace == "data"
+        ))
+        self._metadata_fields = tuple(sorted(
+            self._prompt_input_names[name]
+            for name, namespace in namespace_by_name.items()
+            if namespace == "metadata"
+        ))
 
     def _structured_fields(self) -> tuple[str, ...]:
         assert self.json_schema is not None
