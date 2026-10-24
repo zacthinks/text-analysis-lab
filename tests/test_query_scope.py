@@ -87,3 +87,19 @@ def test_scope_can_exclude_data_without_changing_key_names(source):
         form="table",
     )
     assert frame["doc_id"].tolist() == [1, 2]
+
+
+def test_classifier_search_uses_full_scope_for_data_only_labels(source):
+    from text_analysis_lab.analysis.classifier_search import _load_development_labels
+
+    inventory = QueryScope(source, metadata_mode="full").columns()
+    data_score = next(
+        c["output_name"] for c in inventory["columns"]
+        if c["namespace"] == "data" and c["base_name"] == "score"
+    )
+    keys, labels, groups = _load_development_labels(
+        source, target=data_score, group=None, batch_size=2,
+    )
+    assert keys == [{"doc_id": 1}, {"doc_id": 2}]
+    assert labels.tolist() == [11, 22]
+    assert groups is None
