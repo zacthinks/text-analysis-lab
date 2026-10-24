@@ -145,3 +145,21 @@ def test_histogram_crosstab_data_metadata_collision(tmp_path):
         assert cross.loc["B", "m3"] == 1
     finally:
         project.close()
+
+
+def test_literal_structural_key_blocks_promoted_non_key_name():
+    from text_analysis_lab.core.query import _assign_view_output_names
+
+    pending = [
+        {"namespace": "key", "base_name": "data.text",
+         "qualified_name": "key.data.text", "sql_expr": 'k."data.text"',
+         "source_artifact_id": "a"},
+        {"namespace": "data", "base_name": "text",
+         "qualified_name": "data.text", "sql_expr": "d.text",
+         "source_artifact_id": "a"},
+        {"namespace": "metadata", "base_name": "text",
+         "qualified_name": "metadata.b.text", "sql_expr": "m.text",
+         "source_artifact_id": "b"},
+    ]
+    with pytest.raises(QueryError, match="Could not disambiguate"):
+        _assign_view_output_names(pending)
