@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
+from text_analysis_lab.core.query_scope import QueryScope
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     ExecutionCapabilities,
@@ -107,6 +108,7 @@ class OpenAIResponsesTranslator(BaseTranslator):
         self.template_fields = _template_fields(prompt)
         self._data_fields: tuple[str, ...] = ()
         self._metadata_fields: tuple[str, ...] = ()
+        self._prompt_input_names: dict[str, str] = {}
 
     def translate(self, record: Mapping[str, Any]) -> dict[str, pd.DataFrame]:
         """Send one ordinary record through the configured Responses request."""
@@ -201,7 +203,10 @@ class OpenAIResponsesTranslator(BaseTranslator):
         _ = mode, request
         source = _single_source(sources)
         self._bind_template_fields(source)
-        return SourceRequest(
+        scope = QueryScope(
+            source, metadata_mode="full" if self._metadata_fields else "none"
+        )
+        return scope.source_request(
             artifact_type=("table", "jsonl"),
             mode="batches",
             columns=ColumnRequest(
@@ -214,7 +219,6 @@ class OpenAIResponsesTranslator(BaseTranslator):
             # One billable request per durable TeAL batch gives true per-row resume.
             batch_size=1,
             form="table",
-            metadata_mode="full" if self._metadata_fields else "none",
             include_position=False,
         )
 
@@ -239,7 +243,12 @@ class OpenAIResponsesTranslator(BaseTranslator):
                 "OpenAIResponsesTranslator requires exactly one input row per execution batch "
                 "so completed API calls can be resumed without duplicate billing."
             )
-        translated = self.translate(frame.iloc[0].to_dict())
+        raw_record = frame.iloc[0].to_dict()
+        record = {
+            name: raw_record[output_name]
+            for name, output_name in self._prompt_input_names.items()
+        }
+        translated = self.translate(record)
         keys = frame.loc[:, list(packet.primary_key)].reset_index(drop=True)
         return BatchResult(
             outputs={
@@ -371,6 +380,8 @@ class OpenAIResponsesTranslator(BaseTranslator):
         )
 
     def _bind_template_fields(self, source: BaseArtifact) -> None:
+        # Simple placeholders stay user-facing raw names. Bind each one to
+        # the actual scope-resolved packet column before executing the request.
         keys = {str(value) for value in source.primary_key}
         data = {str(value) for value in source.get_data_columns()}
         metadata = {str(value) for value in source.get_full_metadata_columns()}
@@ -380,10 +391,42 @@ class OpenAIResponsesTranslator(BaseTranslator):
                 f"Prompt template references unknown source field(s) {unknown}; "
                 f"keys={sorted(keys)}, data={sorted(data)}, metadata={sorted(metadata)}."
             )
-        self._data_fields = tuple(sorted(self.template_fields & data))
-        self._metadata_fields = tuple(
-            sorted((self.template_fields - data - keys) & metadata)
+        wants_metadata = bool((self.template_fields - data - keys) & metadata)
+        scope = QueryScope(
+            source, metadata_mode="full" if wants_metadata else "none"
         )
+        if callable(getattr(source, "query_columns", None)):
+            fields = scope.columns()["columns"]
+            def output_for(namespace: str, name: str) -> str:
+                matches = [
+                    field for field in fields
+                    if field["namespace"] == namespace and field["base_name"] == name
+                ]
+                if len(matches) != 1:
+                    raise OperatorError(
+                        f"Prompt field {name!r} is not unique in {namespace!r}."
+                    )
+                return str(matches[0]["output_name"])
+        else:
+            # Lightweight standalone artifact adapters provide only raw schema.
+            def output_for(namespace: str, name: str) -> str:
+                return name
+        self._prompt_input_names = {}
+        self._data_fields = tuple(
+            sorted(output_for("data", name) for name in self.template_fields & data)
+        )
+        self._metadata_fields = tuple(
+            sorted(output_for("metadata", name)
+                   for name in (self.template_fields - data - keys) & metadata)
+        )
+        for name in self.template_fields:
+            namespace = (
+                "data" if name in data
+                else "key" if name in keys
+                else "metadata"
+            )
+            self._prompt_input_names[name] = output_for(namespace, name)
+
 
     def _structured_fields(self) -> tuple[str, ...]:
         assert self.json_schema is not None
