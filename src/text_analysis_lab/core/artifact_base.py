@@ -1413,6 +1413,7 @@ class BaseArtifact(ABC):
         data_columns: ColumnSelect = True,
         metadata_columns: ColumnSelect = False,
         metadata_mode: MetadataMode = "none",
+        include_data: bool = True,
         with_artifacts: Any = None,
         with_columns: ColumnSelect = True,
     ) -> pd.DataFrame:
@@ -1440,6 +1441,7 @@ class BaseArtifact(ABC):
         data_columns: ColumnSelect = True,
         metadata_columns: ColumnSelect = False,
         metadata_mode: MetadataMode = "none",
+        include_data: bool = True,
         with_artifacts: Any = None,
         with_columns: ColumnSelect = True,
         form: Literal["table", "records", "native"] = "table",
