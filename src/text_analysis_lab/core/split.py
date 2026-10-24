@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError, QueryError
+from text_analysis_lab.core.query_scope import QueryScope
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
@@ -194,13 +195,11 @@ class RandomSplitTranslator(BaseTranslator):
             data=raw_columns.get("data", False),
             metadata=raw_columns.get("metadata", False),
         )
-        return SourceRequest(
-            artifact_type=source.artifact_type,
+        return QueryScope(source, metadata_mode="full").source_request(
             mode="full_artifact",
             columns=columns,
             batch_size=None,
             form="table",
-            metadata_mode="full" if columns.metadata is not False else "none",
             include_position=True,
         )
 
@@ -317,7 +316,7 @@ def _resolve_named_columns(
 
     requested = _as_tuple(value, name=name)
     try:
-        info = source.project.query.query_columns(source, metadata_mode="full")
+        info = QueryScope(source, metadata_mode="full").columns()
     except Exception as exc:
         raise ArtifactError(
             f"Cannot inspect columns for artifact {source.artifact_id!r}."
