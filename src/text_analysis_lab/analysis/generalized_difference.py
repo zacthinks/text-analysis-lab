@@ -756,15 +756,25 @@ def _variance_unavailable(note: str) -> tuple[None, None, str]:
 
 
 def _frame(artifact: BaseArtifact, field: str) -> pd.DataFrame:
+    has_schema = hasattr(artifact, "query_columns")
+    schema = artifact.query_columns(metadata_mode="full") if has_schema else None
     value = artifact.query(
         key_columns=True,
         data_columns=[field],
         metadata_columns=False,
+        metadata_mode="full" if has_schema else "none",
         form="table",
         include_position=False,
     )
     if not isinstance(value, pd.DataFrame):
         raise ArtifactError(f"Could not materialize {field!r} as a table.")
+    if schema is not None:
+        key_names = [
+            item["output_name"] for item in schema["columns"]
+            if item["namespace"] == "key"
+        ]
+        value = value.loc[:, [*key_names, field]].copy()
+        value.columns = [*artifact.primary_key, field]
     return value.reset_index(drop=True)
 
 
@@ -824,7 +834,10 @@ def _key_only_frame(artifact: BaseArtifact) -> pd.DataFrame:
 
 
 def _require_field(artifact: BaseArtifact, field: str, *, role: str) -> None:
-    columns = [str(value) for value in artifact.get_data_columns()]
+    if hasattr(artifact, "query_columns"):
+        columns = artifact.query_columns(metadata_mode="full")["data"]
+    else:
+        columns = [str(value) for value in artifact.get_data_columns()]
     if field not in columns:
         raise ArtifactError(
             f"{role} artifact must expose data field {field!r}; available fields are {columns}."
