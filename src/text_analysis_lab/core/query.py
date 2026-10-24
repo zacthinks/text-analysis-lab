@@ -166,12 +166,21 @@ def _validate_metadata_query_request(
 def _assign_view_output_names(
     pending: Sequence[dict[str, Any]],
 ) -> tuple[tuple[ViewColumn, ...], dict[str, tuple[str, ...]], dict[str, str]]:
-    names, ambiguous = resolve_names(
-        [column["base_name"] for column in pending],
-        [column["qualified_name"] for column in pending],
-        reserved_names=STRUCTURAL_COLUMNS,
+    # Keys are immutable structural labels. Resolve only non-key columns,
+    # treating both structural internal fields and raw key labels as reserved.
+    keys = [column for column in pending if column["namespace"] == "key"]
+    other = [column for column in pending if column["namespace"] != "key"]
+    resolved_other, ambiguous = resolve_names(
+        [column["base_name"] for column in other],
+        [column["qualified_name"] for column in other],
+        reserved_names=[*STRUCTURAL_COLUMNS, *(column["base_name"] for column in keys)],
         error_cls=QueryError,
     )
+    other_names = iter(resolved_other)
+    names = [
+        column["base_name"] if column["namespace"] == "key" else next(other_names)
+        for column in pending
+    ]
 
     mapping: dict[str, str] = {}
     columns: list[ViewColumn] = []
@@ -2045,11 +2054,12 @@ class QueryEngine:
         self,
         artifact: BaseArtifact,
         *,
+        include_data: bool = True,
         metadata_mode: MetadataMode = "none",
         with_artifacts: Any = None,
     ) -> dict[str, Any]:
         view = self.build_composed_view_sql(
-            artifact, metadata_mode=metadata_mode, include_data=True,
+            artifact, metadata_mode=metadata_mode, include_data=include_data,
             with_artifacts=with_artifacts,
         )
         return {
@@ -2101,33 +2111,14 @@ class QueryEngine:
             if output_name not in selected:
                 selected.append(output_name)
 
+        available = {column.output_name for column in columns}
         for name in requested_names:
-            exact_qualified = [
-                column for column in columns if column.qualified_name == name
-            ]
-            if len(exact_qualified) == 1:
-                add(exact_qualified[0].output_name)
+            if name in available:
+                add(name)
                 continue
-
-            exact_output = [column for column in columns if column.output_name == name]
-            if len(exact_output) == 1:
-                add(exact_output[0].output_name)
-                continue
-
-            base_matches = [column for column in columns if column.base_name == name]
-            if len(base_matches) == 1:
-                add(base_matches[0].output_name)
-                continue
-            if len(base_matches) > 1:
-                options = [column.qualified_name for column in base_matches]
-                raise QueryError(
-                    f"Requested {label} {name!r} is ambiguous. Use one of: {options}."
-                )
-
-            available = sorted({column.output_name for column in columns})
             raise QueryError(
-                f"Requested {label} is not available: {name!r}. "
-                f"Available {label}: {available}."
+                f"Requested {label} {name!r} is not an advertised output name "
+                f"in this query scope. Available {label}: {sorted(available)}."
             )
 
         return selected
@@ -2181,6 +2172,7 @@ class QueryEngine:
         data_columns: ColumnSelect,
         metadata_columns: ColumnSelect,
         metadata_mode: MetadataMode,
+        include_data: bool,
         where: str | None,
         order_by: str | Sequence[str] | None,
         limit: int | None,
@@ -2194,10 +2186,14 @@ class QueryEngine:
             metadata_mode=metadata_mode,
             metadata_columns=metadata_columns,
         )
+        if not include_data and _columns_requested(data_columns):
+            raise QueryError(
+                "include_data=False cannot project caller data columns."
+            )
         view = self.build_composed_view_sql(
             artifact,
             metadata_mode=metadata_mode,
-            include_data=_columns_requested(data_columns),
+            include_data=include_data,
             with_artifacts=with_artifacts,
         )
         selected = self._view_selected_columns(
@@ -2337,6 +2333,7 @@ class QueryEngine:
         data_columns: ColumnSelect = True,
         metadata_columns: ColumnSelect = False,
         metadata_mode: MetadataMode = "none",
+        include_data: bool = True,
         where: str | None = None,
         order_by: str | Sequence[str] | None = None,
         limit: int | None = None,
@@ -2353,6 +2350,7 @@ class QueryEngine:
                 data_columns=data_columns,
                 metadata_columns=metadata_columns,
                 metadata_mode=metadata_mode,
+                include_data=include_data,
                 where=where,
                 order_by=order_by,
                 limit=limit,
@@ -2388,6 +2386,7 @@ class QueryEngine:
         data_columns: ColumnSelect = True,
         metadata_columns: ColumnSelect = False,
         metadata_mode: MetadataMode = "none",
+        include_data: bool = True,
         where: str | None = None,
         order_by: str | Sequence[str] | None = None,
         limit: int | None = None,
@@ -2411,6 +2410,7 @@ class QueryEngine:
                 data_columns=data_columns,
                 metadata_columns=metadata_columns,
                 metadata_mode=metadata_mode,
+                include_data=include_data,
                 where=where,
                 order_by=order_by,
                 limit=limit,
