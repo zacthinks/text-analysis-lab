@@ -555,25 +555,24 @@ def _resolved_namespace_columns(
     )
     out: list[str] = []
     for name in requested:
+        # A displayed output label is authoritative, even if it happens to be
+        # another column's internal qualified identity or physical base name.
         matches = [
-            item
-            for item in columns
-            if name
-            in {
-                str(item.get("qualified_name")),
-                str(item.get("output_name")),
-                str(item.get("base_name")),
-            }
+            item for item in columns if name == str(item["output_name"])
         ]
-        # Prefer exact qualified/output matches before base-name resolution.
-        exact = [
-            item
-            for item in matches
-            if name in {str(item.get("qualified_name")), str(item.get("output_name"))}
-        ]
-        if len(exact) == 1:
-            resolved = str(exact[0]["output_name"])
-        elif len(matches) == 1:
+        if not matches:
+            # Preserve the historical input conveniences only when there is no
+            # advertised output label with that spelling.
+            matches = [
+                item for item in columns
+                if name == str(item.get("qualified_name"))
+            ]
+        if not matches:
+            matches = [
+                item for item in columns
+                if name == str(item.get("base_name"))
+            ]
+        if len(matches) == 1:
             resolved = str(matches[0]["output_name"])
         elif len(matches) > 1:
             choices = [str(item.get("qualified_name")) for item in matches]
