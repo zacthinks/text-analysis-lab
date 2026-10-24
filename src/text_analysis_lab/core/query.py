@@ -2114,6 +2114,17 @@ class QueryEngine:
         available = {column.output_name for column in columns}
         for name in requested_names:
             if name not in available:
+                # An ambiguous base name is never a valid selector, but it
+                # deserves a more useful diagnostic than a missing label.
+                candidates = [
+                    column.output_name for column in columns
+                    if column.base_name == name
+                ]
+                if len(candidates) > 1:
+                    raise QueryError(
+                        f"Requested {label} {name!r} is ambiguous. "
+                        f"Use one of the advertised output names: {candidates}."
+                    )
                 raise QueryError(
                     f"Requested {label} {name!r} is not an advertised output name "
                     f"in this query scope. Available {label}: {sorted(available)}."
