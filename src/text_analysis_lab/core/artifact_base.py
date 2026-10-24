@@ -977,12 +977,14 @@ class BaseArtifact(ABC):
     def query_columns(
         self,
         *,
+        include_data: bool = True,
         metadata_mode: MetadataMode = "none",
         with_artifacts: Any = None,
     ) -> dict[str, Any]:
-        """Return key/data/metadata/with column names available to query()."""
+        """Return names in the selected data/metadata/attachment scope."""
         return self.project.query.query_columns(
-            self, metadata_mode=metadata_mode, with_artifacts=with_artifacts,
+            self, include_data=include_data, metadata_mode=metadata_mode,
+            with_artifacts=with_artifacts,
         )
 
     def query(
@@ -992,6 +994,7 @@ class BaseArtifact(ABC):
         data_columns: ColumnSelect = True,
         metadata_columns: ColumnSelect = False,
         metadata_mode: MetadataMode = "none",
+        include_data: bool = True,
         with_artifacts: Any = None,
         with_columns: ColumnSelect = True,
         where: str | None = None,
@@ -1014,6 +1017,8 @@ class BaseArtifact(ABC):
         the full result.
         """
         _validate_query_form(form)
+        if not include_data and _columns_requested(data_columns):
+            raise QueryError("include_data=False cannot project caller data columns.")
         _validate_sample_request(
             sample_n=sample_n,
             sample_frac=sample_frac,
@@ -1037,7 +1042,7 @@ class BaseArtifact(ABC):
                 self,
                 where=where,
                 metadata_mode=metadata_mode,
-                include_data=self._query_can_include_data(data_columns),
+                include_data=include_data,
                 positions=positions,
                 sample_n=sample_n,
                 sample_frac=sample_frac,
@@ -1058,6 +1063,7 @@ class BaseArtifact(ABC):
             "data_columns": data_columns,
             "metadata_columns": metadata_columns,
             "metadata_mode": metadata_mode,
+            "include_data": include_data,
             "with_artifacts": attached,
             "with_columns": with_columns,
             "where": where,
@@ -1082,6 +1088,7 @@ class BaseArtifact(ABC):
         data_columns: ColumnSelect,
         metadata_columns: ColumnSelect,
         metadata_mode: MetadataMode,
+        include_data: bool,
         where: str | None,
         order_by: str | Sequence[str] | None,
         positions: Sequence[int] | None,
@@ -1114,7 +1121,7 @@ class BaseArtifact(ABC):
             self.project.query.deferred_columns(
                 self,
                 metadata_mode=metadata_mode,
-                include_data=include_data_in_query,
+                include_data=include_data,
                 with_artifacts=with_artifacts,
                 with_columns=with_columns,
             )
@@ -1128,6 +1135,7 @@ class BaseArtifact(ABC):
             data_columns=data_columns if include_data_in_query else False,
             metadata_columns=metadata_columns,
             metadata_mode=metadata_mode,
+            include_data=include_data,
             with_artifacts=with_artifacts,
             with_columns=with_columns,
             where=where,
@@ -1191,6 +1199,7 @@ class BaseArtifact(ABC):
         data_columns: ColumnSelect,
         metadata_columns: ColumnSelect,
         metadata_mode: MetadataMode,
+        include_data: bool,
         where: str | None,
         order_by: str | Sequence[str] | None,
         positions: Sequence[int] | None,
@@ -1225,7 +1234,7 @@ class BaseArtifact(ABC):
             self.project.query.deferred_columns(
                 self,
                 metadata_mode=metadata_mode,
-                include_data=include_data_in_query,
+                include_data=include_data,
                 with_artifacts=with_artifacts,
                 with_columns=with_columns,
             )
@@ -1252,6 +1261,7 @@ class BaseArtifact(ABC):
             data_columns=data_columns if include_data_in_query else False,
             metadata_columns=metadata_columns,
             metadata_mode=metadata_mode,
+            include_data=include_data,
             with_artifacts=with_artifacts,
             with_columns=with_columns,
             where=where,
@@ -1414,6 +1424,7 @@ class BaseArtifact(ABC):
             data_columns=data_columns,
             metadata_columns=metadata_columns,
             metadata_mode=metadata_mode,
+            include_data=include_data,
             with_artifacts=with_artifacts,
             with_columns=with_columns,
             limit=int(n),
@@ -1442,6 +1453,7 @@ class BaseArtifact(ABC):
             data_columns=data_columns,
             metadata_columns=metadata_columns,
             metadata_mode=metadata_mode,
+            include_data=include_data,
             with_artifacts=with_artifacts,
             with_columns=with_columns,
             sample_n=None if sample_n is None else int(sample_n),
