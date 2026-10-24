@@ -113,6 +113,7 @@ def attach_metadata(
     source_keys = source_artifact.query(
         key_columns=True,
         data_columns=False,
+        include_data=False,
         metadata_columns=False,
         form="table",
         include_position=True,
