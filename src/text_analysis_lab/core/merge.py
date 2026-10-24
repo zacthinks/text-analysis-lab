@@ -345,7 +345,7 @@ def _validate_sources(project: Project, sources: Sequence[BaseArtifact]) -> None
 
 def _effective_schema(
     project: Project, artifact: BaseArtifact
-) -> tuple[tuple[str, str, str], ...]:
+) -> tuple[tuple[str, str], ...]:
     columns = project.query.query_columns(artifact, metadata_mode="full")["columns"]
     # Compare logical namespace and base-name slots, not displayed labels
     # qualified with the concrete owner artifact ID.
@@ -353,9 +353,6 @@ def _effective_schema(
         (
             str(column["namespace"]),
             str(column["base_name"]),
-            # Owner-specific displayed labels are not schema identities.
-            # The merged query maps each source column into a stable slot.
-            str(column["namespace"]),
         )
         for column in columns
         if str(column["namespace"]) != "key"
