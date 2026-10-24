@@ -108,7 +108,13 @@ class TextLength(BaseTranslator):
         scope = QueryScope(source, metadata_mode="none")
         available = scope.columns()
         available_data = {str(name) for name in available["data"]}
-        missing = [field for field in self.lengths if field not in available_data]
+        resolved_data: dict[str, str] = {}
+        missing: list[str] = []
+        for field in self.lengths:
+            try:
+                resolved_data[field] = scope.data_output_name(field)
+            except ValueError:
+                missing.append(field)
         if missing:
             raise OperatorError(
                 f"TextLength source data field(s) are unavailable: {missing}. "
@@ -129,7 +135,7 @@ class TextLength(BaseTranslator):
         return scope.source_request(
             artifact_type=("table", "jsonl"),
             mode="batches",
-            columns=ColumnRequest(keys=True, data=list(self.lengths), metadata=False),
+            columns=ColumnRequest(keys=True, data=list(resolved_data.values()), metadata=False),
             batch_size=request.batch_size if request.batch_size is not None else 10_000,
             form="table",
             include_position=False,
@@ -206,13 +212,26 @@ class TextLength(BaseTranslator):
             raise ArtifactError("TextLength expected a table-form pandas batch.")
         frame = packet.data
         key_columns = [str(name) for name in packet.primary_key]
-        missing = [name for name in [*key_columns, *self.lengths] if name not in frame]
+        # Recover configured raw names from the packet's scoped data labels.
+        # Key/data collisions reserve the raw label for the structural key.
+        data_inputs = {
+            field: (f"data.{field}" if field in key_columns else field)
+            for field in self.lengths
+        }
+        missing = [
+            name for name in key_columns if name not in frame
+        ] + [
+            field for field, output in data_inputs.items() if output not in frame
+        ]
         if missing:
             raise ArtifactError(
                 f"TextLength source batch is missing columns {missing}."
             )
 
-        metadata = self._measure_frame(frame).reset_index(drop=True)
+        selected = pd.DataFrame({
+            field: frame[output] for field, output in data_inputs.items()
+        }, index=frame.index)
+        metadata = self._measure_frame(selected).reset_index(drop=True)
 
         return BatchResult(
             outputs={
