@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
+from text_analysis_lab.core.query_scope import QueryScope
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
@@ -101,7 +102,11 @@ class TextLength(BaseTranslator):
         if source.artifact_type.value not in {"table", "jsonl"}:
             raise OperatorError("TextLength requires a table or jsonl artifact source.")
 
-        available = source.query_columns(metadata_mode="full")
+        # Text inputs are materialized without inherited metadata. Resolve
+        # those inputs in the same scope; inspect the full scope separately
+        # only to guard against output metadata collisions.
+        scope = QueryScope(source, metadata_mode="none")
+        available = scope.columns()
         available_data = {str(name) for name in available["data"]}
         missing = [field for field in self.lengths if field not in available_data]
         if missing:
@@ -109,7 +114,9 @@ class TextLength(BaseTranslator):
                 f"TextLength source data field(s) are unavailable: {missing}. "
                 f"Available data fields: {sorted(available_data)}."
             )
-        existing = {str(name) for name in available["output"]}
+        existing = {
+            str(name) for name in QueryScope(source, metadata_mode="full").columns()["output"]
+        }
         collisions = sorted(existing.intersection(self.output_columns))
         if collisions:
             raise OperatorError(
@@ -119,13 +126,12 @@ class TextLength(BaseTranslator):
                 "only genuinely missing length units."
             )
 
-        return SourceRequest(
+        return scope.source_request(
             artifact_type=("table", "jsonl"),
             mode="batches",
             columns=ColumnRequest(keys=True, data=list(self.lengths), metadata=False),
             batch_size=request.batch_size if request.batch_size is not None else 10_000,
             form="table",
-            metadata_mode="none",
             include_position=False,
         )
 
