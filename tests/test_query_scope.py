@@ -280,3 +280,41 @@ def test_nearest_neighbor_context_with_colliding_data_metadata(tmp_path):
         assert result.iloc[0]["metadata." + context.artifact_id + ".score"] == 101
     finally:
         project.close()
+
+
+@pytest.mark.parametrize("matrix_type", ["dense_matrix", "sparse_matrix"])
+def test_matrix_transpose_promotes_key_and_colliding_metadata(matrix_type, tmp_path):
+    from scipy import sparse
+    from text_analysis_lab.translators import MatrixTranspose
+
+    project = teal.Project.create(tmp_path / matrix_type, name="transpose_collisions")
+    try:
+        values = np.asarray([[1., 2.], [3., 4.]])
+        if matrix_type == "sparse_matrix":
+            values = sparse.csr_matrix(values)
+        source = project.register_external([{
+            "keys": pd.DataFrame({"row_id": [10, 20]}),
+            "data": {"values": values, "columns": ["f0", "f1"]},
+            "metadata": pd.DataFrame({"row_id": ["alpha", "beta"]}),
+        }], artifact_type=matrix_type, primary_key="row_id")
+        scope = source.query_columns(metadata_mode="full")
+        key_name = scope["key"][0]
+        meta_name = next(
+            c["output_name"] for c in scope["columns"]
+            if c["namespace"] == "metadata" and c["base_name"] == "row_id"
+        )
+        assert key_name == "row_id"
+        assert meta_name != key_name
+        transposed = project.translate(
+            MatrixTranspose(), source,
+            feature_metadata_columns=[key_name, meta_name],
+        )["output"]
+        fm = transposed.get_feature_metadata()
+        assert fm[key_name].tolist() == [10, 20]
+        assert fm[meta_name].tolist() == ["alpha", "beta"]
+        dense = transposed.get_matrix()
+        if sparse.issparse(dense):
+            dense = dense.toarray()
+        np.testing.assert_array_equal(dense, [[1, 3], [2, 4]])
+    finally:
+        project.close()
