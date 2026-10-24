@@ -153,6 +153,16 @@ class RandomSplitTranslator(BaseTranslator):
             allowed_namespaces={"key", "data", "metadata"},
         )
         column_request = _merge_column_requests(by_request, stratify_request)
+        # Materialized packets use the canonical full-scope key labels.
+        # Record their order alongside the physical key names for the writer.
+        key_schema = source.project.query.query_columns(source, metadata_mode="full")
+        key_output_names = [
+            str(column["output_name"])
+            for column in key_schema.get("columns", ())
+            if column["namespace"] == "key"
+        ]
+        if len(key_output_names) != len(source.primary_key):
+            raise ArtifactError("Split could not resolve the source primary-key schema.")
         requested_by = (
             None
             if raw_by is None
@@ -170,6 +180,7 @@ class RandomSplitTranslator(BaseTranslator):
             "by_columns": list(by_columns),
             "stratify": requested,
             "stratify_columns": list(stratify_columns),
+            "key_output_names": key_output_names,
             "column_request": {
                 "keys": column_request.keys,
                 "data": column_request.data,
@@ -223,7 +234,16 @@ class RandomSplitTranslator(BaseTranslator):
         source_batch = inputs[DEFAULT_SOURCE_LABEL]
         frame = _require_table_packet(source_batch.data)
         frame = _sort_by_position_if_present(frame).reset_index(drop=True)
-        keys = _extract_key_frame(frame, primary_key=source_batch.primary_key)
+        keys = _extract_key_frame(
+            frame,
+            primary_key=source_batch.primary_key,
+            output_names=tuple(
+                str(value)
+                for value in request.params.get(
+                    "key_output_names", source_batch.primary_key
+                )
+            ),
+        )
         by_columns = tuple(
             str(column) for column in request.params.get("by_columns", ())
         )
@@ -584,15 +604,22 @@ def _sort_by_position_if_present(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _extract_key_frame(
-    frame: pd.DataFrame, *, primary_key: tuple[str, ...]
+    frame: pd.DataFrame,
+    *,
+    primary_key: tuple[str, ...],
+    output_names: tuple[str, ...] | None = None,
 ) -> pd.DataFrame:
-    missing = [column for column in primary_key if column not in frame.columns]
+    query_names = primary_key if output_names is None else output_names
+    if len(query_names) != len(primary_key):
+        raise ArtifactError("Split key mapping has a different width from the primary key.")
+    missing = [column for column in query_names if column not in frame.columns]
     if missing:
         raise ArtifactError(
             f"Split packet is missing primary key column(s) {missing}. "
             f"Available columns: {list(frame.columns)}."
         )
-    keys = frame.loc[:, list(primary_key)].copy().reset_index(drop=True)
+    keys = frame.loc[:, list(query_names)].copy().reset_index(drop=True)
+    keys.columns = list(primary_key)
     if keys.isna().any().any():
         raise ArtifactError("Split key frame contains NA primary key values.")
     return keys

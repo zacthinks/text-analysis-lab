@@ -431,11 +431,23 @@ def _aggregate_relational(
 
     data_names = list(resolved_data)
     metadata_names = list(resolved_metadata)
-    source_order = ", ".join(quote_identifier(name) for name in artifact.primary_key)
-    group_exprs = [quote_identifier(name) for name in retained_key]
+    key_names = {
+        column.base_name: column.output_name
+        for column in view.columns
+        if column.namespace == "key"
+    }
+    source_order = ", ".join(
+        quote_identifier(key_names[name]) for name in artifact.primary_key
+    )
+    group_exprs = [quote_identifier(key_names[name]) for name in retained_key]
 
     try:
-        select_exprs = list(group_exprs)
+        # SQL groups by canonical view labels, but the new artifact retains
+        # the source's structural key names.
+        select_exprs = [
+            f"{quote_identifier(key_names[name])} AS {quote_identifier(name)}"
+            for name in retained_key
+        ]
         postprocess: dict[str, tuple[str, str]] = {}
 
         for output_name, rule in resolved_data.items():
