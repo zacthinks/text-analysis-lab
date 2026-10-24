@@ -17,6 +17,7 @@ from text_analysis_lab.core.errors import (
     ArtifactError,
     IncompleteArtifactError,
     MissingDataComponentError,
+    QueryError,
     UnsupportedArtifactOperationError,
 )
 from text_analysis_lab.core.kwic import KWICResult, keyword_in_context
@@ -1088,7 +1089,6 @@ class BaseArtifact(ABC):
         data_columns: ColumnSelect,
         metadata_columns: ColumnSelect,
         metadata_mode: MetadataMode,
-        include_data: bool,
         where: str | None,
         order_by: str | Sequence[str] | None,
         positions: Sequence[int] | None,
@@ -1097,6 +1097,7 @@ class BaseArtifact(ABC):
         include_position: bool,
         with_artifacts: Any = None,
         with_columns: ColumnSelect = True,
+        include_data: bool = True,
     ) -> Any:
         if (
             self.data_artifact is None
@@ -1199,7 +1200,6 @@ class BaseArtifact(ABC):
         data_columns: ColumnSelect,
         metadata_columns: ColumnSelect,
         metadata_mode: MetadataMode,
-        include_data: bool,
         where: str | None,
         order_by: str | Sequence[str] | None,
         positions: Sequence[int] | None,
@@ -1210,6 +1210,7 @@ class BaseArtifact(ABC):
         streaming_mode: StreamingMode,
         with_artifacts: Any = None,
         with_columns: ColumnSelect = True,
+        include_data: bool = True,
     ) -> Iterable[Any]:
         if (
             self.data_artifact is None
