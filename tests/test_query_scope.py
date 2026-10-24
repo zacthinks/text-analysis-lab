@@ -393,3 +393,50 @@ def test_openai_template_raw_placeholders_bind_scoped_data_and_metadata(tmp_path
         assert result.query(data_columns=["response"], form="table")["response"].tolist() == ["ok"]
     finally:
         project.close()
+
+
+def test_openai_prompt_prefers_data_over_identically_named_key_after_reload(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from text_analysis_lab.translators import OpenAIResponsesTranslator
+
+    project = teal.Project.create(tmp_path / "key_text_prompt", name="key_text_prompt")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"text": [17]}),
+            "data": pd.DataFrame({"text": ["document content"]}),
+        }], artifact_type="table", primary_key="text")
+        calls = []
+
+        def fake_request(self, prompt):
+            calls.append(prompt)
+            return SimpleNamespace(id="fake", model="test", output_text="ok", usage=None)
+
+        monkeypatch.setattr(OpenAIResponsesTranslator, "_request", fake_request)
+        operator = OpenAIResponsesTranslator("test", "Analyze: {text}")
+        output = project.translate(operator, source)["output"]
+        assert calls == ["Analyze: document content"]
+        assert output.query(data_columns=["response"], form="table")["response"].tolist() == ["ok"]
+
+        saved = tmp_path / "checkpoint"
+        operator.save_intermediate_state(
+            saved, operator_id="optr_prompt", mode="translate", route="sequential"
+        )
+        restored = OpenAIResponsesTranslator.load_intermediate_state(
+            saved, operator_id="optr_prompt", mode="translate", route="sequential"
+        )
+        assert restored._prompt_input_names == {"text": "data.text"}
+        packet_frame = source.query(
+            key_columns=True, data_columns=["data.text"], form="table"
+        )
+        from text_analysis_lab.core.operator import InputBatch, TranslationRequest
+        batch = InputBatch(
+            source_label="source", artifact_id=source.artifact_id,
+            primary_key=("text",), data=packet_frame,
+            batch_index=0, batch_count=1, is_first=True, is_last=True,
+        )
+        restored.translate_batch(
+            {"source": batch}, mode="translate", request=TranslationRequest()
+        )
+        assert calls == ["Analyze: document content", "Analyze: document content"]
+    finally:
+        project.close()
