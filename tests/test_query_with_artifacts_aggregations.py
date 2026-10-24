@@ -116,6 +116,34 @@ def test_attached_histogram_sql_filter_on_relational_right(tmp_path):
         project.close()
 
 
+def test_attached_field_scope_does_not_change_with_projection(tmp_path):
+    """Attached field labels must match discovery even without caller-data projection."""
+    project = teal.Project.create(tmp_path / "scope", name="scope")
+    try:
+        left = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2], "score": [10, 20]}),
+            primary_key="doc_id", data_fields="score",
+        )
+        right = project.register_external(
+            pd.DataFrame({"doc_id": [1, 2], "score": [1, 2]}),
+            primary_key="doc_id", data_fields="score",
+        )
+        columns = left.query_columns(with_artifacts=right)["columns"]
+        attached = next(
+            item for item in columns
+            if item["namespace"] == "with" and item["base_name"] == "score"
+        )
+        result = left.query(
+            key_columns=False, data_columns=False, metadata_columns=False,
+            include_data=True, with_artifacts=right,
+            with_columns=[attached["qualified_name"]], form="table",
+        )
+        assert result.columns.tolist() == [attached["output_name"]]
+        assert result.iloc[:, 0].tolist() == [1, 2]
+    finally:
+        project.close()
+
+
 def test_qualified_attached_collisions_use_narrow_output_names(tmp_path):
     project = teal.Project.create(tmp_path / "collision", name="collision")
     try:
