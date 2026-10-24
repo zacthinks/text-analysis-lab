@@ -1726,13 +1726,20 @@ class QueryEngine:
                 common_source_id = (
                     next(iter(source_ids)) if len(source_ids) == 1 else None
                 )
-                # When owners differ, use a stable merged-artifact identity
-                # for any qualification required by a key/metadata collision.
-                qualified_name = (
-                    column.qualified_name
-                    if common_source_id is not None else
-                    f"{column.namespace}.{artifact.artifact_id}.{index}.{column.base_name}"
-                )
+                # Data columns have a canonical identity independent of which
+                # branch owns their values. In particular, a key/data collision
+                # must still advertise "data.<base_name>" after merging.
+                # Only metadata provenance is owner-specific: when multiple
+                # branches supply one logical metadata slot, give that slot a
+                # stable identity under the merged artifact.
+                if column.namespace == "data":
+                    qualified_name = f"data.{column.base_name}"
+                elif common_source_id is not None:
+                    qualified_name = column.qualified_name
+                else:
+                    qualified_name = (
+                        f"metadata.{artifact.artifact_id}.{index}.{column.base_name}"
+                    )
                 pending_columns.append(
                     {
                         "namespace": column.namespace,
