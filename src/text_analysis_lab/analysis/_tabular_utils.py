@@ -118,6 +118,10 @@ def resolve_batch_output_names(
     Histograms keep caller data in the naming scope even when they project
     only attached fields. The data projection cannot change output labels.
     """
+    if with_artifacts is None:
+        # No attachment remapping is needed. Preserve callers that implement
+        # the artifact query interface without owning a full Project object.
+        return fields
     _, metadata_columns = batch_query_columns(fields)
     view = artifact.project.query.build_composed_view_sql(
         artifact,
