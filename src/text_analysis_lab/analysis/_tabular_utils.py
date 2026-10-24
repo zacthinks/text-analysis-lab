@@ -113,18 +113,16 @@ def resolve_batch_output_names(
     *,
     with_artifacts: Any,
 ) -> tuple[ResolvedField, ...]:
-    """Map selected field identities onto the actual narrow query view.
+    """Map selected fields onto the exact scope used by the batch query.
 
-    A full-view output name can change when caller data or metadata are omitted.
-    Qualified field identities remain stable across those projections.
+    Histograms keep caller data in the naming scope even when they project
+    only attached fields. The data projection cannot change output labels.
     """
-    if with_artifacts is None:
-        return fields
-    data_columns, metadata_columns = batch_query_columns(fields)
+    _, metadata_columns = batch_query_columns(fields)
     view = artifact.project.query.build_composed_view_sql(
         artifact,
         metadata_mode="full" if metadata_columns is not False else "none",
-        include_data=data_columns is not False,
+        include_data=True,
         with_artifacts=with_artifacts,
     )
     remapped: list[ResolvedField] = []
