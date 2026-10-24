@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
+from text_analysis_lab.core.query_scope import QueryScope
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
@@ -174,13 +175,18 @@ class DelimiterDecomposer(BaseTranslator):
         source = _single_source(sources)
         if source.artifact_type.value != "table":
             raise OperatorError("DelimiterDecomposer requires a table artifact source.")
-        return SourceRequest(
+        scope = QueryScope(source, metadata_mode="none")
+        field = (
+            scope.data_output_name(self.text_field)
+            if callable(getattr(source, "query_columns", None))
+            else self.text_field
+        )
+        return scope.source_request(
             artifact_type="table",
             mode="batches",
-            columns=ColumnRequest(keys=True, data=self.text_field, metadata=False),
+            columns=ColumnRequest(keys=True, data=field, metadata=False),
             batch_size=request.batch_size if request.batch_size is not None else 10_000,
             form="table",
-            metadata_mode="none",
             include_position=False,
         )
 
@@ -195,9 +201,16 @@ class DelimiterDecomposer(BaseTranslator):
         packet = _single_input(inputs)
         frame = _require_frame(packet.data)
         key_columns = [str(name) for name in packet.primary_key]
+        input_name = (
+            f"data.{self.text_field}"
+            if self.text_field in key_columns
+            else self.text_field
+        )
+        if input_name not in frame and self.text_field in frame and self.text_field not in key_columns:
+            input_name = self.text_field
         missing = [
             name
-            for name in [*key_columns, self.text_field]
+            for name in [*key_columns, input_name]
             if name not in frame.columns
         ]
         if missing:
@@ -209,7 +222,7 @@ class DelimiterDecomposer(BaseTranslator):
                 f"DelimiterDecomposer new_key {self.new_key!r} collides with a source column."
             )
 
-        decomposed = self.translate(frame[self.text_field])
+        decomposed = self.translate(frame[input_name])
         source_positions = decomposed["source_positions"]
         if len(source_positions) == 0:
             return BatchResult(outputs={})
