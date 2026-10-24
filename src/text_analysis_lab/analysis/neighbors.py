@@ -269,8 +269,18 @@ def _append_context(
     ]
     scope = QueryScope(context_artifact, metadata_mode=metadata_mode)
     inventory = scope.columns()
-    data_names = set(inventory["data"])
-    metadata_names = set(inventory["metadata"])
+    # The structured columns inventory is the canonical schema; older
+    # artifact-like adapters need not expose redundant top-level lists.
+    data_names = {
+        str(column["output_name"])
+        for column in inventory["columns"]
+        if column["namespace"] == "data"
+    }
+    metadata_names = {
+        str(column["output_name"])
+        for column in inventory["columns"]
+        if column["namespace"] == "metadata"
+    }
     frame = scope.query(
         key_columns=True,
         data_columns=[c for c in context_columns if c in data_names] or False,
