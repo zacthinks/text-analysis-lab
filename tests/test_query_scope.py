@@ -231,3 +231,52 @@ def test_function_mapper_prefers_literal_dotted_data_output(tmp_path):
         ]
     finally:
         project.close()
+
+
+def test_text_length_uses_data_only_scope_when_metadata_collides(tmp_path):
+    from text_analysis_lab.translators import TextLength
+
+    project = teal.Project.create(tmp_path / "length_scope", name="length_scope")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": pd.DataFrame({"text": ["a b", "three words here"]}),
+            "metadata": pd.DataFrame({"text": ["metadata_a", "metadata_b"]}),
+        }], artifact_type="table", primary_key="doc_id")
+        result = project.translate(
+            TextLength({"text": "words"}), source, batch_size=1,
+        )["output"]
+        info = result.query(
+            key_columns=True, data_columns=False, metadata_columns=True,
+            metadata_mode="local", form="table",
+        )
+        assert info["text_words"].tolist() == [2, 3]
+    finally:
+        project.close()
+
+
+def test_nearest_neighbor_context_with_colliding_data_metadata(tmp_path):
+    import numpy as np
+
+    project = teal.Project.create(tmp_path / "neighbors_scope", name="neighbors_scope")
+    try:
+        matrix = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": {"values": np.asarray([[1., 0.], [0., 1.]]),
+                     "columns": ["x", "y"]},
+        }], artifact_type="dense_matrix", primary_key="doc_id")
+        context = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [1, 2]}),
+            "data": pd.DataFrame({"score": [11, 22]}),
+            "metadata": pd.DataFrame({"score": [101, 202]}),
+        }], artifact_type="table", primary_key="doc_id")
+        result = matrix.analysis.nearest_neighbors(
+            position=0, k=1, include_self=True,
+            context=context, context_data_columns=["data.score"],
+            context_metadata_columns=["metadata." + context.artifact_id + ".score"],
+            context_metadata_mode="full",
+        )
+        assert result.iloc[0]["data.score"] == 11
+        assert result.iloc[0]["metadata." + context.artifact_id + ".score"] == 101
+    finally:
+        project.close()
