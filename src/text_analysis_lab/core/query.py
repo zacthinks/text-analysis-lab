@@ -1648,19 +1648,12 @@ class QueryEngine:
                     f"keys {list(branch.key_columns)}."
                 )
 
-        def signature(view: ArtifactViewSQL) -> tuple[tuple[str, str, str], ...]:
-            # Qualified metadata names include the owning artifact ID, which may
-            # legitimately differ between disjoint branches. The UNION requires
-            # matching logical namespaces/base names and matching resolved output
-            # names; the latter still catches ambiguity-induced incompatibility.
+        def signature(view: ArtifactViewSQL) -> tuple[tuple[str, str], ...]:
+            # Source ownership changes across disjoint branches. Preserve
+            # logical fields in order without comparing owner-qualified labels.
             return tuple(
-                (
-                    column.namespace,
-                    column.base_name,
-                    column.output_name,
-                )
-                for column in view.columns
-                if column.namespace != "key"
+                (column.namespace, column.base_name)
+                for column in view.columns if column.namespace != "key"
             )
 
         expected_signature = signature(branch_views[0])
@@ -1694,19 +1687,27 @@ class QueryEngine:
             )
 
         non_key_columns = [
-            column for column in branch_views[0].columns if column.namespace != "key"
+            col for col in branch_views[0].columns if col.namespace != "key"
         ]
         if non_key_columns:
+            # Align by logical column position, *not* source-specific output
+            # labels. Each branch advertises its own canonical query names.
+            slot_names = [f"_teal_merged_field_{i}" for i in range(len(non_key_columns))]
             branch_selects: list[str] = []
             for branch in branch_views:
-                selected_names = [
-                    *current_pk,
-                    *[col.output_name for col in non_key_columns],
+                source_fields = [
+                    col for col in branch.columns if col.namespace != "key"
                 ]
-                selected_sql = ", ".join(
-                    f"b.{quote_identifier(name)} AS {quote_identifier(name)}"
-                    for name in selected_names
-                )
+                selected_sql = ", ".join([
+                    *(
+                        f"b.{quote_identifier(key)} AS {quote_identifier(key)}"
+                        for key in current_pk
+                    ),
+                    *(
+                        f"b.{quote_identifier(col.output_name)} AS {quote_identifier(slot)}"
+                        for col, slot in zip(source_fields, slot_names, strict=True)
+                    ),
+                ])
                 branch_selects.append(f"SELECT {selected_sql} FROM ({branch.sql}) b")
             ctes.append("resolved AS (" + " UNION ALL ".join(branch_selects) + ")")
             predicates = " AND ".join(
@@ -1717,18 +1718,27 @@ class QueryEngine:
 
             for index, column in enumerate(non_key_columns):
                 source_ids = {
-                    branch.columns[len(current_pk) + index].source_artifact_id
+                    [
+                        col for col in branch.columns if col.namespace != "key"
+                    ][index].source_artifact_id
                     for branch in branch_views
                 }
                 common_source_id = (
                     next(iter(source_ids)) if len(source_ids) == 1 else None
                 )
+                # When owners differ, use a stable merged-artifact identity
+                # for any qualification required by a key/metadata collision.
+                qualified_name = (
+                    column.qualified_name
+                    if common_source_id is not None else
+                    f"{column.namespace}.{artifact.artifact_id}.{index}.{column.base_name}"
+                )
                 pending_columns.append(
                     {
                         "namespace": column.namespace,
                         "base_name": column.base_name,
-                        "qualified_name": column.qualified_name,
-                        "sql_expr": f"r.{quote_identifier(column.output_name)}",
+                        "qualified_name": qualified_name,
+                        "sql_expr": f"r.{quote_identifier(slot_names[index])}",
                         "source_artifact_id": common_source_id,
                     }
                 )
