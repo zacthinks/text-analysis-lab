@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
+from text_analysis_lab.translators._field_selection import canonical_key_output_names, structural_key_frame
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
@@ -219,12 +220,15 @@ class RegexCleaner(BaseTranslator):
         sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
-        _ = sources, mode
+        _ = mode
         if params:
             raise OperatorError(
                 f"RegexCleaner does not accept operation parameters; got {sorted(params)}."
             )
-        return {}
+        source = _single_source(sources)
+        return {"key_output_names": canonical_key_output_names(
+            source, metadata_mode=self.metadata_mode, translator="RegexCleaner"
+        )}
 
     def input_request(
         self,
@@ -270,8 +274,12 @@ class RegexCleaner(BaseTranslator):
         _ = mode, request
         packet = _single_input(inputs)
         frame = _require_frame(packet.data)
-        key_columns = [str(name) for name in packet.primary_key]
-        missing = [name for name in [*key_columns, *self.fields] if name not in frame.columns]
+        keys = structural_key_frame(
+            frame, packet.primary_key,
+            output_names=request.params.get("key_output_names"),
+            translator="RegexCleaner",
+        )
+        missing = [name for name in self.fields if name not in frame.columns]
         if missing:
             raise ArtifactError(f"RegexCleaner source batch is missing columns {missing}.")
         namespaces = self._field_namespaces
@@ -280,7 +288,7 @@ class RegexCleaner(BaseTranslator):
                 raise OperatorError("RegexCleaner must resolve source namespaces before translating batches.")
             namespaces = {self.text_field: "data"}
         payload: dict[str, pd.DataFrame] = {
-            "keys": frame.loc[:, key_columns].reset_index(drop=True),
+            "keys": keys,
         }
         for domain in ("data", "metadata"):
             output = {

@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
+from text_analysis_lab.translators._field_selection import canonical_key_output_names, structural_key_frame
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
@@ -112,12 +113,15 @@ class TextLength(BaseTranslator):
         sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
-        _ = sources, mode
+        _ = mode
         if params:
             raise OperatorError(
                 f"TextLength does not accept operation parameters; got {sorted(params)}."
             )
-        return {}
+        source = _single_source(sources)
+        return {"key_output_names": canonical_key_output_names(
+            source, metadata_mode=self.metadata_mode, translator="TextLength"
+        )}
 
     def input_request(
         self,
@@ -240,9 +244,13 @@ class TextLength(BaseTranslator):
         if not isinstance(packet.data, pd.DataFrame):
             raise ArtifactError("TextLength expected a table-form pandas batch.")
         frame = packet.data
-        key_columns = [str(name) for name in packet.primary_key]
+        keys = structural_key_frame(
+            frame, packet.primary_key,
+            output_names=request.params.get("key_output_names"),
+            translator="TextLength",
+        )
         selected = self.combined_fields if self.combined_fields is not None else self.lengths
-        missing = [name for name in [*key_columns, *selected] if name not in frame]
+        missing = [name for name in selected if name not in frame]
         if missing:
             raise ArtifactError(
                 f"TextLength source batch is missing columns {missing}."
@@ -253,7 +261,7 @@ class TextLength(BaseTranslator):
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
-                    "keys": frame.loc[:, key_columns].reset_index(drop=True),
+                    "keys": keys,
                     "metadata": metadata,
                 }
             }

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
+from text_analysis_lab.translators._field_selection import canonical_key_output_names, structural_key_frame
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
@@ -232,13 +233,16 @@ class PatternExtractor(BaseTranslator):
         sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
-        _ = sources, mode
+        _ = mode
         if params:
             raise OperatorError(
                 "PatternExtractor does not accept operation parameters; "
                 f"got {sorted(params)}."
             )
-        return {}
+        source = _single_source(sources)
+        return {"key_output_names": canonical_key_output_names(
+            source, metadata_mode=self.metadata_mode, translator="PatternExtractor"
+        )}
 
     def input_request(
         self,
@@ -325,17 +329,20 @@ class PatternExtractor(BaseTranslator):
         if not isinstance(packet.data, pd.DataFrame):
             raise ArtifactError("PatternExtractor expected a table-form DataFrame batch.")
         frame = packet.data
-        keys = [str(name) for name in packet.primary_key]
-        self._validate_key_collisions(keys)
+        self._validate_key_collisions(packet.primary_key)
+        keys = structural_key_frame(
+            frame, packet.primary_key,
+            output_names=request.params.get("key_output_names"),
+            translator="PatternExtractor",
+        )
         source_field = self._source_field or self.field
-        missing = [name for name in [*keys, source_field] if name not in frame]
-        if missing:
-            raise ArtifactError(f"PatternExtractor source batch is missing {missing}.")
+        if source_field not in frame:
+            raise ArtifactError(f"PatternExtractor source batch is missing {source_field!r}.")
         extracted = self.translate(frame[source_field])
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
-                    "keys": frame.loc[:, keys].reset_index(drop=True),
+                    "keys": keys,
                     **{
                         domain: values.reset_index(drop=True)
                         for domain, values in extracted.items()

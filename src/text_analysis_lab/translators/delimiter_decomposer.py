@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from text_analysis_lab.core.errors import ArtifactError, OperatorError
+from text_analysis_lab.translators._field_selection import canonical_key_output_names, structural_key_frame
 from text_analysis_lab.core.operator import (
     BaseTranslator,
     BatchResult,
@@ -161,12 +162,15 @@ class DelimiterDecomposer(BaseTranslator):
         sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
     ) -> Mapping[str, Any]:
-        _ = sources, mode
+        _ = mode
         if params:
             raise OperatorError(
                 f"DelimiterDecomposer does not accept operation parameters; got {sorted(params)}."
             )
-        return {}
+        source = _single_source(sources)
+        return {"key_output_names": canonical_key_output_names(
+            source, metadata_mode=self.metadata_mode, translator="DelimiterDecomposer"
+        )}
 
     def input_request(
         self,
@@ -207,10 +211,14 @@ class DelimiterDecomposer(BaseTranslator):
         _ = mode, request
         packet = _single_input(inputs)
         frame = _require_frame(packet.data)
-        key_columns = [str(name) for name in packet.primary_key]
+        keys = structural_key_frame(
+            frame, packet.primary_key,
+            output_names=request.params.get("key_output_names"),
+            translator="DelimiterDecomposer",
+        )
         missing = [
             name
-            for name in [*key_columns, self.text_field]
+            for name in [self.text_field]
             if name not in frame.columns
         ]
         if missing:
@@ -227,7 +235,7 @@ class DelimiterDecomposer(BaseTranslator):
         if len(source_positions) == 0:
             return BatchResult(outputs={})
 
-        keys = frame.iloc[source_positions].loc[:, key_columns].reset_index(drop=True)
+        keys = keys.iloc[source_positions].reset_index(drop=True)
         keys[self.new_key] = decomposed["segment_ids"]
         data = pd.DataFrame(
             {
