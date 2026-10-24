@@ -12,6 +12,7 @@ import json
 import os
 import string
 from collections.abc import Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
@@ -244,10 +245,16 @@ class OpenAIResponsesTranslator(BaseTranslator):
                 "so completed API calls can be resumed without duplicate billing."
             )
         raw_record = frame.iloc[0].to_dict()
-        record = {
-            name: raw_record[output_name]
-            for name, output_name in self._prompt_input_names.items()
-        }
+        # Standalone translate_batch accepts an ordinary record without a
+        # preceding artifact binding. Bound project runs use only their
+        # canonical packet labels, even when keys/data/metadata collide.
+        record = (
+            {
+                name: raw_record[output_name]
+                for name, output_name in self._prompt_input_names.items()
+            }
+            if self._prompt_input_names else raw_record
+        )
         translated = self.translate(record)
         keys = frame.loc[:, list(packet.primary_key)].reset_index(drop=True)
         return BatchResult(
@@ -378,6 +385,52 @@ class OpenAIResponsesTranslator(BaseTranslator):
             temperature=cast(float | None, state.get("temperature")),
             store=bool(state.get("store", False)),
         )
+
+    def save_intermediate_state(
+        self,
+        intermediate_dir: Path,
+        *,
+        operator_id: str,
+        mode: TranslationMode,
+        route: RunRoute,
+    ) -> None:
+        """Checkpoint source bindings for resumable per-row API requests."""
+        _ = mode, route
+        intermediate_dir.mkdir(parents=True, exist_ok=True)
+        state = self.to_json_state()
+        state["prompt_input_names"] = dict(self._prompt_input_names)
+        state["data_fields"] = list(self._data_fields)
+        state["metadata_fields"] = list(self._metadata_fields)
+        state["operator_id"] = operator_id
+        (intermediate_dir / "state.json").write_text(
+            json.dumps(state, indent=2, sort_keys=True), encoding="utf-8"
+        )
+
+    @classmethod
+    def load_intermediate_state(
+        cls,
+        intermediate_dir: Path,
+        *,
+        operator_id: str,
+        mode: TranslationMode,
+        route: RunRoute,
+    ) -> OpenAIResponsesTranslator:
+        """Restore the same placeholder-to-output mapping after interruption."""
+        _ = mode, route
+        state = json.loads(
+            (intermediate_dir / "state.json").read_text(encoding="utf-8")
+        )
+        obj = cls.from_json_state(cast(Mapping[str, Any], state))
+        obj._prompt_input_names = {
+            str(name): str(output)
+            for name, output in state.get("prompt_input_names", {}).items()
+        }
+        obj._data_fields = tuple(str(name) for name in state.get("data_fields", ()))
+        obj._metadata_fields = tuple(
+            str(name) for name in state.get("metadata_fields", ())
+        )
+        obj.operator_id = operator_id
+        return obj
 
     def _bind_template_fields(self, source: BaseArtifact) -> None:
         # Simple placeholders stay user-facing raw names. Bind each one to
