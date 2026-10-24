@@ -188,6 +188,7 @@ def merge(
             batches = source.query(
                 key_columns=True,
                 data_columns=False,
+        include_data=False,
                 metadata_columns=False,
                 metadata_mode="none",
                 order_by="_position",
