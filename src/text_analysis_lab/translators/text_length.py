@@ -141,7 +141,13 @@ class TextLength(BaseTranslator):
                 exact = [col for col in available if col["namespace"] in {"data", "metadata"}
                          and col["output_name"] == field]
                 if not exact:
-                    data_name = scope.data_output_name(field)
+                    try:
+                        data_name = scope.data_output_name(field)
+                    except ValueError as exc:
+                        raise OperatorError(
+                            f"TextLength field {field!r} is unavailable "
+                            f"in metadata_mode={self.metadata_mode!r}."
+                        ) from exc
                     exact = [col for col in available if col["namespace"] == "data"
                              and col["output_name"] == data_name]
                 if len(exact) != 1:
