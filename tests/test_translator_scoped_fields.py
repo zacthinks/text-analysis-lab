@@ -186,3 +186,62 @@ def test_scoped_translators_preserve_key_when_data_has_same_name(tmp_path):
         assert split["part"].tolist() == ["Ada", "Hello", "Bob", "Bye"]
     finally:
         project.close()
+
+
+def test_regex_cleaner_output_can_share_structural_key_name_and_reopen(tmp_path):
+    project_path = tmp_path / "regex_key_output_collision"
+    project = teal.Project.create(project_path, name="regex_key_output_collision")
+    output_id = None
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"text": [1, 2]}),
+            "data": pd.DataFrame({"text": ["A B", "C D"]}),
+        }], artifact_type="table", primary_key="text")
+        result = project.translate(
+            RegexCleaner(
+                fields={"data.text": "text"},
+                rules=[{"pattern": " ", "replacement": "_"}],
+            ), source,
+        )["output"]
+        output_id = result.artifact_id
+        frame = result.query(form="table")
+        assert frame["text"].tolist() == [1, 2]
+        assert frame["data.text"].tolist() == ["A_B", "C_D"]
+    finally:
+        project.close()
+    reopened = teal.Project.open(project_path)
+    try:
+        frame = reopened.get_artifact(output_id).query(form="table")
+        assert frame["text"].tolist() == [1, 2]
+        assert frame["data.text"].tolist() == ["A_B", "C_D"]
+    finally:
+        reopened.close()
+
+
+def test_pattern_extractor_data_output_can_share_key_name_and_reopen(tmp_path):
+    from text_analysis_lab.translators import PatternExtractor
+
+    project_path = tmp_path / "pattern_key_output_collision"
+    project = teal.Project.create(project_path, name="pattern_key_output_collision")
+    output_id = None
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"text": [3, 4]}),
+            "data": pd.DataFrame({"utterance": ["Ada", "Bob"]}),
+        }], artifact_type="table", primary_key="text")
+        result = project.translate(
+            PatternExtractor(r"(?P<data_text>\\w+)", field="utterance"), source
+        )["output"]
+        output_id = result.artifact_id
+        frame = result.query(form="table")
+        assert frame["text"].tolist() == [3, 4]
+        assert frame["data.text"].tolist() == ["Ada", "Bob"]
+    finally:
+        project.close()
+    reopened = teal.Project.open(project_path)
+    try:
+        frame = reopened.get_artifact(output_id).query(form="table")
+        assert frame["text"].tolist() == [3, 4]
+        assert frame["data.text"].tolist() == ["Ada", "Bob"]
+    finally:
+        reopened.close()
