@@ -163,7 +163,9 @@ class TextLength(BaseTranslator):
         # Only an existing metadata identity is a duplicate metadata output.
         # Structural keys and representation data may legitimately use the same
         # base label: QueryScope will qualify the new non-key output as needed.
-        full_metadata = QueryScope(source, metadata_mode="full").columns()["columns"]
+        full_metadata = QueryScope(
+            source, include_data=False, metadata_mode="full"
+        ).columns()["columns"]
         existing_metadata = {
             str(column["base_name"])
             for column in full_metadata
