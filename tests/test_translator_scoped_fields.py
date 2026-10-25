@@ -358,3 +358,64 @@ def test_pattern_data_only_works_when_full_metadata_scope_cannot_resolve(tmp_pat
         assert frame["name"].tolist() == ["Ada", "Bob"]
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize("operation", ["length", "pattern"])
+def test_metadata_output_checks_ignore_unresolvable_source_data_scope(tmp_path, operation):
+    """Metadata overlap discovery must exclude data from its naming universe."""
+    from text_analysis_lab.core.errors import QueryError
+    from text_analysis_lab.translators import PatternExtractor
+
+    project_path = tmp_path / f"metadata_scope_{operation}"
+    project = teal.Project.create(project_path, name=f"metadata_scope_{operation}")
+    output_id = None
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"data.text": [21, 22]}),
+            "data": pd.DataFrame({"text": ["Ada", "Bob"]}),
+            "metadata": pd.DataFrame({"text": ["noise-a", "noise-b"]}),
+        }], artifact_type="table", primary_key="data.text")
+        assert source.query_columns(metadata_mode="none")["data"] == ["text"]
+        with pytest.raises(QueryError, match="Could not disambiguate"):
+            source.query_columns(metadata_mode="full")
+        metadata_inventory = source.query_columns(
+            include_data=False, metadata_mode="full"
+        )
+        assert any(
+            col["namespace"] == "metadata" and col["base_name"] == "text"
+            for col in metadata_inventory["columns"]
+        )
+
+        translator = (
+            TextLength({"text": "characters"})
+            if operation == "length" else
+            PatternExtractor(r"(?P<metadata_speaker>\w+)", field="text",
+                             metadata_mode="none")
+        )
+        result = project.translate(translator, source)["output"]
+        output_id = result.artifact_id
+        frame = result.query(
+            data_columns=False, metadata_columns=True,
+            metadata_mode="local", form="table"
+        )
+        assert frame["data.text"].tolist() == [21, 22]
+        if operation == "length":
+            assert frame["text_characters"].tolist() == [3, 3]
+        else:
+            assert frame["speaker"].tolist() == ["Ada", "Bob"]
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(project_path)
+    try:
+        frame = reopened.get_artifact(output_id).query(
+            data_columns=False, metadata_columns=True,
+            metadata_mode="local", form="table"
+        )
+        assert frame["data.text"].tolist() == [21, 22]
+        if operation == "length":
+            assert frame["text_characters"].tolist() == [3, 3]
+        else:
+            assert frame["speaker"].tolist() == ["Ada", "Bob"]
+    finally:
+        reopened.close()
