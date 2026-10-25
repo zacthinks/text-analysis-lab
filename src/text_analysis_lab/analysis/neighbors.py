@@ -17,6 +17,7 @@ from text_analysis_lab.core.errors import (
     UnsupportedArtifactOperationError,
 )
 from text_analysis_lab.core.lineage import is_prefix
+from text_analysis_lab.core.query_scope import QueryScope
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -209,7 +210,7 @@ def _selected_context_output_columns(
         raise ArtifactError(
             "context_metadata_columns requires context_metadata_mode='local' or 'full'."
         )
-    info = context_artifact.query_columns(metadata_mode=metadata_mode)
+    info = QueryScope(context_artifact, metadata_mode=metadata_mode).columns()
     selected: list[str] = []
     for namespace, request in (("data", data_columns), ("metadata", metadata_columns)):
         if request is False:
@@ -222,11 +223,9 @@ def _selected_context_output_columns(
             names = []
             for raw in requested:
                 name = str(raw)
-                exact = [
-                    c
-                    for c in cols
-                    if name in {str(c.get("qualified_name")), str(c.get("output_name"))}
-                ]
+                exact = [c for c in cols if name == str(c.get("output_name"))]
+                if not exact:
+                    exact = [c for c in cols if name == str(c.get("qualified_name"))]
                 base = [c for c in cols if str(c.get("base_name")) == name]
                 matches = exact if exact else base
                 if len(matches) != 1:
@@ -268,11 +267,24 @@ def _append_context(
         context_artifact.position_by_key(key[0] if len(key) == 1 else key)
         for key in unique_keys
     ]
-    frame = context_artifact.query(
+    scope = QueryScope(context_artifact, metadata_mode=metadata_mode)
+    inventory = scope.columns()
+    # The structured columns inventory is the canonical schema; older
+    # artifact-like adapters need not expose redundant top-level lists.
+    data_names = {
+        str(column["output_name"])
+        for column in inventory["columns"]
+        if column["namespace"] == "data"
+    }
+    metadata_names = {
+        str(column["output_name"])
+        for column in inventory["columns"]
+        if column["namespace"] == "metadata"
+    }
+    frame = scope.query(
         key_columns=True,
-        data_columns=data_columns,
-        metadata_columns=metadata_columns,
-        metadata_mode=metadata_mode,
+        data_columns=[c for c in context_columns if c in data_names] or False,
+        metadata_columns=[c for c in context_columns if c in metadata_names] or False,
         positions=positions,
         form="table",
         include_position=False,

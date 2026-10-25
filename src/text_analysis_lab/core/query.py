@@ -166,12 +166,21 @@ def _validate_metadata_query_request(
 def _assign_view_output_names(
     pending: Sequence[dict[str, Any]],
 ) -> tuple[tuple[ViewColumn, ...], dict[str, tuple[str, ...]], dict[str, str]]:
-    names, ambiguous = resolve_names(
-        [column["base_name"] for column in pending],
-        [column["qualified_name"] for column in pending],
-        reserved_names=STRUCTURAL_COLUMNS,
+    # Keys are immutable structural labels. Resolve only non-key columns,
+    # treating both structural internal fields and raw key labels as reserved.
+    keys = [column for column in pending if column["namespace"] == "key"]
+    other = [column for column in pending if column["namespace"] != "key"]
+    resolved_other, ambiguous = resolve_names(
+        [column["base_name"] for column in other],
+        [column["qualified_name"] for column in other],
+        reserved_names=[*STRUCTURAL_COLUMNS, *(column["base_name"] for column in keys)],
         error_cls=QueryError,
     )
+    other_names = iter(resolved_other)
+    names = [
+        column["base_name"] if column["namespace"] == "key" else next(other_names)
+        for column in pending
+    ]
 
     mapping: dict[str, str] = {}
     columns: list[ViewColumn] = []
@@ -1639,19 +1648,12 @@ class QueryEngine:
                     f"keys {list(branch.key_columns)}."
                 )
 
-        def signature(view: ArtifactViewSQL) -> tuple[tuple[str, str, str], ...]:
-            # Qualified metadata names include the owning artifact ID, which may
-            # legitimately differ between disjoint branches. The UNION requires
-            # matching logical namespaces/base names and matching resolved output
-            # names; the latter still catches ambiguity-induced incompatibility.
+        def signature(view: ArtifactViewSQL) -> tuple[tuple[str, str], ...]:
+            # Source ownership changes across disjoint branches. Preserve
+            # logical fields in order without comparing owner-qualified labels.
             return tuple(
-                (
-                    column.namespace,
-                    column.base_name,
-                    column.output_name,
-                )
-                for column in view.columns
-                if column.namespace != "key"
+                (column.namespace, column.base_name)
+                for column in view.columns if column.namespace != "key"
             )
 
         expected_signature = signature(branch_views[0])
@@ -1685,19 +1687,27 @@ class QueryEngine:
             )
 
         non_key_columns = [
-            column for column in branch_views[0].columns if column.namespace != "key"
+            col for col in branch_views[0].columns if col.namespace != "key"
         ]
         if non_key_columns:
+            # Align by logical column position, *not* source-specific output
+            # labels. Each branch advertises its own canonical query names.
+            slot_names = [f"_teal_merged_field_{i}" for i in range(len(non_key_columns))]
             branch_selects: list[str] = []
             for branch in branch_views:
-                selected_names = [
-                    *current_pk,
-                    *[col.output_name for col in non_key_columns],
+                source_fields = [
+                    col for col in branch.columns if col.namespace != "key"
                 ]
-                selected_sql = ", ".join(
-                    f"b.{quote_identifier(name)} AS {quote_identifier(name)}"
-                    for name in selected_names
-                )
+                selected_sql = ", ".join([
+                    *(
+                        f"b.{quote_identifier(key)} AS {quote_identifier(key)}"
+                        for key in current_pk
+                    ),
+                    *(
+                        f"b.{quote_identifier(col.output_name)} AS {quote_identifier(slot)}"
+                        for col, slot in zip(source_fields, slot_names, strict=True)
+                    ),
+                ])
                 branch_selects.append(f"SELECT {selected_sql} FROM ({branch.sql}) b")
             ctes.append("resolved AS (" + " UNION ALL ".join(branch_selects) + ")")
             predicates = " AND ".join(
@@ -1708,18 +1718,34 @@ class QueryEngine:
 
             for index, column in enumerate(non_key_columns):
                 source_ids = {
-                    branch.columns[len(current_pk) + index].source_artifact_id
+                    [
+                        col for col in branch.columns if col.namespace != "key"
+                    ][index].source_artifact_id
                     for branch in branch_views
                 }
                 common_source_id = (
                     next(iter(source_ids)) if len(source_ids) == 1 else None
                 )
+                # Data columns have a canonical identity independent of which
+                # branch owns their values. In particular, a key/data collision
+                # must still advertise "data.<base_name>" after merging.
+                # Only metadata provenance is owner-specific: when multiple
+                # branches supply one logical metadata slot, give that slot a
+                # stable identity under the merged artifact.
+                if column.namespace == "data":
+                    qualified_name = f"data.{column.base_name}"
+                elif common_source_id is not None:
+                    qualified_name = column.qualified_name
+                else:
+                    qualified_name = (
+                        f"metadata.{artifact.artifact_id}.{index}.{column.base_name}"
+                    )
                 pending_columns.append(
                     {
                         "namespace": column.namespace,
                         "base_name": column.base_name,
-                        "qualified_name": column.qualified_name,
-                        "sql_expr": f"r.{quote_identifier(column.output_name)}",
+                        "qualified_name": qualified_name,
+                        "sql_expr": f"r.{quote_identifier(slot_names[index])}",
                         "source_artifact_id": common_source_id,
                     }
                 )
@@ -2045,11 +2071,12 @@ class QueryEngine:
         self,
         artifact: BaseArtifact,
         *,
+        include_data: bool = True,
         metadata_mode: MetadataMode = "none",
         with_artifacts: Any = None,
     ) -> dict[str, Any]:
         view = self.build_composed_view_sql(
-            artifact, metadata_mode=metadata_mode, include_data=True,
+            artifact, metadata_mode=metadata_mode, include_data=include_data,
             with_artifacts=with_artifacts,
         )
         return {
@@ -2101,34 +2128,25 @@ class QueryEngine:
             if output_name not in selected:
                 selected.append(output_name)
 
+        available = {column.output_name for column in columns}
         for name in requested_names:
-            exact_qualified = [
-                column for column in columns if column.qualified_name == name
-            ]
-            if len(exact_qualified) == 1:
-                add(exact_qualified[0].output_name)
-                continue
-
-            exact_output = [column for column in columns if column.output_name == name]
-            if len(exact_output) == 1:
-                add(exact_output[0].output_name)
-                continue
-
-            base_matches = [column for column in columns if column.base_name == name]
-            if len(base_matches) == 1:
-                add(base_matches[0].output_name)
-                continue
-            if len(base_matches) > 1:
-                options = [column.qualified_name for column in base_matches]
+            if name not in available:
+                # An ambiguous base name is never a valid selector, but it
+                # deserves a more useful diagnostic than a missing label.
+                candidates = [
+                    column.output_name for column in columns
+                    if column.base_name == name
+                ]
+                if len(candidates) > 1:
+                    raise QueryError(
+                        f"Requested {label} {name!r} is ambiguous. "
+                        f"Use one of the advertised output names: {candidates}."
+                    )
                 raise QueryError(
-                    f"Requested {label} {name!r} is ambiguous. Use one of: {options}."
+                    f"Requested {label} {name!r} is not an advertised output name "
+                    f"in this query scope. Available {label}: {sorted(available)}."
                 )
-
-            available = sorted({column.output_name for column in columns})
-            raise QueryError(
-                f"Requested {label} is not available: {name!r}. "
-                f"Available {label}: {available}."
-            )
+            add(name)
 
         return selected
 
@@ -2181,6 +2199,7 @@ class QueryEngine:
         data_columns: ColumnSelect,
         metadata_columns: ColumnSelect,
         metadata_mode: MetadataMode,
+        include_data: bool,
         where: str | None,
         order_by: str | Sequence[str] | None,
         limit: int | None,
@@ -2194,10 +2213,14 @@ class QueryEngine:
             metadata_mode=metadata_mode,
             metadata_columns=metadata_columns,
         )
+        if not include_data and _columns_requested(data_columns):
+            raise QueryError(
+                "include_data=False cannot project caller data columns."
+            )
         view = self.build_composed_view_sql(
             artifact,
             metadata_mode=metadata_mode,
-            include_data=_columns_requested(data_columns),
+            include_data=include_data,
             with_artifacts=with_artifacts,
         )
         selected = self._view_selected_columns(
@@ -2337,6 +2360,7 @@ class QueryEngine:
         data_columns: ColumnSelect = True,
         metadata_columns: ColumnSelect = False,
         metadata_mode: MetadataMode = "none",
+        include_data: bool = True,
         where: str | None = None,
         order_by: str | Sequence[str] | None = None,
         limit: int | None = None,
@@ -2353,6 +2377,7 @@ class QueryEngine:
                 data_columns=data_columns,
                 metadata_columns=metadata_columns,
                 metadata_mode=metadata_mode,
+                include_data=include_data,
                 where=where,
                 order_by=order_by,
                 limit=limit,
@@ -2388,6 +2413,7 @@ class QueryEngine:
         data_columns: ColumnSelect = True,
         metadata_columns: ColumnSelect = False,
         metadata_mode: MetadataMode = "none",
+        include_data: bool = True,
         where: str | None = None,
         order_by: str | Sequence[str] | None = None,
         limit: int | None = None,
@@ -2411,6 +2437,7 @@ class QueryEngine:
                 data_columns=data_columns,
                 metadata_columns=metadata_columns,
                 metadata_mode=metadata_mode,
+                include_data=include_data,
                 where=where,
                 order_by=order_by,
                 limit=limit,

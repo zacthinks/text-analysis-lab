@@ -70,8 +70,10 @@ def _install_source_query(monkeypatch, rows: pd.DataFrame) -> None:
 def _install_query_columns(monkeypatch, columns: list[tuple[str, str]]) -> None:
     from text_analysis_lab.core.query import QueryEngine
 
-    def fake_query_columns(self, artifact, *, metadata_mode="full"):
-        _ = self, artifact, metadata_mode
+    def fake_query_columns(
+        self, artifact, *, include_data=True, metadata_mode="full", with_artifacts=None
+    ):
+        _ = self, artifact, include_data, metadata_mode, with_artifacts
         return {
             "output": tuple(name for name, _ in columns),
             "ambiguous": {},

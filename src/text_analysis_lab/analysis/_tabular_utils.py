@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from text_analysis_lab.core.errors import ArtifactError
@@ -53,17 +53,26 @@ def resolve_tabular_fields(
         name = str(raw_name)
         if not name:
             raise ValueError("Field names must be non-empty strings.")
-        candidates = [
-            info
-            for info in columns
+        available_fields = [
+            info for info in columns
             if info["namespace"] in {"data", "metadata", "with"}
-            and name
-            in {
-                str(info["base_name"]),
-                str(info["qualified_name"]),
-                str(info["output_name"]),
-            }
         ]
+        # Exact displayed labels win over all internal identities. Otherwise,
+        # a literal dotted column could resolve to the wrong field.
+        candidates = [
+            info for info in available_fields
+            if str(info["output_name"]) == name
+        ]
+        if not candidates:
+            candidates = [
+                info for info in available_fields
+                if str(info["qualified_name"]) == name
+            ]
+        if not candidates:
+            candidates = [
+                info for info in available_fields
+                if str(info["base_name"]) == name
+            ]
         unique = {
             (str(info["namespace"]), str(info["output_name"])) for info in candidates
         }
@@ -113,30 +122,13 @@ def resolve_batch_output_names(
     *,
     with_artifacts: Any,
 ) -> tuple[ResolvedField, ...]:
-    """Map selected field identities onto the actual narrow query view.
+    """Keep field labels from the full scope used by aggregation execution.
 
-    A full-view output name can change when caller data or metadata are omitted.
-    Qualified field identities remain stable across those projections.
+    Input field selection and query execution both use metadata_mode='full',
+    include_data=True and the same attached artifacts. Projecting fewer
+    columns cannot alter those names.
     """
-    if with_artifacts is None:
-        return fields
-    data_columns, metadata_columns = batch_query_columns(fields)
-    view = artifact.project.query.build_composed_view_sql(
-        artifact,
-        metadata_mode="full" if metadata_columns is not False else "none",
-        include_data=data_columns is not False,
-        with_artifacts=with_artifacts,
-    )
-    remapped: list[ResolvedField] = []
-    for field in fields:
-        output_name = view.mapping.get(field.qualified_name)
-        if output_name is None:
-            raise ArtifactError(
-                f"Selected field {field.qualified_name!r} is not present in "
-                "the aggregation's narrow query view."
-            )
-        remapped.append(replace(field, output_name=output_name))
-    return tuple(remapped)
+    return fields
 
 
 def batch_query_columns(
@@ -145,11 +137,11 @@ def batch_query_columns(
     qualified: bool = False,
 ) -> tuple[list[str] | bool, list[str] | bool]:
     data = [
-        field.qualified_name if qualified else field.requested_name
+        field.output_name
         for field in fields if field.namespace == "data"
     ]
     metadata = [
-        field.qualified_name if qualified else field.requested_name
+        field.output_name
         for field in fields if field.namespace == "metadata"
     ]
     return (data or False, metadata or False)
@@ -157,5 +149,5 @@ def batch_query_columns(
 
 def batch_with_columns(fields: tuple[ResolvedField, ...]) -> list[str] | bool:
     """Project only fields needed by the aggregation."""
-    selected = [field.qualified_name for field in fields if field.namespace == "with"]
+    selected = [field.output_name for field in fields if field.namespace == "with"]
     return selected or False

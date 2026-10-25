@@ -29,6 +29,7 @@ from sklearn.model_selection import HalvingGridSearchCV, HalvingRandomSearchCV
 from sklearn.svm import LinearSVC
 from tqdm import tqdm
 
+from text_analysis_lab.core.query_scope import QueryScope
 from text_analysis_lab.translators.fitted_predictor import FittedPredictor
 
 
@@ -91,13 +92,18 @@ class FinalizedClassifier:
     provenance: dict[str, Any]
 
 
-def _field_request(artifact: Any, name: str) -> dict[str, Any]:
-    inventory = artifact.query_columns(metadata_mode="full")
-    matches = [
+def _field_request(inventory: Mapping[str, Any], name: str) -> dict[str, Any]:
+    candidates = [
         item for item in inventory["columns"]
         if item["namespace"] in {"key", "data", "metadata"}
-        and name in (item["base_name"], item["output_name"], item["qualified_name"])
     ]
+    # The displayed output name is authoritative, including literal dotted
+    # source field names that resemble another column's qualified identity.
+    matches = [item for item in candidates if item["output_name"] == name]
+    if not matches:
+        matches = [item for item in candidates if item["qualified_name"] == name]
+    if not matches:
+        matches = [item for item in candidates if item["base_name"] == name]
     unique = {(m["namespace"], m["qualified_name"]): m for m in matches}
     if len(unique) != 1:
         raise ValueError(
@@ -115,8 +121,10 @@ def _field_request(artifact: Any, name: str) -> dict[str, Any]:
 def _load_development_labels(
     artifact: Any, target: str, group: str | None, batch_size: int,
 ) -> tuple[list[dict[str, Any]], np.ndarray, np.ndarray | None]:
-    target_spec = _field_request(artifact, target)
-    group_spec = _field_request(artifact, group) if group is not None else None
+    scope = QueryScope(artifact, metadata_mode="full")
+    inventory = scope.columns()
+    target_spec = _field_request(inventory, target)
+    group_spec = _field_request(inventory, group) if group is not None else None
     needs = [target_spec] + ([group_spec] if group_spec else [])
     data = list(dict.fromkeys(
         s["output_name"] for s in needs if s["namespace"] == "data"
@@ -128,10 +136,9 @@ def _load_development_labels(
     keys: list[dict[str, Any]] = []
     targets: list[Any] = []
     groups: list[Any] = []
-    batches = artifact.query(
+    batches = scope.query(
         key_columns=True, data_columns=data if data else False,
         metadata_columns=metadata if metadata else False,
-        metadata_mode="full" if metadata else "none",
         form="table", iter_batches=True, batch_size=batch_size,
     )
     for frame in batches:

@@ -522,8 +522,10 @@ def keep_even_rows(packet):
 def _install_fake_query_columns(monkeypatch) -> None:
     from text_analysis_lab.core.query import QueryEngine
 
-    def fake_query_columns(self, artifact, *, metadata_mode="full"):
-        _ = self, artifact, metadata_mode
+    def fake_query_columns(
+        self, artifact, *, include_data=True, metadata_mode="full", with_artifacts=None
+    ):
+        _ = self, artifact, include_data, metadata_mode, with_artifacts
         return {
             "output": ("id", "group"),
             "ambiguous": {},

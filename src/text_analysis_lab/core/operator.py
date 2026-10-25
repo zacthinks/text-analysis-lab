@@ -83,6 +83,8 @@ class SourceRequest:
     include_position: bool = False
     # Append new fields to preserve legacy positional SourceRequest calls.
     min_batch_by: str | None = None
+    # Naming scope, independent of ColumnRequest.data output projection.
+    include_data: bool = True
 
 
 @dataclass(frozen=True)
