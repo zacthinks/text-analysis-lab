@@ -245,3 +245,116 @@ def test_pattern_extractor_data_output_can_share_key_name_and_reopen(tmp_path):
         assert frame["data.text"].tolist() == ["Ada", "Bob"]
     finally:
         reopened.close()
+
+
+def test_text_length_metadata_name_can_match_key_and_data_and_reopen(tmp_path):
+    project_path = tmp_path / "length_output_namespace_collision"
+    project = teal.Project.create(project_path, name="length_output_namespace_collision")
+    output_id = None
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"text_characters": [1, 2]}),
+            "data": pd.DataFrame({
+                "text": ["abc", "hello"],
+                "text_characters": ["original-A", "original-B"],
+            }),
+        }], artifact_type="table", primary_key="text_characters")
+        result = project.translate(
+            TextLength({"text": "characters"}), source
+        )["output"]
+        output_id = result.artifact_id
+        for artifact in (result,):
+            names = artifact.query_columns(metadata_mode="local")["columns"]
+            key_label = next(x["output_name"] for x in names if x["namespace"] == "key")
+            metadata_label = next(x["output_name"] for x in names if x["namespace"] == "metadata")
+            data_label = next(x["output_name"] for x in names if x["namespace"] == "data"
+                              and x["base_name"] == "text_characters")
+            frame = artifact.query(metadata_mode="local", metadata_columns=True, form="table")
+            assert key_label == "text_characters"
+            assert metadata_label not in {key_label, data_label}
+            assert frame[key_label].tolist() == [1, 2]
+            assert frame[metadata_label].tolist() == [3, 5]
+            assert frame[data_label].tolist() == ["original-A", "original-B"]
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(project_path)
+    try:
+        artifact = reopened.get_artifact(output_id)
+        names = artifact.query_columns(metadata_mode="local")["columns"]
+        meta = next(x["output_name"] for x in names if x["namespace"] == "metadata")
+        data = next(x["output_name"] for x in names if x["namespace"] == "data"
+                    and x["base_name"] == "text_characters")
+        frame = artifact.query(metadata_mode="local", metadata_columns=True, form="table")
+        assert frame["text_characters"].tolist() == [1, 2]
+        assert frame[meta].tolist() == [3, 5]
+        assert frame[data].tolist() == ["original-A", "original-B"]
+    finally:
+        reopened.close()
+
+
+def test_delimiter_extended_key_can_match_input_data_field_and_reopen(tmp_path):
+    project_path = tmp_path / "delimiter_key_data_collision"
+    project = teal.Project.create(project_path, name="delimiter_key_data_collision")
+    output_id = None
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"doc_id": [8, 9]}),
+            "data": pd.DataFrame({"segment_id": ["one|two", "red|blue"]}),
+        }], artifact_type="table", primary_key="doc_id")
+        target = project.translate(
+            DelimiterDecomposer(
+                text_field="segment_id", new_key="segment_id",
+                output_text_field="part", delimiter="|",
+            ), source
+        )["output"]
+        output_id = target.artifact_id
+        frame = target.query(form="table")
+        assert frame["doc_id"].tolist() == [8, 8, 9, 9]
+        assert frame["segment_id"].tolist() == [0, 1, 0, 1]
+        assert frame["part"].tolist() == ["one", "two", "red", "blue"]
+    finally:
+        project.close()
+    reopened = teal.Project.open(project_path)
+    try:
+        frame = reopened.get_artifact(output_id).query(form="table")
+        assert frame["doc_id"].tolist() == [8, 8, 9, 9]
+        assert frame["segment_id"].tolist() == [0, 1, 0, 1]
+        assert frame["part"].tolist() == ["one", "two", "red", "blue"]
+    finally:
+        reopened.close()
+
+
+def test_pattern_data_only_works_when_full_metadata_scope_cannot_resolve(tmp_path):
+    from text_analysis_lab.core.errors import QueryError
+    from text_analysis_lab.translators import PatternExtractor
+
+    project_path = tmp_path / "pattern_narrow_scope"
+    project = teal.Project.create(project_path, name="pattern_narrow_scope")
+    output_id = None
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"data.text": [21, 22]}),
+            "data": pd.DataFrame({"text": ["Ada", "Bob"]}),
+            "metadata": pd.DataFrame({"text": ["noise-a", "noise-b"]}),
+        }], artifact_type="table", primary_key="data.text")
+        assert source.query_columns(metadata_mode="none")["data"] == ["text"]
+        with pytest.raises(QueryError, match="Could not disambiguate"):
+            source.query_columns(metadata_mode="full")
+        output = project.translate(
+            PatternExtractor(r"(?P<data_name>\w+)", field="text", metadata_mode="none"),
+            source,
+        )["output"]
+        output_id = output.artifact_id
+        frame = output.query(form="table")
+        assert frame["data.text"].tolist() == [21, 22]
+        assert frame["name"].tolist() == ["Ada", "Bob"]
+    finally:
+        project.close()
+    reopened = teal.Project.open(project_path)
+    try:
+        frame = reopened.get_artifact(output_id).query(form="table")
+        assert frame["data.text"].tolist() == [21, 22]
+        assert frame["name"].tolist() == ["Ada", "Bob"]
+    finally:
+        reopened.close()
