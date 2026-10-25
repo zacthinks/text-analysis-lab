@@ -1692,7 +1692,18 @@ class QueryEngine:
         if non_key_columns:
             # Align by logical column position, *not* source-specific output
             # labels. Each branch advertises its own canonical query names.
-            slot_names = [f"_teal_merged_field_{i}" for i in range(len(non_key_columns))]
+            # DuckDB treats even quoted identifiers case-insensitively. Internal
+            # union slots must not shadow a user-defined primary key (or a
+            # previously allocated slot), otherwise the join could read key
+            # values instead of representation data.
+            used_names = {name.casefold() for name in (*current_pk, *STRUCTURAL_COLUMNS)}
+            slot_names: list[str] = []
+            for index in range(len(non_key_columns)):
+                slot = f"_teal_merged_field_{index}"
+                while slot.casefold() in used_names:
+                    slot = f"_{slot}"
+                used_names.add(slot.casefold())
+                slot_names.append(slot)
             branch_selects: list[str] = []
             for branch in branch_views:
                 source_fields = [
