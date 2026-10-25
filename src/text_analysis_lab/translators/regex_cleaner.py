@@ -278,8 +278,6 @@ class RegexCleaner(BaseTranslator):
             outputs = [self.fields[k] for k, v in namespaces.items() if v == namespace]
             if len(set(outputs)) != len(outputs):
                 raise OperatorError(f"RegexCleaner duplicate {namespace} output destinations: {outputs}.")
-        if any(v in source.primary_key for v in self.fields.values()):
-            raise OperatorError("RegexCleaner outputs cannot collide with primary keys.")
         self._field_namespaces = namespaces
         self._input_labels = input_labels
         return scope.source_request(
