@@ -230,7 +230,7 @@ def test_pattern_extractor_data_output_can_share_key_name_and_reopen(tmp_path):
             "data": pd.DataFrame({"utterance": ["Ada", "Bob"]}),
         }], artifact_type="table", primary_key="text")
         result = project.translate(
-            PatternExtractor(r"(?P<data_text>\\w+)", field="utterance"), source
+            PatternExtractor(r"(?P<data_text>\w+)", field="utterance"), source
         )["output"]
         output_id = result.artifact_id
         frame = result.query(form="table")
