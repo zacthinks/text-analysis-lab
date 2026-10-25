@@ -285,7 +285,9 @@ class PatternExtractor(BaseTranslator):
             if domain == "metadata"
         }
         if metadata_outputs:
-            full_columns = QueryScope(source, metadata_mode="full").columns()
+            full_columns = QueryScope(
+                source, include_data=False, metadata_mode="full"
+            ).columns()
             existing_metadata = {
                 str(col["base_name"])
                 for col in full_columns.get("columns", [])
