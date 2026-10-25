@@ -261,11 +261,6 @@ class DelimiterDecomposer(BaseTranslator):
             raise ArtifactError(
                 f"DelimiterDecomposer source batch is missing columns {missing}."
             )
-        if self.new_key in frame.columns:
-            raise ArtifactError(
-                f"DelimiterDecomposer new_key {self.new_key!r} collides with a source column."
-            )
-
         decomposed = self.translate(frame[input_name])
         source_positions = decomposed["source_positions"]
         if len(source_positions) == 0:
