@@ -254,7 +254,6 @@ class PatternExtractor(BaseTranslator):
         source = _single_source(sources)
         if source.artifact_type.value not in {"table", "jsonl"}:
             raise OperatorError("PatternExtractor requires a table or jsonl source.")
-        self._validate_key_collisions(source.primary_key)
 
         scope = QueryScope(source, metadata_mode=self.metadata_mode)
         available = scope.columns()
@@ -328,7 +327,6 @@ class PatternExtractor(BaseTranslator):
         if not isinstance(packet.data, pd.DataFrame):
             raise ArtifactError("PatternExtractor expected a table-form DataFrame batch.")
         frame = packet.data
-        self._validate_key_collisions(packet.primary_key)
         # Structural key labels are never qualified in QueryScope.
         key_names = list(packet.primary_key)
         missing_keys = [name for name in key_names if name not in frame.columns]
@@ -352,19 +350,6 @@ class PatternExtractor(BaseTranslator):
                 }
             }
         )
-
-    def _validate_key_collisions(self, primary_key: Sequence[str]) -> None:
-        overlap = sorted(
-            {
-                field
-                for _name, _domain, field in self._destinations
-                if field in set(primary_key)
-            }
-        )
-        if overlap:
-            raise OperatorError(
-                f"PatternExtractor output fields collide with primary keys: {overlap}."
-            )
 
     def handle_batch_result(
         self,
