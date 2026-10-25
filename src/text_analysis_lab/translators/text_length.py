@@ -24,7 +24,7 @@ from text_analysis_lab.core.operator import (
     TranslationMode,
     TranslationRequest,
 )
-from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL, MetadataMode
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -45,15 +45,44 @@ class TextLength(BaseTranslator):
     """
 
     operation_type = "translate"
+    frozen_runtime_fields = frozenset({"_input_labels"})
 
     def __init__(
         self,
-        lengths: LengthRequest,
+        lengths: LengthRequest | None = None,
         *,
+        fields: Sequence[str] | None = None,
+        units: LengthUnit | Sequence[LengthUnit] = "characters",
+        output_field: str | None = None,
+        delimiter: str = " ",
+        metadata_mode: MetadataMode = "none",
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
-        self.lengths = _normalize_lengths(lengths)
+        if metadata_mode not in {"none", "local", "full"}:
+            raise ValueError("metadata_mode must be 'none', 'local', or 'full'.")
+        if (lengths is None) == (fields is None):
+            raise ValueError("Provide exactly one of lengths or fields.")
+        if not isinstance(delimiter, str):
+            raise TypeError("delimiter must be a string.")
+        self.metadata_mode = metadata_mode
+        self.delimiter = delimiter
+        self.output_field = output_field
+        self.combined_fields: tuple[str, ...] | None = None
+        self._input_labels: dict[str, str] = {}
+        if fields is not None:
+            if (isinstance(fields, str) or not fields
+                    or any(not isinstance(v, str) or not v for v in fields)
+                    or len(set(fields)) != len(fields)):
+                raise ValueError("fields must be a nonempty sequence of distinct field labels.")
+            if not isinstance(output_field, str) or not output_field:
+                raise ValueError("Combined TextLength requires an output_field.")
+            self.combined_fields = tuple(fields)
+            self.lengths = _normalize_lengths({output_field: units})
+        else:
+            if output_field is not None or delimiter != " ":
+                raise ValueError("output_field and delimiter require combined fields.")
+            self.lengths = _normalize_lengths(cast(LengthRequest, lengths))
 
     @property
     def supports_parallel_translate(self) -> bool:
@@ -102,24 +131,29 @@ class TextLength(BaseTranslator):
         if source.artifact_type.value not in {"table", "jsonl"}:
             raise OperatorError("TextLength requires a table or jsonl artifact source.")
 
-        # Text inputs are materialized without inherited metadata. Resolve
-        # those inputs in the same scope; inspect the full scope separately
-        # only to guard against output metadata collisions.
-        scope = QueryScope(source, metadata_mode="none")
-        available = scope.columns()
-        available_data = {str(name) for name in available["data"]}
-        resolved_data: dict[str, str] = {}
-        missing: list[str] = []
-        for field in self.lengths:
-            try:
-                resolved_data[field] = scope.data_output_name(field)
-            except ValueError:
-                missing.append(field)
-        if missing:
-            raise OperatorError(
-                f"TextLength source data field(s) are unavailable: {missing}. "
-                f"Available data fields: {sorted(available_data)}."
-            )
+        scope = QueryScope(source, metadata_mode=self.metadata_mode)
+        selected = list(self.combined_fields) if self.combined_fields else list(self.lengths)
+        labels: dict[str, str] = {}
+        domains: dict[str, str] = {}
+        if callable(getattr(source, "query_columns", None)):
+            available = scope.columns()["columns"]
+            for field in selected:
+                exact = [col for col in available if col["namespace"] in {"data", "metadata"}
+                         and col["output_name"] == field]
+                if not exact:
+                    data_name = scope.data_output_name(field)
+                    exact = [col for col in available if col["namespace"] == "data"
+                             and col["output_name"] == data_name]
+                if len(exact) != 1:
+                    raise OperatorError(f"TextLength field {field!r} is unavailable or ambiguous.")
+                labels[field] = str(exact[0]["output_name"])
+                domains[field] = str(exact[0]["namespace"])
+        elif self.metadata_mode == "none":
+            labels = {field: field for field in selected}
+            domains = {field: "data" for field in selected}
+        else:
+            raise OperatorError("TextLength requires query_columns for metadata input.")
+        self._input_labels = labels
         existing = {
             str(name) for name in QueryScope(source, metadata_mode="full").columns()["output"]
         }
@@ -135,7 +169,11 @@ class TextLength(BaseTranslator):
         return scope.source_request(
             artifact_type=("table", "jsonl"),
             mode="batches",
-            columns=ColumnRequest(keys=True, data=list(resolved_data.values()), metadata=False),
+            columns=ColumnRequest(
+                keys=True,
+                data=[labels[field] for field in selected if domains[field] == "data"] or False,
+                metadata=[labels[field] for field in selected if domains[field] == "metadata"] or False,
+            ),
             batch_size=request.batch_size if request.batch_size is not None else 10_000,
             form="table",
             include_position=False,
@@ -176,13 +214,26 @@ class TextLength(BaseTranslator):
         return measured
 
     def _measure_frame(self, frame: pd.DataFrame) -> pd.DataFrame:
-        missing = [field for field in self.lengths if field not in frame.columns]
+        selected = self.combined_fields if self.combined_fields is not None else self.lengths
+        missing = [field for field in selected if field not in frame.columns]
         if missing:
             raise ValueError(f"TextLength input is missing field(s) {missing}.")
 
         metadata: dict[str, Any] = {}
+        if self.combined_fields is not None:
+            assert self.output_field is not None
+            pieces = [frame[field].fillna("").astype("string") for field in self.combined_fields]
+            joined = pieces[0]
+            for piece in pieces[1:]:
+                joined = joined + self.delimiter + piece
+            sources = {self.output_field: joined}
+        else:
+            sources = {
+                field: frame[field].fillna("").astype("string")
+                for field in self.lengths
+            }
         for field, units in self.lengths.items():
-            source = frame[field].fillna("").astype("string")
+            source = sources[field]
             for unit in units:
                 base_unit = unit.removeprefix("log_")
                 if base_unit == "characters":
@@ -212,25 +263,22 @@ class TextLength(BaseTranslator):
             raise ArtifactError("TextLength expected a table-form pandas batch.")
         frame = packet.data
         key_columns = [str(name) for name in packet.primary_key]
-        # Recover configured raw names from the packet's scoped data labels.
-        # Key/data collisions reserve the raw label for the structural key.
-        data_inputs = {
-            field: (f"data.{field}" if field in key_columns else field)
-            for field in self.lengths
+        configured = self.combined_fields if self.combined_fields is not None else self.lengths
+        inputs_by_name = {
+            field: self._input_labels.get(
+                field, f"data.{field}" if field in key_columns else field
+            )
+            for field in configured
         }
-        missing = [
-            name for name in key_columns if name not in frame
-        ] + [
-            field for field, output in data_inputs.items() if output not in frame
+        missing = [name for name in key_columns if name not in frame] + [
+            label for label in inputs_by_name.values() if label not in frame
         ]
         if missing:
-            raise ArtifactError(
-                f"TextLength source batch is missing columns {missing}."
-            )
-
-        selected = pd.DataFrame({
-            field: frame[output] for field, output in data_inputs.items()
-        }, index=frame.index)
+            raise ArtifactError(f"TextLength source batch is missing columns {missing}.")
+        selected = pd.DataFrame(
+            {field: frame[label] for field, label in inputs_by_name.items()},
+            index=frame.index,
+        )
         metadata = self._measure_frame(selected).reset_index(drop=True)
 
         return BatchResult(
@@ -271,19 +319,37 @@ class TextLength(BaseTranslator):
         _ = request
         if mode != "translate":
             raise OperatorError("TextLength workers support translate mode only.")
-        return TextLength(self.lengths)
+        worker = self.from_json_state(self.to_json_state())
+        worker._input_labels = dict(self._input_labels)
+        return worker
 
     def to_json_state(self) -> dict[str, Any]:
-        return {
-            "lengths": {field: list(units) for field, units in self.lengths.items()}
+        state: dict[str, Any] = {
+            "lengths": {field: list(units) for field, units in self.lengths.items()},
+            "metadata_mode": self.metadata_mode,
         }
+        if self.combined_fields is not None:
+            state["fields"] = list(self.combined_fields)
+            state["output_field"] = self.output_field
+            state["delimiter"] = self.delimiter
+        return state
 
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> TextLength:
         raw = state.get("lengths")
         if not isinstance(raw, Mapping):
             raise OperatorError("TextLength state is missing its lengths mapping.")
-        return cls(cast(LengthRequest, raw))
+        metadata_mode = cast(MetadataMode, state.get("metadata_mode", "none"))
+        if "fields" in state:
+            output_field = str(state["output_field"])
+            return cls(
+                fields=cast(Sequence[str], state["fields"]),
+                units=cast(Sequence[LengthUnit], raw[output_field]),
+                output_field=output_field,
+                delimiter=str(state.get("delimiter", " ")),
+                metadata_mode=metadata_mode,
+            )
+        return cls(cast(LengthRequest, raw), metadata_mode=metadata_mode)
 
     def save_intermediate_state(
         self,
@@ -299,6 +365,7 @@ class TextLength(BaseTranslator):
         intermediate_dir.mkdir(parents=True, exist_ok=True)
         payload = self.to_json_state()
         payload["operator_id"] = operator_id
+        payload["input_labels"] = self._input_labels
         (intermediate_dir / "state.json").write_text(
             json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
         )
@@ -320,6 +387,7 @@ class TextLength(BaseTranslator):
         )
         obj = cls.from_json_state(cast(Mapping[str, Any], state))
         obj.operator_id = operator_id
+        obj._input_labels = dict(state.get("input_labels", {}))
         return obj
 
 
