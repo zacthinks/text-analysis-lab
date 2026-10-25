@@ -616,3 +616,39 @@ def test_merge_preserves_canonical_data_name_and_translator_values(tmp_path):
         ].tolist() == ["first word", "second line", "third word", "fourth line"]
     finally:
         reopened.close()
+
+
+def test_merge_internal_slot_alias_does_not_shadow_primary_key(tmp_path: Path) -> None:
+    """Merge SQL union slots must remain distinct from legitimate key labels."""
+    project_path = tmp_path / "merge_slot_key_collision"
+    key_name = "_teal_merged_field_0"
+    project = teal.Project.create(project_path, name="merge_slot_key_collision")
+    merged_id = None
+    try:
+        left = _register_table(
+            project, artifact_id="art_slot_left", label="left",
+            keys=pd.DataFrame({key_name: [1, 2]}),
+            data=pd.DataFrame({"score": [10, 20]}),
+        )
+        right = _register_table(
+            project, artifact_id="art_slot_right", label="right",
+            keys=pd.DataFrame({key_name: [3, 4]}),
+            data=pd.DataFrame({"score": [30, 40]}),
+        )
+        merged = project.merge([left, right])
+        merged_id = merged.artifact_id
+        frame = merged.query(form="table", order_by="_position")
+        assert frame[key_name].tolist() == [1, 2, 3, 4]
+        assert frame["score"].tolist() == [10, 20, 30, 40]
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(project_path)
+    try:
+        frame = reopened.get_artifact(merged_id).query(
+            form="table", order_by="_position"
+        )
+        assert frame[key_name].tolist() == [1, 2, 3, 4]
+        assert frame["score"].tolist() == [10, 20, 30, 40]
+    finally:
+        reopened.close()
