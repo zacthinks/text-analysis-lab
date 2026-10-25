@@ -269,7 +269,9 @@ def test_persisted_data_and_key_same_name_uses_advertised_label_and_reopens(tmp_
             PatternExtractor(PATTERN, field="data.text"), source
         )["output"]
         output_id = extracted.artifact_id
-        result = extracted.query(metadata_mode="local", form="table")
+        result = extracted.query(
+            metadata_columns=True, metadata_mode="local", form="table"
+        )
         assert result["text"].tolist() == [101, 102]
         assert result["utterance"].tolist() == ["Hello", "Bye"]
         assert result["speaker"].tolist() == ["Ada", "Bob"]
@@ -279,7 +281,7 @@ def test_persisted_data_and_key_same_name_uses_advertised_label_and_reopens(tmp_
     reopened = teal.Project.open(project_path)
     try:
         result = reopened.get_artifact(output_id).query(
-            metadata_mode="local", form="table"
+            metadata_columns=True, metadata_mode="local", form="table"
         )
         assert result["text"].tolist() == [101, 102]
         assert result["utterance"].tolist() == ["Hello", "Bye"]
