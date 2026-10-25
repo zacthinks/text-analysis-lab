@@ -194,7 +194,13 @@ class DelimiterDecomposer(BaseTranslator):
             if not matched:
                 # Retain the legacy data-field spelling for callers predating
                 # canonical query labels; never guess metadata ownership.
-                data_field = scope.data_output_name(self.text_field)
+                try:
+                    data_field = scope.data_output_name(self.text_field)
+                except ValueError as exc:
+                    raise OperatorError(
+                        f"DelimiterDecomposer field {self.text_field!r} is unavailable "
+                        f"in metadata_mode={self.metadata_mode!r}."
+                    ) from exc
                 matched = [
                     col for col in columns
                     if col["namespace"] == "data"
