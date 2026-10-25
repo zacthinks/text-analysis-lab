@@ -160,10 +160,16 @@ class TextLength(BaseTranslator):
         else:
             raise OperatorError("TextLength requires query_columns for metadata input.")
         self._input_labels = labels
-        existing = {
-            str(name) for name in QueryScope(source, metadata_mode="full").columns()["output"]
+        # Only an existing metadata identity is a duplicate metadata output.
+        # Structural keys and representation data may legitimately use the same
+        # base label: QueryScope will qualify the new non-key output as needed.
+        full_metadata = QueryScope(source, metadata_mode="full").columns()["columns"]
+        existing_metadata = {
+            str(column["base_name"])
+            for column in full_metadata
+            if column["namespace"] == "metadata"
         }
-        collisions = sorted(existing.intersection(self.output_columns))
+        collisions = sorted(existing_metadata.intersection(self.output_columns))
         if collisions:
             raise OperatorError(
                 "TextLength output metadata would collide with existing source "
