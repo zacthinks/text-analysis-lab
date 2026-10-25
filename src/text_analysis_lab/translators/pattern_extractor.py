@@ -277,26 +277,26 @@ class PatternExtractor(BaseTranslator):
         self._source_field = str(selected["output_name"])
         namespace = str(selected["namespace"])
 
-        # Output collision checks consider all inherited metadata regardless
-        # of whether it was included in the selected input view.
-        full_columns = QueryScope(source, metadata_mode="full").columns()
-        # Creating a fresh data representation is allowed (e.g. data_text).
-        # Creating same-named local metadata that shadows inherited metadata is
-        # not: full-lineage queries would then be ambiguous.
-        existing_metadata = {
-            str(col["base_name"])
-            for col in full_columns.get("columns", [])
-            if col.get("namespace") == "metadata"
-        }
-        metadata_overlap = sorted(
+        # A data-only extraction must not require a broader metadata scope
+        # that can be invalid even when this operation's narrower scope works.
+        # Metadata destinations alone need the inherited-metadata overlap check.
+        metadata_outputs = {
             field for _name, domain, field in self._destinations
-            if domain == "metadata" and field in existing_metadata
-        )
-        if metadata_overlap:
-            raise OperatorError(
-                "PatternExtractor metadata output conflicts with existing source "
-                f"metadata: {metadata_overlap}."
-            )
+            if domain == "metadata"
+        }
+        if metadata_outputs:
+            full_columns = QueryScope(source, metadata_mode="full").columns()
+            existing_metadata = {
+                str(col["base_name"])
+                for col in full_columns.get("columns", [])
+                if col.get("namespace") == "metadata"
+            }
+            metadata_overlap = sorted(metadata_outputs.intersection(existing_metadata))
+            if metadata_overlap:
+                raise OperatorError(
+                    "PatternExtractor metadata output conflicts with existing source "
+                    f"metadata: {metadata_overlap}."
+                )
 
         return scope.source_request(
             artifact_type=("table", "jsonl"),
