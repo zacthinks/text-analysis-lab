@@ -142,3 +142,47 @@ def test_regex_standalone_mixed_preview_matches_persisted(tmp_path):
         assert only.translate({"metadata": values[[metadata_label]]})["metadata"]["clean_metadata"].tolist() == ["Alice|Bob", "Carol|Dave"]
     finally:
         project.close()
+
+
+def test_scoped_translators_preserve_key_when_data_has_same_name(tmp_path):
+    project_path = tmp_path / "key_data_names"
+    project = teal.Project.create(project_path, name="key_data_names")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"text": [10, 11]}),
+            "data": pd.DataFrame({"text": ["Ada|Hello", "Bob|Bye"]}),
+            "metadata": pd.DataFrame({"note": ["first", "second"]}),
+        }], artifact_type="table", primary_key="text")
+        assert source.query_columns(metadata_mode="full")["data"] == ["data.text"]
+
+        cleaner = RegexCleaner(
+            fields={"data.text": "cleaned"},
+            rules=[{"pattern": r"\|", "replacement": " "}],
+        )
+        cleaned = project.translate(cleaner, source)["output"].query(form="table")
+        assert cleaned["text"].tolist() == [10, 11]
+        assert cleaned["cleaned"].tolist() == ["Ada Hello", "Bob Bye"]
+
+        measured = project.translate(
+            TextLength(
+                fields=["data.text", "note"], units="words",
+                output_field="combined", metadata_mode="full", delimiter=" ",
+            ), source,
+        )["output"].query(
+            data_columns=False, metadata_columns=True,
+            metadata_mode="local", form="table",
+        )
+        assert measured["text"].tolist() == [10, 11]
+        assert measured["combined_words"].tolist() == [2, 2]
+
+        split = project.translate(
+            DelimiterDecomposer(
+                text_field="data.text", delimiter="|",
+                output_text_field="part",
+            ), source,
+        )["output"].query(form="table")
+        assert split["text"].tolist() == [10, 10, 11, 11]
+        assert split["segment_id"].tolist() == [0, 1, 0, 1]
+        assert split["part"].tolist() == ["Ada", "Hello", "Bob", "Bye"]
+    finally:
+        project.close()
