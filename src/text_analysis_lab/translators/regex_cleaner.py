@@ -101,6 +101,10 @@ class RegexCleaner(BaseTranslator):
         if any(not isinstance(k, str) or not k or not isinstance(v, str) or not v for k, v in fields.items()):
             raise ValueError("fields must contain nonempty string input and output labels.")
         self.fields = dict(fields)
+        # Only the deprecated single-field interface interprets a raw data name
+        # when its advertised name is qualified by a key/metadata collision.
+        # The fields={...} interface always means exact advertised output names.
+        self._legacy_field_names = legacy
         self.metadata_mode = metadata_mode
         self._field_namespaces: dict[str, str] = {}
         self._input_labels: dict[str, str] = {}
@@ -249,9 +253,9 @@ class RegexCleaner(BaseTranslator):
                     col for col in choices if col["namespace"] in {"data", "metadata"}
                     and col["output_name"] == field
                 ]
-                if not matches:
-                    # Legacy callers may still supply an unqualified data
-                    # name; QueryScope resolves it without parsing prefixes.
+                if not matches and self._legacy_field_names:
+                    # Pre-fields API always addressed a data column by raw
+                    # name. Retain that data-first compatibility only here.
                     try:
                         name = scope.data_output_name(field)
                     except ValueError as exc:
@@ -269,11 +273,19 @@ class RegexCleaner(BaseTranslator):
                     )
                 namespaces[field] = str(matches[0]["namespace"])
                 input_labels[field] = str(matches[0]["output_name"])
-        elif self.metadata_mode == "none":
+        elif self.metadata_mode == "none" and self._legacy_field_names:
+            # Narrow test doubles predating query_columns support.
             namespaces = {field: "data" for field in self.fields}
             input_labels = {field: field for field in self.fields}
         else:
-            raise OperatorError("RegexCleaner requires query_columns for metadata sources.")
+            raise OperatorError(
+                "RegexCleaner fields require query_columns for exact advertised "
+                "non-key label selection."
+            )
+        if len(set(input_labels.values())) != len(input_labels):
+            raise OperatorError(
+                "RegexCleaner fields must resolve to distinct source columns."
+            )
         for namespace in {"data", "metadata"}:
             outputs = [self.fields[k] for k, v in namespaces.items() if v == namespace]
             if len(set(outputs)) != len(outputs):
@@ -369,6 +381,7 @@ class RegexCleaner(BaseTranslator):
     def to_json_state(self) -> dict[str, Any]:
         return {
             "fields": dict(self.fields),
+            "legacy_field_names": self._legacy_field_names,
             "metadata_mode": self.metadata_mode,
             "rules": [asdict(rule) for rule in self.rules],
             "strip": self.strip,
@@ -378,20 +391,23 @@ class RegexCleaner(BaseTranslator):
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> RegexCleaner:
         if "fields" in state:
-            return cls(
-                fields=cast(Mapping[str, str], state["fields"]),
-                metadata_mode=cast(MetadataMode, state.get("metadata_mode", "none")),
-                rules=cast(Sequence[Mapping[str, Any]], state.get("rules", ())),
-                strip=bool(state.get("strip", True)),
-                preserve_null=bool(state.get("preserve_null", True)),
-            )
-        field = str(state.get("text_field", "text"))
-        return cls(
-            fields={field: str(state.get("output_field", field))},
+            fields = cast(Mapping[str, str], state["fields"])
+            legacy = bool(state.get("legacy_field_names", False))
+        else:
+            # Historical states used text_field/output_field and always
+            # selected representation data by its raw field name.
+            field = str(state.get("text_field", "text"))
+            fields = {field: str(state.get("output_field", field))}
+            legacy = True
+        obj = cls(
+            fields=fields,
+            metadata_mode=cast(MetadataMode, state.get("metadata_mode", "none")),
             rules=cast(Sequence[Mapping[str, Any]], state.get("rules", ())),
             strip=bool(state.get("strip", True)),
             preserve_null=bool(state.get("preserve_null", True)),
         )
+        obj._legacy_field_names = legacy
+        return obj
 
     def save_intermediate_state(
         self,
