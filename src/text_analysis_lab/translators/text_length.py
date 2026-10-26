@@ -83,6 +83,12 @@ class TextLength(BaseTranslator):
             if output_field is not None or delimiter != " ":
                 raise ValueError("output_field and delimiter require combined fields.")
             self.lengths = _normalize_lengths(cast(LengthRequest, lengths))
+        output_names = self.output_columns
+        if len(output_names) != len(set(output_names)):
+            raise ValueError(
+                "TextLength generates duplicate metadata output names; "
+                "choose non-colliding fields and units."
+            )
 
     @property
     def supports_parallel_translate(self) -> bool:
@@ -236,11 +242,19 @@ class TextLength(BaseTranslator):
 
         return_record = not isinstance(data, pd.DataFrame)
         if isinstance(data, (str, type(None))):
-            if len(self.lengths) != 1:
-                raise ValueError(
-                    "Scalar TextLength translation requires exactly one configured text field."
-                )
-            field = next(iter(self.lengths))
+            if self.combined_fields is not None:
+                if len(self.combined_fields) != 1:
+                    raise ValueError(
+                        "Scalar combined TextLength translation requires exactly "
+                        "one configured input field."
+                    )
+                field = self.combined_fields[0]
+            else:
+                if len(self.lengths) != 1:
+                    raise ValueError(
+                        "Scalar TextLength translation requires exactly one configured text field."
+                    )
+                field = next(iter(self.lengths))
             frame = pd.DataFrame({field: [data]})
         elif isinstance(data, Mapping):
             frame = pd.DataFrame([dict(data)])
