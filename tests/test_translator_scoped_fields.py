@@ -5,6 +5,7 @@ import pytest
 
 import text_analysis_lab as teal
 from text_analysis_lab.core.errors import OperatorError
+from text_analysis_lab.core.operator import TranslationRequest
 from text_analysis_lab.translators import RegexCleaner, TextLength, DelimiterDecomposer
 
 
@@ -419,3 +420,75 @@ def test_metadata_output_checks_ignore_unresolvable_source_data_scope(tmp_path, 
             assert frame["speaker"].tolist() == ["Ada", "Bob"]
     finally:
         reopened.close()
+
+
+def test_text_length_combined_exact_key_and_data_labels_persist_and_reopen(tmp_path):
+    project_path = tmp_path / "combined_key_and_data"
+    project = teal.Project.create(project_path, name="combined_key_and_data")
+    output_id = None
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"text": ["A1", "B22"]}),
+            "data": pd.DataFrame({"text": ["Hello", "world!"]}),
+        }], artifact_type="table", primary_key="text")
+        assert source.query_columns(metadata_mode="none")["key"] == ["text"]
+        assert source.query_columns(metadata_mode="none")["data"] == ["data.text"]
+        translator = TextLength(
+            fields=["text", "data.text"], units="characters",
+            output_field="combined",
+        )
+        request = translator.input_request(
+            sources={"source": source}, mode="translate",
+            request=TranslationRequest(),
+        )
+        assert request.columns.keys is True
+        assert request.columns.data == ["data.text"]
+        assert request.columns.metadata is False
+        assert translator._input_labels == {
+            "text": "text", "data.text": "data.text",
+        }
+        result = project.translate(translator, source)["output"]
+        output_id = result.artifact_id
+        frame = result.query(
+            data_columns=False, metadata_mode="local",
+            metadata_columns=True, form="table",
+        )
+        assert frame["text"].tolist() == ["A1", "B22"]
+        assert frame["combined_characters"].tolist() == [8, 10]
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(project_path)
+    try:
+        frame = reopened.get_artifact(output_id).query(
+            data_columns=False, metadata_mode="local",
+            metadata_columns=True, form="table",
+        )
+        assert frame["text"].tolist() == ["A1", "B22"]
+        assert frame["combined_characters"].tolist() == [8, 10]
+    finally:
+        reopened.close()
+
+
+def test_text_length_combined_rejects_unadvertised_field_while_legacy_data_remains(tmp_path):
+    project = teal.Project.create(tmp_path / "combined_exact", name="combined_exact")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"text": ["key"]}),
+            "data": pd.DataFrame({"text": ["hello"]}),
+        }], artifact_type="table", primary_key="text")
+        assert TextLength({"text": "characters"}).input_request(
+            sources={"source": source}, mode="translate",
+            request=TranslationRequest(),
+        ).columns.data == ["data.text"]
+        combined = TextLength(fields=["text", "data.text"], output_field="both")
+        assert combined.translate({"text": "key", "data.text": "hello"}) == {
+            "both_characters": 9,
+        }
+        with pytest.raises(OperatorError, match="unavailable or ambiguous"):
+            TextLength(fields=["key.text"], output_field="bad").input_request(
+                sources={"source": source}, mode="translate",
+                request=TranslationRequest(),
+            )
+    finally:
+        project.close()
