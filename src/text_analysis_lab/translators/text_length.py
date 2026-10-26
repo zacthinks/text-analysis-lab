@@ -138,27 +138,56 @@ class TextLength(BaseTranslator):
         if callable(getattr(source, "query_columns", None)):
             available = scope.columns()["columns"]
             for field in selected:
-                exact = [col for col in available if col["namespace"] in {"data", "metadata"}
-                         and col["output_name"] == field]
-                if not exact:
-                    try:
-                        data_name = scope.data_output_name(field)
-                    except ValueError as exc:
-                        raise OperatorError(
-                            f"TextLength field {field!r} is unavailable "
-                            f"in metadata_mode={self.metadata_mode!r}."
-                        ) from exc
-                    exact = [col for col in available if col["namespace"] == "data"
-                             and col["output_name"] == data_name]
+                if self.combined_fields is not None:
+                    # Combined mode consumes exact advertised output labels,
+                    # including structural keys. Do not reinterpret a key as
+                    # a legacy raw data-field name.
+                    exact = [
+                        col for col in available
+                        if col["namespace"] in {"key", "data", "metadata"}
+                        and col["output_name"] == field
+                    ]
+                else:
+                    # Legacy lengths={...} has always addressed representation
+                    # data, even when its raw name collides with a key label.
+                    exact = [
+                        col for col in available
+                        if col["namespace"] in {"data", "metadata"}
+                        and col["output_name"] == field
+                    ]
+                    if not exact:
+                        try:
+                            data_name = scope.data_output_name(field)
+                        except ValueError as exc:
+                            raise OperatorError(
+                                f"TextLength field {field!r} is unavailable "
+                                f"in metadata_mode={self.metadata_mode!r}."
+                            ) from exc
+                        exact = [
+                            col for col in available if col["namespace"] == "data"
+                            and col["output_name"] == data_name
+                        ]
                 if len(exact) != 1:
-                    raise OperatorError(f"TextLength field {field!r} is unavailable or ambiguous.")
+                    raise OperatorError(
+                        f"TextLength field {field!r} is unavailable or ambiguous "
+                        f"in metadata_mode={self.metadata_mode!r}."
+                    )
                 labels[field] = str(exact[0]["output_name"])
                 domains[field] = str(exact[0]["namespace"])
+        elif self.combined_fields is not None:
+            raise OperatorError(
+                "Combined TextLength requires query_columns to resolve exact "
+                "advertised key, data, and metadata labels."
+            )
         elif self.metadata_mode == "none":
             labels = {field: field for field in selected}
             domains = {field: "data" for field in selected}
         else:
             raise OperatorError("TextLength requires query_columns for metadata input.")
+        if self.combined_fields is not None and len(set(labels.values())) != len(selected):
+            raise OperatorError(
+                "Combined TextLength fields must resolve to distinct source columns."
+            )
         self._input_labels = labels
         # Only an existing metadata identity is a duplicate metadata output.
         # Structural keys and representation data may legitimately use the same
