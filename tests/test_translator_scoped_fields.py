@@ -492,3 +492,71 @@ def test_text_length_combined_rejects_unadvertised_field_while_legacy_data_remai
             )
     finally:
         project.close()
+
+
+def test_regex_modern_exact_names_and_legacy_collision_compatibility(tmp_path):
+    project = teal.Project.create(tmp_path / "regex_exact", name="regex_exact")
+    try:
+        source = project.register_external([{
+            "keys": pd.DataFrame({"text": [101, 202]}),
+            "data": pd.DataFrame({"text": ["A B", "C D"]}),
+        }], artifact_type="table", primary_key="text")
+        rules = [{"pattern": " ", "replacement": "_"}]
+        modern = RegexCleaner(fields={"data.text": "clean"}, rules=rules)
+        result = project.translate(modern, source)["output"].query(form="table")
+        assert result["clean"].tolist() == ["A_B", "C_D"]
+        preview = modern.translate(pd.DataFrame({"text": [101, 202],
+                                                 "data.text": ["A B", "C D"]}))
+        assert preview["data"]["clean"].tolist() == ["A_B", "C_D"]
+        with pytest.raises(OperatorError, match="unavailable or ambiguous"):
+            RegexCleaner(fields={"text": "clean"}, rules=rules).input_request(
+                sources={"source": source}, mode="translate",
+                request=TranslationRequest(),
+            )
+        with pytest.raises(OperatorError, match="unavailable or ambiguous"):
+            RegexCleaner(fields={"text": "clean", "data.text": "other"}, rules=rules).input_request(
+                sources={"source": source}, mode="translate",
+                request=TranslationRequest(),
+            )
+        with pytest.warns(FutureWarning):
+            legacy = RegexCleaner(text_field="text", output_field="clean", rules=rules)
+        assert legacy.input_request(
+            sources={"source": source}, mode="translate",
+            request=TranslationRequest(),
+        ).columns.data == ["data.text"]
+        assert legacy._input_labels == {"text": "data.text"}
+        saved = RegexCleaner.from_json_state(legacy.to_json_state())
+        assert saved._legacy_field_names
+        assert saved.input_request(
+            sources={"source": source}, mode="translate",
+            request=TranslationRequest(),
+        ).columns.data == ["data.text"]
+        historical = RegexCleaner.from_json_state({
+            "text_field": "text", "output_field": "clean", "rules": rules,
+        })
+        assert historical._legacy_field_names
+        assert historical.input_request(
+            sources={"source": source}, mode="translate",
+            request=TranslationRequest(),
+        ).columns.data == ["data.text"]
+    finally:
+        project.close()
+
+
+def test_text_length_output_name_collision_and_combined_scalar_parity():
+    with pytest.raises(ValueError, match="duplicate metadata output"):
+        TextLength({"a_log": "words", "a": "log_words"})
+    single = TextLength(fields=["text"], output_field="combined", units="characters")
+    assert single.translate("hello") == {"combined_characters": 5}
+    assert single.translate({"text": "hello"}) == {"combined_characters": 5}
+    assert single.translate(pd.DataFrame({"text": ["hello"]})).iloc[0].to_dict() == {
+        "combined_characters": 5,
+    }
+    assert TextLength.from_json_state(single.to_json_state()).translate("hello") == {
+        "combined_characters": 5,
+    }
+    with pytest.raises(ValueError, match="exactly one configured input"):
+        TextLength(fields=["text", "title"], output_field="combined").translate("hello")
+    assert TextLength({"text": "characters"}).translate("hello") == {
+        "text_characters": 5,
+    }
