@@ -428,7 +428,7 @@ def test_text_length_combined_exact_key_and_data_labels_persist_and_reopen(tmp_p
     output_id = None
     try:
         source = project.register_external([{
-            "keys": pd.DataFrame({"text": ["A1", "B22"]}),
+            "keys": pd.DataFrame({"text": [10, 200]}),
             "data": pd.DataFrame({"text": ["Hello", "world!"]}),
         }], artifact_type="table", primary_key="text")
         assert source.query_columns(metadata_mode="none")["key"] == ["text"]
@@ -453,7 +453,7 @@ def test_text_length_combined_exact_key_and_data_labels_persist_and_reopen(tmp_p
             data_columns=False, metadata_mode="local",
             metadata_columns=True, form="table",
         )
-        assert frame["text"].tolist() == ["A1", "B22"]
+        assert frame["text"].tolist() == [10, 200]
         assert frame["combined_characters"].tolist() == [8, 10]
     finally:
         project.close()
@@ -464,7 +464,7 @@ def test_text_length_combined_exact_key_and_data_labels_persist_and_reopen(tmp_p
             data_columns=False, metadata_mode="local",
             metadata_columns=True, form="table",
         )
-        assert frame["text"].tolist() == ["A1", "B22"]
+        assert frame["text"].tolist() == [10, 200]
         assert frame["combined_characters"].tolist() == [8, 10]
     finally:
         reopened.close()
@@ -474,7 +474,7 @@ def test_text_length_combined_rejects_unadvertised_field_while_legacy_data_remai
     project = teal.Project.create(tmp_path / "combined_exact", name="combined_exact")
     try:
         source = project.register_external([{
-            "keys": pd.DataFrame({"text": ["key"]}),
+            "keys": pd.DataFrame({"text": [123]}),
             "data": pd.DataFrame({"text": ["hello"]}),
         }], artifact_type="table", primary_key="text")
         assert TextLength({"text": "characters"}).input_request(
@@ -482,7 +482,7 @@ def test_text_length_combined_rejects_unadvertised_field_while_legacy_data_remai
             request=TranslationRequest(),
         ).columns.data == ["data.text"]
         combined = TextLength(fields=["text", "data.text"], output_field="both")
-        assert combined.translate({"text": "key", "data.text": "hello"}) == {
+        assert combined.translate({"text": 123, "data.text": "hello"}) == {
             "both_characters": 9,
         }
         with pytest.raises(OperatorError, match="unavailable or ambiguous"):
