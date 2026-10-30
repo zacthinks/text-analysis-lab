@@ -166,6 +166,7 @@ Translators span preprocessing, linguistic processing, representations, statisti
 - `TextFileExtractor`
 - `PdfTextExtractor`
 - `RegexCleaner`
+- `PatternExtractor`
 - `DelimiterDecomposer`
 - `TextLength`
 - `FunctionMapper`

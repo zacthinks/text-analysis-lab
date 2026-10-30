@@ -23,7 +23,7 @@ from text_analysis_lab.core.operator import (
     TranslationMode,
     TranslationRequest,
 )
-from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL
+from text_analysis_lab.core.types import DEFAULT_OUTPUT_LABEL, DEFAULT_SOURCE_LABEL, MetadataMode
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -38,6 +38,7 @@ class DelimiterDecomposer(BaseTranslator):
     """
 
     operation_type = "translate"
+    frozen_runtime_fields = frozenset({"_source_field"})
 
     def __init__(
         self,
@@ -45,6 +46,7 @@ class DelimiterDecomposer(BaseTranslator):
         delimiter: str = "\n",
         new_key: str = "segment_id",
         text_field: str = "text",
+        metadata_mode: MetadataMode = "none",
         output_text_field: str | None = None,
         drop_empty: bool = True,
         strip: bool = True,
@@ -61,6 +63,10 @@ class DelimiterDecomposer(BaseTranslator):
         if not isinstance(output_field, str) or not output_field:
             raise ValueError("output_text_field must be a non-empty string.")
 
+        if metadata_mode not in {"none", "local", "full"}:
+            raise ValueError("metadata_mode must be 'none', 'local', or 'full'.")
+        self.metadata_mode = metadata_mode
+        self._source_field: str | None = None
         self.delimiter = delimiter
         self.new_key = new_key
         self.text_field = text_field
@@ -175,16 +181,51 @@ class DelimiterDecomposer(BaseTranslator):
         source = _single_source(sources)
         if source.artifact_type.value != "table":
             raise OperatorError("DelimiterDecomposer requires a table artifact source.")
-        scope = QueryScope(source, metadata_mode="none")
-        field = (
-            scope.data_output_name(self.text_field)
-            if callable(getattr(source, "query_columns", None))
-            else self.text_field
-        )
+        scope = QueryScope(source, metadata_mode=self.metadata_mode)
+        namespace = "data"
+        field = self.text_field
+        if callable(getattr(source, "query_columns", None)):
+            columns = scope.columns()["columns"]
+            matched = [
+                col for col in columns
+                if col["namespace"] in {"data", "metadata"}
+                and col["output_name"] == self.text_field
+            ]
+            if not matched:
+                # Retain the legacy data-field spelling for callers predating
+                # canonical query labels; never guess metadata ownership.
+                try:
+                    data_field = scope.data_output_name(self.text_field)
+                except ValueError as exc:
+                    raise OperatorError(
+                        f"DelimiterDecomposer field {self.text_field!r} is unavailable "
+                        f"in metadata_mode={self.metadata_mode!r}."
+                    ) from exc
+                matched = [
+                    col for col in columns
+                    if col["namespace"] == "data"
+                    and col["output_name"] == data_field
+                ]
+            if len(matched) != 1:
+                raise OperatorError(
+                    f"DelimiterDecomposer field {self.text_field!r} is unavailable "
+                    f"or ambiguous in metadata_mode={self.metadata_mode!r}."
+                )
+            namespace = str(matched[0]["namespace"])
+            field = str(matched[0]["output_name"])
+        elif self.metadata_mode != "none":
+            raise OperatorError(
+                "DelimiterDecomposer requires query_columns for metadata input."
+            )
+        self._source_field = field
         return scope.source_request(
             artifact_type="table",
             mode="batches",
-            columns=ColumnRequest(keys=True, data=field, metadata=False),
+            columns=ColumnRequest(
+                keys=True,
+                data=field if namespace == "data" else False,
+                metadata=field if namespace == "metadata" else False,
+            ),
             batch_size=request.batch_size if request.batch_size is not None else 10_000,
             form="table",
             include_position=False,
@@ -201,13 +242,16 @@ class DelimiterDecomposer(BaseTranslator):
         packet = _single_input(inputs)
         frame = _require_frame(packet.data)
         key_columns = [str(name) for name in packet.primary_key]
-        input_name = (
-            f"data.{self.text_field}"
-            if self.text_field in key_columns
-            else self.text_field
-        )
-        if input_name not in frame and self.text_field in frame and self.text_field not in key_columns:
-            input_name = self.text_field
+        input_name = self._source_field
+        if input_name is None:
+            # Standalone batch calls have not performed input_request().
+            input_name = (
+                f"data.{self.text_field}"
+                if self.text_field in key_columns else self.text_field
+            )
+            if (input_name not in frame and self.text_field in frame
+                    and self.text_field not in key_columns):
+                input_name = self.text_field
         missing = [
             name
             for name in [*key_columns, input_name]
@@ -217,11 +261,6 @@ class DelimiterDecomposer(BaseTranslator):
             raise ArtifactError(
                 f"DelimiterDecomposer source batch is missing columns {missing}."
             )
-        if self.new_key in frame.columns:
-            raise ArtifactError(
-                f"DelimiterDecomposer new_key {self.new_key!r} collides with a source column."
-            )
-
         decomposed = self.translate(frame[input_name])
         source_positions = decomposed["source_positions"]
         if len(source_positions) == 0:
@@ -264,13 +303,16 @@ class DelimiterDecomposer(BaseTranslator):
         request: TranslationRequest,
     ) -> DelimiterDecomposer:
         _ = mode, request
-        return self.from_json_state(self.to_json_state())
+        worker = self.from_json_state(self.to_json_state())
+        worker._source_field = self._source_field
+        return worker
 
     def to_json_state(self) -> dict[str, Any]:
         return {
             "delimiter": self.delimiter,
             "new_key": self.new_key,
             "text_field": self.text_field,
+            "metadata_mode": self.metadata_mode,
             "output_text_field": self.output_text_field,
             "drop_empty": self.drop_empty,
             "strip": self.strip,
@@ -282,6 +324,7 @@ class DelimiterDecomposer(BaseTranslator):
             delimiter=str(state.get("delimiter", "\n")),
             new_key=str(state.get("new_key", "segment_id")),
             text_field=str(state.get("text_field", "text")),
+            metadata_mode=cast(MetadataMode, state.get("metadata_mode", "none")),
             output_text_field=str(
                 state.get("output_text_field", state.get("text_field", "text"))
             ),
@@ -301,6 +344,7 @@ class DelimiterDecomposer(BaseTranslator):
         intermediate_dir.mkdir(parents=True, exist_ok=True)
         payload = self.to_json_state()
         payload["operator_id"] = operator_id
+        payload["source_field"] = self._source_field
         (intermediate_dir / "state.json").write_text(
             json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
         )
@@ -320,6 +364,7 @@ class DelimiterDecomposer(BaseTranslator):
         )
         obj = cls.from_json_state(cast(Mapping[str, Any], state))
         obj.operator_id = operator_id
+        obj._source_field = state.get("source_field")
         return obj
 
 

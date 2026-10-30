@@ -16,6 +16,34 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
+## [0.10.0] - 2026-10-30
+
+### Added
+
+- Register existing TeAL topic-model artifacts in linked GeCo workspaces using `project.geco.create(topic_models=...)` or `linked.add_topic_model(...)`. Validation covers membership and ArgMax ancestry, artifact type, keys, dimensions, and optional topic descriptions; linked providers can retrieve registered artifacts by stable keys (PR #56).
+- `PatternExtractor` for full-match named-group extraction into data and metadata, with configurable unmatched-row behavior, standalone previews, frozen state, parallel workers, and checkpoint recovery (PR #59).
+- Multi-field and metadata-aware `RegexCleaner(fields=..., metadata_mode=...)`, combined-field `TextLength(fields=..., output_field=...)` with configurable units and delimiter, and metadata-source selection in `DelimiterDecomposer` (PR #59).
+
+### Changed
+
+- Canonical query scopes keep structural primary-key output labels immutable, distinguish the `include_data` naming universe from query projection, and resolve fields through advertised output labels consistently across operations and materialization (PR #58).
+- Expanded text translators preserve scoped input bindings through persisted, parallel, and resumed execution. Existing legacy single-field selection remains supported (PR #59).
+- TeAL's `uv` GeCo Git source now follows the `main` branch instead of `master`.
+- Remove the temporary `preshed<3.0.14` cap from spaCy-enabled extras after the upstream compatibility fix.
+
+### Fixed
+
+- Query-column collision and exact-label regressions for keys, data, metadata, attachments, literal dotted labels, joined/merged sources, matrices, and reopened artifacts (PR #58).
+- `RegexCleaner` rejects ambiguous modern field mappings; `TextLength` rejects duplicate generated metadata names and handles scalar single-field combined input correctly (PR #59).
+
+### Deprecated
+
+- `RegexCleaner(text_field=..., output_field=...)` is retained for legacy uses and serialized states, but explicit use now warns ahead of 1.0.0; prefer `fields` (PR #59).
+
+### Notes
+
+- Real TeAL–GeCo integration tests added with PR #56 are opt-in and run through the manual workflow, not ordinary automatic CI.
+
 ## [0.9.0] - 2026-10-20
 
 ### Added
