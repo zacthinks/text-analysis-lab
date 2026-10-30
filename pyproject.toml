@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "text-analysis-lab"
-version = "0.9.0"
+version = "0.10.0"
 description = "Persistent, lineage-aware workflows for reproducible text analysis"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -54,7 +54,6 @@ all = [
     "pyarrow<21",
     "plotly>=5",
     "geometric-coder[all]",
-    "preshed<3.0.14",  # Work around upstream tokenizer deserialization regression.
 ]
 geco = [
     "geometric-coder[all]",
@@ -75,7 +74,6 @@ parallel = [
 ]
 spacy = [
     "spacy>=3.8.14",
-    "preshed<3.0.14",  # Work around upstream tokenizer deserialization regression.
 ]
 word2vec = [
     "gensim>=4.4.0",
@@ -95,13 +93,12 @@ linguistics = [
     "fastcoref==2.1.6",
     "datasets==2.14.4",
     "pyarrow<21",
-    "preshed<3.0.14",  # Work around upstream tokenizer deserialization regression.
 ]
 
 [tool.uv]
 
 [tool.uv.sources]
-geometric-coder = { git = "https://github.com/zacthinks/GeCo.git", branch = "master" }
+geometric-coder = { git = "https://github.com/zacthinks/GeCo.git", branch = "main" }
 
 [dependency-groups]
 dev = [
