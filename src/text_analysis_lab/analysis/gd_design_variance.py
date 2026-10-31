@@ -108,8 +108,9 @@ def design_variance(
             return unavailable("Recorded stratified design has no strata source.")
     elif design is None:
         return unavailable(
-            "No verified probability-sampling provenance: declare design "
-            "for an externally randomized audit."
+            "No verified probability-sampling provenance; first-order inclusion "
+            "probabilities alone do not identify the sampling design. "
+            "Declare design for an externally randomized audit."
         )
 
     if design == "stratified_srswor" and strata is None:
