@@ -340,3 +340,143 @@ def test_project_bernoulli_extreme_draw_persists_empty_table_and_reopens(
         assert restored.scalar_probability == probability
     finally:
         reopened.close()
+
+
+
+def test_keyed_probabilities_reject_duplicate_source_keys():
+    """The probability side input must not silently overwrite duplicate IDs."""
+    probability_input = _packet(
+        [0.15 + 0.01 * i for i in range(10)],
+        label="probabilities",
+        field="probability",
+    )
+    probability_input.data.loc[5, "row_id"] = 4
+    with pytest.raises(ArtifactError, match="duplicate primary keys"):
+        ProbabilitySampleTranslator(
+            probability_source=True, random_state=37
+        ).translate_batch(
+            {"documents": _packet(), "probabilities": probability_input},
+            mode="translate",
+            request=TranslationRequest(),
+        )
+
+
+def test_project_shuffled_keyed_probabilities_align_and_reopen(tmp_path):
+    """Different per-unit probabilities must join by keys, not physical order."""
+    import text_analysis_lab as teal
+
+    root = tmp_path / "keyed_bernoulli"
+    probability_by_key = {
+        key: 0.07 + key * 0.043 for key in range(20)
+    }
+    expected_draw = np.random.default_rng(37).random(20)
+    expected_sample = {
+        key for key, u in enumerate(expected_draw)
+        if u < probability_by_key[key]
+    }
+    # This test should detect both an incorrect draw and incorrect stored pi.
+    assert 0 < len(expected_sample) < 20
+
+    probability_rows = pd.DataFrame({
+        "row_id": list(probability_by_key),
+        "probability": list(probability_by_key.values()),
+    }).sample(frac=1, random_state=203).reset_index(drop=True)
+    assert probability_rows["row_id"].tolist() != list(range(20))
+    assert probability_rows["probability"].nunique() == 20
+
+    project = teal.Project.create(root, name="keyed_bernoulli")
+    try:
+        source = project.register_external(
+            pd.DataFrame({
+                "row_id": range(20),
+                "text": [f"document {key}" for key in range(20)],
+            }),
+            primary_key="row_id",
+            data_fields="text",
+        )
+        probability_artifact = project.register_external(
+            probability_rows,
+            primary_key="row_id",
+            data_fields="probability",
+        )
+        # Confirm that the probability artifact itself retains the shuffled
+        # physical row order after registration.
+        source_probabilities = probability_artifact.query(
+            key_columns=True,
+            data_columns=["probability"],
+            metadata_columns=False,
+            include_position=True,
+            order_by="_position",
+            form="table",
+        )
+        assert source_probabilities["row_id"].tolist() == (
+            probability_rows["row_id"].tolist()
+        )
+
+        result = project.probability_sample(
+            source,
+            probability=probability_artifact,
+            design="bernoulli",
+            random_state=37,
+        )
+        ids = {label: artifact.artifact_id for label, artifact in result.items()}
+        sample_keys = set(result["sample"].query(
+            key_columns=True, data_columns=False, metadata_columns=False,
+            form="table",
+        )["row_id"].tolist())
+        remainder_keys = set(result["remainder"].query(
+            key_columns=True, data_columns=False, metadata_columns=False,
+            form="table",
+        )["row_id"].tolist())
+        stored_pi = result["pi"].query(
+            key_columns=True, data_columns=["pi"], metadata_columns=False,
+            form="table",
+        )
+        assert sample_keys == expected_sample
+        assert remainder_keys == set(range(20)) - expected_sample
+        assert set(stored_pi["row_id"].tolist()) == expected_sample
+        for row in stored_pi.itertuples(index=False):
+            assert row.pi == pytest.approx(probability_by_key[row.row_id])
+        assert result["pi"].descriptor["lineage"]["basis_artifact_ids"] == [
+            ids["sample"]
+        ]
+        operation = project.get_operation(result["pi"].operation_id)
+        frozen = project.get_operator(operation["operator_id"])
+        assert isinstance(frozen, ProbabilitySampleTranslator)
+        assert frozen.design == "bernoulli"
+        assert frozen.probability_kind == "artifact"
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(root)
+    try:
+        sample = reopened.get_artifact(ids["sample"])
+        remainder = reopened.get_artifact(ids["remainder"])
+        pi = reopened.get_artifact(ids["pi"])
+        sampled_keys = set(sample.query(
+            key_columns=True, data_columns=False, metadata_columns=False,
+            form="table",
+        )["row_id"].tolist())
+        remaining_keys = set(remainder.query(
+            key_columns=True, data_columns=False, metadata_columns=False,
+            form="table",
+        )["row_id"].tolist())
+        assert sampled_keys == expected_sample
+        assert remaining_keys == set(range(20)) - expected_sample
+        reloaded_pi = pi.query(
+            key_columns=True, data_columns=["pi"], metadata_columns=False,
+            form="table",
+        )
+        assert set(reloaded_pi["row_id"].tolist()) == expected_sample
+        for row in reloaded_pi.itertuples(index=False):
+            assert row.pi == pytest.approx(probability_by_key[row.row_id])
+        assert pi.descriptor["lineage"]["basis_artifact_ids"] == [
+            ids["sample"]
+        ]
+        operator_row = reopened.get_operation(pi.operation_id)
+        frozen = reopened.get_operator(operator_row["operator_id"])
+        assert isinstance(frozen, ProbabilitySampleTranslator)
+        assert frozen.design == "bernoulli"
+        assert frozen.probability_kind == "artifact"
+    finally:
+        reopened.close()
