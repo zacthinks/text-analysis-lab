@@ -129,9 +129,22 @@ def test_bernoulli_is_not_fixed_size_and_conflicting_args_fail():
         ProbabilitySampleTranslator(probability={0: 0.4})
 
 
-def test_empty_bernoulli_draw_is_not_redrawn():
-    with pytest.raises(ValueError, match="not repeated"):
-        _run(ProbabilitySampleTranslator(probability=1.0, random_state=1))
+def test_bernoulli_all_selected_and_none_selected_are_valid_draws():
+    all_selected = _run(
+        ProbabilitySampleTranslator(probability=1.0, random_state=1)
+    )
+    assert _ids(all_selected, "sample") == list(range(10))
+    assert _ids(all_selected, "remainder") == []
+    assert _ids(all_selected, "pi") == list(range(10))
+    assert all_selected["pi"]["data"]["pi"].tolist() == [1.0] * 10
+
+    none_selected = _run(
+        ProbabilitySampleTranslator(probability=1e-12, random_state=1)
+    )
+    assert _ids(none_selected, "sample") == []
+    assert _ids(none_selected, "pi") == []
+    assert none_selected["pi"]["data"]["pi"].empty
+    assert _ids(none_selected, "remainder") == list(range(10))
 
 
 @pytest.mark.parametrize(
@@ -244,5 +257,86 @@ def test_project_probability_sample_artifacts_and_reopen(tmp_path):
         frozen = reopened.get_operator(operation["operator_id"])
         assert isinstance(frozen, ProbabilitySampleTranslator)
         assert frozen.to_json_state() == saved_state
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize(
+    ("probability", "expected_selected"),
+    [(1.0, 20), (1e-12, 0)],
+)
+def test_project_bernoulli_extreme_draw_persists_empty_table_and_reopens(
+    tmp_path, probability, expected_selected
+):
+    """Valid Bernoulli edge draws remain committed without conditioning/redraw."""
+    import text_analysis_lab as teal
+
+    root = tmp_path / "bernoulli_edge"
+    project = teal.Project.create(root, name="bernoulli_edge")
+    expected_rows = {
+        "sample": expected_selected,
+        "remainder": 20 - expected_selected,
+        "pi": expected_selected,
+    }
+    try:
+        source = project.register_external(
+            pd.DataFrame({
+                "row_id": range(20),
+                "text": [f"text {i}" for i in range(20)],
+            }),
+            primary_key="row_id", data_fields="text",
+        )
+        result = project.probability_sample(
+            source, probability=probability, random_state=1
+        )
+        artifact_ids = {label: art.artifact_id for label, art in result.items()}
+        assert set(artifact_ids) == {"sample", "remainder", "pi"}
+        for label, expected_n in expected_rows.items():
+            artifact = result[label]
+            assert artifact.n_rows == expected_n
+            assert artifact.descriptor["status"] == "complete"
+            queried = artifact.query(
+                key_columns=True,
+                data_columns=["pi"] if label == "pi" else False,
+                metadata_columns=False,
+                form="table",
+            )
+            assert len(queried) == expected_n
+            assert list(queried.columns) == (
+                ["row_id", "pi"] if label == "pi" else ["row_id"]
+            )
+            if label == "pi":
+                assert queried["pi"].tolist() == [probability] * expected_n
+        assert result["pi"].descriptor["lineage"]["basis_artifact_ids"] == [
+            result["sample"].artifact_id
+        ]
+        operator_row = project.get_operation(result["pi"].operation_id)
+        frozen = project.get_operator(operator_row["operator_id"])
+        assert isinstance(frozen, ProbabilitySampleTranslator)
+        assert frozen.design == "bernoulli"
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(root)
+    try:
+        for label, artifact_id in artifact_ids.items():
+            artifact = reopened.get_artifact(artifact_id)
+            assert artifact.n_rows == expected_rows[label]
+            queried = artifact.query(
+                key_columns=True,
+                data_columns=["pi"] if label == "pi" else False,
+                metadata_columns=False,
+                form="table",
+            )
+            assert len(queried) == expected_rows[label]
+        pi_artifact = reopened.get_artifact(artifact_ids["pi"])
+        assert pi_artifact.descriptor["lineage"]["basis_artifact_ids"] == [
+            artifact_ids["sample"]
+        ]
+        op = reopened.get_operation(pi_artifact.operation_id)
+        restored = reopened.get_operator(op["operator_id"])
+        assert isinstance(restored, ProbabilitySampleTranslator)
+        assert restored.design == "bernoulli"
+        assert restored.scalar_probability == probability
     finally:
         reopened.close()

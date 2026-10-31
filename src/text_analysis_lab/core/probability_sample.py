@@ -423,12 +423,10 @@ class ProbabilitySampleTranslator(BaseTranslator):
                     random_state=self.random_state,
                 )
 
-        # A redraw conditional on getting a nonempty output changes the design.
-        if not selected or len(selected) == N:
-            raise ValueError(
-                "Probability draw realized an empty sample or remainder. "
-                "The draw was not repeated; both outputs are required."
-            )
+        # Every realized Bernoulli draw is valid, including all-selected and
+        # none-selected. Never condition on a desired sample size or redraw.
+        # Zero-row table outputs are supported by ArtifactWriter. For other
+        # artifact types, its explicit zero-row check remains authoritative.
         selected.sort()
         picked = set(selected)
         remaining = [i for i in range(N) if i not in picked]
