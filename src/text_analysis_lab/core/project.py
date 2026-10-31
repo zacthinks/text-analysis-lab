@@ -75,7 +75,8 @@ from text_analysis_lab.core.merge import merge as _merge
 from text_analysis_lab.core.operator import BaseOperator, BaseTranslator
 from text_analysis_lab.core.probability_split import (
     probability_split as _probability_split,
-)from text_analysis_lab.core.probability_sample import (
+)
+from text_analysis_lab.core.probability_sample import (
     probability_sample as _probability_sample,
 )
 
