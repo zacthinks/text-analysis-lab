@@ -75,7 +75,10 @@ from text_analysis_lab.core.merge import merge as _merge
 from text_analysis_lab.core.operator import BaseOperator, BaseTranslator
 from text_analysis_lab.core.probability_split import (
     probability_split as _probability_split,
+)from text_analysis_lab.core.probability_sample import (
+    probability_sample as _probability_sample,
 )
+
 from text_analysis_lab.core.query import QueryEngine
 from text_analysis_lab.core.register_external import (
     register_external as _register_external,
@@ -1358,6 +1361,34 @@ class Project:
             memo=memo,
             alias=alias,
             overwrite=overwrite,
+        )
+
+    def probability_sample(
+        self,
+        source: BaseArtifact | str,
+        *,
+        n: int | None = None,
+        fraction: float | None = None,
+        probability: float | Mapping[Any, float] | BaseArtifact | str | None = None,
+        strata: BaseArtifact | str | None = None,
+        allocation: str | Mapping[Any, float] | None = None,
+        n_by_stratum: Mapping[Any, int] | None = None,
+        design: str | None = None,
+        remainder_label: str = "remainder",
+        sample_label: str = "sample",
+        random_state: int | None = None,
+        workers: int = 1,
+        memo: str | None = None,
+        alias: Mapping[str, str] | None = None,
+        overwrite: bool = False,
+    ) -> Mapping[str, BaseArtifact]:
+        """Draw a design-aware sample and persist its inclusion probabilities."""
+        return _probability_sample(
+            self, source, n=n, fraction=fraction, probability=probability,
+            strata=strata, allocation=allocation, n_by_stratum=n_by_stratum,
+            design=design, remainder_label=remainder_label,
+            sample_label=sample_label, random_state=random_state,
+            workers=workers, memo=memo, alias=alias, overwrite=overwrite,
         )
 
     def probability_split(
