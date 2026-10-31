@@ -396,7 +396,7 @@ def generalized_difference_by(
         )
         estimated_total = surrogate_total + correction_total
         transformed = residual * audit_mask.astype(float) / float(N_g)
-        variance_mean, design, note = _design_variance_from_pi_provenance(
+        variance_mean, variance_design, note = _design_variance_from_pi_provenance(
             surrogate=surrogate,
             pi_artifact=pi_artifact,
             audit_frame=merged.loc[:, list(keys)].copy(),
@@ -420,7 +420,7 @@ def generalized_difference_by(
                 "estimated_mean": estimated_total / N_g,
                 "standard_error": se_mean,
                 "estimated_total": estimated_total,
-                "variance_design": design,
+                "variance_design": variance_design,
                 "variance_note": note,
                 "gold_is_binary": bool(np.all(np.isin(y, [0.0, 1.0]))),
             }
