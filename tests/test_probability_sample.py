@@ -171,3 +171,78 @@ def test_source_contract_pi_lineage():
     outputs = op.output_specs(sources={"documents": src}, request=TranslationRequest())
     assert outputs["pi"].basis_labels == ("sample",)
     assert outputs["sample"].basis_labels == ("documents",)
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"n": 4, "has_strata": True, "allocation": "equal"},
+        {"n": 4, "has_strata": True, "allocation": {0: 2, 1: 1}},
+        {"fraction": 0.4, "has_strata": True},
+        {"probability": 0.2, "has_strata": True},
+    ],
+)
+def test_explicit_allocation_modes_roundtrip(kwargs):
+    original = ProbabilitySampleTranslator(**kwargs)
+    saved = original.to_json_state()
+    restored = ProbabilitySampleTranslator.from_json_state(saved)
+    assert restored.to_json_state() == saved
+
+
+def test_project_probability_sample_artifacts_and_reopen(tmp_path):
+    import text_analysis_lab as teal
+
+    root = tmp_path / "probability_sample_project"
+    project = teal.Project.create(root, name="sample_project")
+    try:
+        frame = pd.DataFrame({
+            "row_id": list(range(20)),
+            "text": [f"document {i}" for i in range(20)],
+        })
+        source = project.register_external(
+            frame, primary_key="row_id", data_fields="text"
+        )
+        strata = project.register_external(
+            pd.DataFrame({
+                "row_id": list(range(20)),
+                "H": [0] * 12 + [1] * 8,
+            }),
+            primary_key="row_id", data_fields="H",
+        )
+        outcome = project.probability_sample(
+            source, n=8, strata=strata, allocation="equal", random_state=14
+        )
+        sample, remainder, pi = (
+            outcome["sample"], outcome["remainder"], outcome["pi"]
+        )
+        def keys(artifact):
+            return set(artifact.query(
+                key_columns=True, data_columns=False,
+                metadata_columns=False, form="table",
+            )["row_id"].tolist())
+
+        assert len(keys(sample)) == 8
+        assert keys(sample).isdisjoint(keys(remainder))
+        assert keys(sample) | keys(remainder) == set(range(20))
+        assert keys(pi) == keys(sample)
+        assert pi.descriptor["lineage"]["basis_artifact_ids"] == [
+            sample.artifact_id
+        ]
+        operation = project.get_operation(pi.operation_id)
+        frozen = project.get_operator(operation["operator_id"])
+        assert isinstance(frozen, ProbabilitySampleTranslator)
+        assert frozen.design == "stratified_srswor"
+        saved_state = frozen.to_json_state()
+        sample_id, pi_id = sample.artifact_id, pi.artifact_id
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(root)
+    try:
+        reloaded = reopened.get_artifact(pi_id)
+        assert keys(reloaded) == keys(reopened.get_artifact(sample_id))
+        operation = reopened.get_operation(reloaded.operation_id)
+        frozen = reopened.get_operator(operation["operator_id"])
+        assert isinstance(frozen, ProbabilitySampleTranslator)
+        assert frozen.to_json_state() == saved_state
+    finally:
+        reopened.close()

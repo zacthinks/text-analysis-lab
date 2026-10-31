@@ -195,12 +195,14 @@ class ProbabilitySampleTranslator(BaseTranslator):
         self.n_by_stratum = (
             None if n_by_stratum is None else _pairs(n_by_stratum, counts=True)
         )
-        if allocation is None or allocation == "proportional":
+        if allocation is None:
             self.allocation_mode, self.allocation_weights = "proportional", None
-        elif allocation == "equal":
-            self.allocation_mode, self.allocation_weights = "equal", None
         elif isinstance(allocation, str):
-            raise ValueError("allocation must be 'proportional', 'equal', or weights.")
+            if allocation not in {"proportional", "equal"}:
+                raise ValueError(
+                    "allocation must be 'proportional', 'equal', or weights."
+                )
+            self.allocation_mode, self.allocation_weights = allocation, None
         else:
             self.allocation_mode = "weighted"
             self.allocation_weights = _normalize_allocation(allocation)
@@ -490,10 +492,16 @@ class ProbabilitySampleTranslator(BaseTranslator):
             dict(unpack(state["stratum_probabilities"])) if kind == "strata" else
             None
         )
+        # The serialized "proportional" mode is also the default sentinel
+        # for SRS, Bernoulli, and exact-count strata. It was not necessarily
+        # a user-supplied allocation; passing it back to the constructor as
+        # an explicit argument would contradict those designs.
         allocation = (
             unpack(state["allocation_weights"])
             if state["allocation_mode"] == "weighted"
-            else state["allocation_mode"]
+            else "equal"
+            if state["allocation_mode"] == "equal"
+            else None
         )
         return cls(
             n=state["n"], fraction=state["fraction"],
