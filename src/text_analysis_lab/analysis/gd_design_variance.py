@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from text_analysis_lab.core.errors import ArtifactError
+from text_analysis_lab.core.errors import ArtifactError, ArtifactNotFoundError
 
 
 DESIGNS = {"srswor", "stratified_srswor", "bernoulli"}
@@ -89,8 +89,12 @@ def design_variance(
             sampled = key_frame(project.get_artifact(
                 str(sample_outputs[0]["artifact_id"])
             ))
+        except (ArtifactNotFoundError, FileNotFoundError) as exc:
+            # Historical files may be deleted or moved while the pi output
+            # survives. The correction is still valid; only its SE is unknown.
+            return unavailable(f"Recorded sample artifact is unavailable ({exc}).")
         except (KeyError, AttributeError):
-            # Historical unit fixtures omit the materialized legacy sample.
+            # Older unit fixtures omit a materialized legacy sample object.
             if not isinstance(internal, ProbabilitySplitTranslator):
                 return unavailable("Recorded sample cannot be inspected.")
         else:
@@ -100,7 +104,10 @@ def design_variance(
             ):
                 return unavailable("Audit keys disagree with the recorded sample.")
         if "strata" in by_source:
-            recorded_strata = project.get_artifact(by_source["strata"])
+            try:
+                recorded_strata = project.get_artifact(by_source["strata"])
+            except (ArtifactNotFoundError, KeyError, FileNotFoundError) as exc:
+                return unavailable(f"Recorded strata artifact is unavailable ({exc}).")
             if strata is not None and strata.artifact_id != recorded_strata.artifact_id:
                 raise ArtifactError("Explicit strata conflict with TeAL sampling provenance.")
             strata = recorded_strata
@@ -123,10 +130,28 @@ def design_variance(
         if len(fields) != 1:
             raise ArtifactError("Strata require one data field.")
         stratified_field = fields[0]
-        stratified_frame = field_frame(strata, stratified_field)
+        try:
+            stratified_frame = field_frame(strata, stratified_field)
+        except (ArtifactNotFoundError, FileNotFoundError) as exc:
+            if internal is not None:
+                return unavailable(f"Recorded strata data are unavailable ({exc}).")
+            raise
         validate_unique(stratified_frame, primary_key, role="strata")
         if set(key_tuples(stratified_frame, primary_key)) != population_keys:
             raise ArtifactError("Strata must cover every population key.")
+        if stratified_frame[stratified_field].isna().any():
+            raise ArtifactError(
+                "Sampling strata contain missing or null values; "
+                "every population unit must have a valid stratum."
+            )
+        from text_analysis_lab.core.probability_split import _stratum_scalar
+        for value in stratified_frame[stratified_field]:
+            try:
+                _stratum_scalar(value)
+            except (TypeError, ValueError) as exc:
+                raise ArtifactError(
+                    f"Sampling strata contain unsupported value {value!r}."
+                ) from exc
 
     if design == "srswor":
         if not np.allclose(inclusion, n / N, rtol=1e-8, atol=1e-10):
@@ -167,12 +192,15 @@ def design_variance(
         if kind == "scalar":
             expected = np.full(n, internal.scalar_probability)
         else:
-            if kind == "artifact":
-                artifact = project.get_artifact(by_source["probabilities"])
-            elif kind == "strata":
-                artifact = project.get_artifact(by_source["strata"])
-            else:
-                return unavailable("Unknown Bernoulli probability source.")
+            try:
+                if kind == "artifact":
+                    artifact = project.get_artifact(by_source["probabilities"])
+                elif kind == "strata":
+                    artifact = project.get_artifact(by_source["strata"])
+                else:
+                    return unavailable("Unknown Bernoulli probability source.")
+            except (ArtifactNotFoundError, KeyError, FileNotFoundError) as exc:
+                return unavailable(f"Recorded Bernoulli source is unavailable ({exc}).")
             fields = [str(f) for f in artifact.get_data_columns()]
             if len(fields) != 1:
                 return unavailable("Recorded probability source has ambiguous fields.")
