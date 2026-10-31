@@ -220,6 +220,9 @@ class GeneralizedDifferenceGroupedResult:
             residual=transformed,
             population_keys=self._contrast_inputs["population_keys"],
             primary_key=self._contrast_inputs["primary_key"],
+            inclusion=self._contrast_inputs["inclusion"],
+            design=self._contrast_inputs["design"],
+            strata=self._contrast_inputs["strata"],
         )
         se = None if variance is None else float(math.sqrt(max(variance, 0.0)))
         difference = float(first_row["estimated_mean"] - second_row["estimated_mean"])
@@ -293,6 +296,9 @@ def generalized_difference_by(
     surrogate_field: str = "prediction",
     gold_field: str = "label",
     pi_field: str = "pi",
+    design: str | None = None,
+    strata: BaseArtifact | str | None = None,
+    inference: str = "finite",
 ) -> GeneralizedDifferenceGroupedResult:
     """Estimate corrected finite-corpus means/prevalences within known groups.
 
@@ -301,7 +307,12 @@ def generalized_difference_by(
     variable lives on another same-key artifact. ``result.contrast(a, b)``
     returns the corrected difference in group means with its design-based SE.
     """
+    if inference != "finite":
+        raise ValueError("Superpopulation inference is not enabled until its variance model is validated.")
+    from text_analysis_lab.analysis.gd_design_variance import check_design
+    check_design(design)
     project = surrogate.project
+    strata_artifact = None if strata is None else project.get_artifact(strata)
     gold_artifact = project.get_artifact(gold)
     pi_artifact = project.get_artifact(pi)
     group_artifact = surrogate if group is None else project.get_artifact(group)
@@ -392,6 +403,9 @@ def generalized_difference_by(
             residual=transformed,
             population_keys=population_keys,
             primary_key=keys,
+            inclusion=inclusion,
+            design=design,
+            strata=strata_artifact,
         )
         se_mean = (
             None if variance_mean is None else float(math.sqrt(max(variance_mean, 0.0)))
@@ -425,6 +439,9 @@ def generalized_difference_by(
             "audit_keys": merged.loc[:, list(keys)].copy(),
             "population_keys": population_keys,
             "primary_key": keys,
+            "inclusion": inclusion,
+            "design": design,
+            "strata": strata_artifact,
         },
     )
 
@@ -437,6 +454,9 @@ def generalized_difference(
     surrogate_field: str = "prediction",
     gold_field: str = "label",
     pi_field: str = "pi",
+    design: str | None = None,
+    strata: BaseArtifact | str | None = None,
+    inference: str = "finite",
 ) -> GeneralizedDifferenceResult:
     """Correct a full-corpus surrogate using a probability audit.
 
@@ -454,7 +474,12 @@ def generalized_difference(
     but the standard error is left unavailable rather than assuming a design from
     first-order inclusion probabilities alone.
     """
+    if inference != "finite":
+        raise ValueError("Superpopulation inference is not enabled until its variance model is validated.")
+    from text_analysis_lab.analysis.gd_design_variance import check_design
+    check_design(design)
     project = surrogate.project
+    strata_artifact = None if strata is None else project.get_artifact(strata)
     gold_artifact = project.get_artifact(gold)
     pi_artifact = project.get_artifact(pi)
 
@@ -532,6 +557,9 @@ def generalized_difference(
         residual=residual,
         population_keys=population_keys,
         primary_key=keys,
+        inclusion=inclusion,
+        design=design,
+        strata=strata_artifact,
     )
     se_total = (
         None if variance_total is None else float(math.sqrt(max(variance_total, 0.0)))
@@ -559,129 +587,20 @@ def generalized_difference(
 
 
 def _design_variance_from_pi_provenance(
-    *,
-    surrogate: BaseArtifact,
-    pi_artifact: BaseArtifact,
-    audit_frame: pd.DataFrame,
-    residual: np.ndarray,
-    population_keys: set[tuple[int, ...]],
-    primary_key: tuple[str, ...],
+    *, surrogate, pi_artifact, audit_frame, residual, population_keys,
+    primary_key, inclusion, design=None, strata=None,
 ) -> tuple[float | None, str | None, str | None]:
-    """Recover TeAL probability-split design and estimate residual-total variance."""
-    operation_id = getattr(pi_artifact, "operation_id", None)
-    if operation_id is None:
-        return _variance_unavailable(
-            "pi does not record TeAL probability_split provenance; first-order inclusion "
-            "probabilities alone do not identify fixed-size without-replacement variance."
-        )
-    project = surrogate.project
-    required = (
-        "get_operation",
-        "operation_sources",
-        "operation_outputs",
-        "get_operator",
-    )
-    if any(not hasattr(project, name) for name in required):
-        return _variance_unavailable(
-            "the project interface cannot recover probability_split sampling provenance."
-        )
-    try:
-        operation = project.get_operation(str(operation_id))
-        outputs = project.operation_outputs(str(operation_id))
-        sources = project.operation_sources(str(operation_id))
-        operator = project.get_operator(str(operation["operator_id"]))
-    except Exception as exc:  # noqa: BLE001 - variance provenance is optional
-        return _variance_unavailable(
-            f"sampling provenance could not be recovered ({exc})."
-        )
-
-    try:
-        from text_analysis_lab.core.probability_split import ProbabilitySplitTranslator
-    except (
-        ImportError
-    ) as exc:  # pragma: no cover - installed TeAL should provide this module
-        return _variance_unavailable(
-            f"probability_split implementation could not be loaded ({exc})."
-        )
-    if not isinstance(operator, ProbabilitySplitTranslator):
-        return _variance_unavailable(
-            "pi was not created by TeAL's ProbabilitySplitTranslator."
-        )
-    pi_outputs = [row for row in outputs if str(row.get("output_label")) == "pi"]
-    if len(pi_outputs) != 1 or str(pi_outputs[0].get("artifact_id")) != str(
-        pi_artifact.artifact_id
-    ):
-        return _variance_unavailable(
-            "pi is not the recorded 'pi' output of its probability_split operation."
-        )
-    source_by_label = {
-        str(row["source_label"]): str(row["source_artifact_id"]) for row in sources
-    }
-    documents_id = source_by_label.get("documents")
-    if documents_id is None:
-        return _variance_unavailable(
-            "probability_split provenance is missing its documents source."
-        )
-    try:
-        documents = project.get_artifact(documents_id)
-        document_keys_frame = _key_only_frame(documents)
-    except Exception as exc:  # noqa: BLE001 - unavailable variance inputs must not break point estimates
-        return _variance_unavailable(
-            f"probability_split documents source could not be read ({exc})."
-        )
-    _validate_unique(
-        document_keys_frame, primary_key, role="probability_split documents"
-    )
-    design_population_keys = set(_key_tuples(document_keys_frame, primary_key))
-    if design_population_keys != population_keys:
-        return _variance_unavailable(
-            "the surrogate population key set differs from the population used by probability_split."
-        )
-    N = len(document_keys_frame)
-    n = len(audit_frame)
-    if int(operator.n) != n:
-        return _variance_unavailable(
-            f"audit size {n} differs from probability_split's recorded n={operator.n}."
-        )
-
-    strata_id = source_by_label.get("strata")
-    if strata_id is None:
-        if operator.allocation is not None:
-            return _variance_unavailable(
-                "probability_split records an allocation but no strata source."
-            )
-        return _srswor_variance(residual, N=N, n=n), "srswor", None
-
-    if operator.allocation is None:
-        return _variance_unavailable(
-            "probability_split records a strata source but no stratified allocation."
-        )
-    try:
-        strata_artifact = project.get_artifact(strata_id)
-        columns = [str(value) for value in strata_artifact.get_data_columns()]
-        if len(columns) != 1:
-            return _variance_unavailable(
-                f"probability_split strata artifact no longer has exactly one data field: {columns}."
-            )
-        strata_field = columns[0]
-        strata_frame = _frame(strata_artifact, strata_field)
-        _validate_unique(strata_frame, primary_key, role="probability_split strata")
-    except Exception as exc:  # noqa: BLE001 - unavailable variance inputs must not break point estimates
-        return _variance_unavailable(
-            f"probability_split strata source could not be read ({exc})."
-        )
-
-    if set(_key_tuples(strata_frame, primary_key)) != design_population_keys:
-        return _variance_unavailable(
-            "probability_split strata key set no longer matches its documents population."
-        )
-    audit_residuals = audit_frame.copy()
-    audit_residuals["__residual__"] = residual
-    return _stratified_srswor_variance(
-        strata_frame=strata_frame,
-        audit_residuals=audit_residuals,
-        primary_key=primary_key,
-        stratum_field=strata_field,
+    from text_analysis_lab.analysis.gd_design_variance import design_variance
+    return design_variance(
+        surrogate=surrogate, pi_artifact=pi_artifact,
+        audit_frame=audit_frame, residual=residual,
+        population_keys=population_keys, primary_key=primary_key,
+        inclusion=inclusion, design=design, strata=strata,
+        srs_variance=_srswor_variance,
+        stratified_variance=_stratified_srswor_variance,
+        unavailable=_variance_unavailable,
+        key_frame=_key_only_frame, field_frame=_frame,
+        validate_unique=_validate_unique, key_tuples=_key_tuples,
     )
 
 
