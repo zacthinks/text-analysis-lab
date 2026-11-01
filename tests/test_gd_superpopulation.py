@@ -105,3 +105,40 @@ def test_nested_iid_srs_monte_carlo_sanity():
     predicted = float(np.mean(variances))
     assert observed == pytest.approx(predicted, rel=.35)
     assert abs(float(np.mean(estimates))) < .15
+
+
+
+@pytest.mark.parametrize("design", ["srswor", "stratified_srswor", "bernoulli"])
+def test_external_superpopulation_components_are_explicit(tmp_path, design):
+    project = teal.Project.create(tmp_path / design, name="iid_external")
+    try:
+        ids = np.arange(12)
+        surrogate = _register(project, ids, "prediction", ids / 15)
+        audit_ids = np.array([0, 1, 2, 3, 6, 7, 8, 9])
+        audit_labels = np.array([0., 1., 2., 1., 2., 0., 1., 3.])
+        gold = _register(project, audit_ids[::-1], "label", audit_labels[::-1])
+        strata = _register(project, ids, "H", ["A"] * 6 + ["B"] * 6)
+        probabilities = (
+            [.5, .8, .6, .7, .5, .8, .6, .7] if design == "bernoulli"
+            else [2 / 3] * 8
+        )
+        pi = _register(project, audit_ids, "pi", probabilities)
+        kwargs = {"design": design}
+        if design == "stratified_srswor":
+            kwargs["strata"] = strata
+        finite = generalized_difference(surrogate, gold=gold, pi=pi, **kwargs)
+        superpop = generalized_difference(
+            surrogate, gold=gold, pi=pi,
+            inference="superpopulation", **kwargs
+        )
+        assert superpop.inference == "superpopulation"
+        assert superpop.variance_audit == pytest.approx(finite.standard_error**2)
+        assert superpop.variance_corpus >= 0
+        assert superpop.standard_error**2 == pytest.approx(
+            superpop.variance_audit + superpop.variance_corpus
+        )
+        assert superpop.estimated_mean == pytest.approx(finite.estimated_mean)
+        assert "variance_corpus" in superpop.to_frame().columns
+        assert "variance_corpus" not in finite.to_frame().columns
+    finally:
+        project.close()
