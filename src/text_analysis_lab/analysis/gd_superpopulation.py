@@ -78,9 +78,9 @@ def corpus_variance(
         sample_var = float(np.var(values, ddof=1)) if nh > 1 else 0.0
         # E[s2_h] = S2_h, and E[sum_{i!=j in h} (yi-yj)^2] is
         # Nh*(Nh-1)*s2_h, where values denote an unordered pair sum.
-        groups.append((Nh, mean, sample_var, float(
-            np.mean(np.square(values - mean))
-        )))
+        groups.append((
+            Nh, mean, sample_var, (Nh - 1) * sample_var / Nh
+        ))
     pair_sum = sum(Nh * (Nh - 1) * s2 for Nh, _, s2, _ in groups)
     for i, (Nh, mean_h, _, centered_h) in enumerate(groups):
         for Nk, mean_k, _, centered_k in groups[i + 1:]:
