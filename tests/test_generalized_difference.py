@@ -482,3 +482,207 @@ def test_generalized_difference_result_p_value_uses_design_se() -> None:
     result = generalized_difference(population, gold=gold, pi=pi)
     assert result.standard_error is not None
     assert 0.0 <= result.p_value(null=0.0) <= 1.0
+
+
+
+def test_external_srs_design_uses_residual_variance_and_validates_pi():
+    project = _FakeProject()
+    population = _artifact(
+        project, "pop_srs_ext",
+        pd.DataFrame({"row_id": range(4), "prediction": [0, 0, 0, 0]}),
+        ["prediction"],
+    )
+    gold = _artifact(
+        project, "gold_srs_ext",
+        pd.DataFrame({"row_id": [0, 3], "label": [1, 0]}),
+        ["label"],
+    )
+    pi = _artifact(
+        project, "pi_srs_ext",
+        pd.DataFrame({"row_id": [3, 0], "pi": [0.5, 0.5]}), ["pi"],
+    )
+    old = generalized_difference(population, gold=gold, pi=pi)
+    assert old.standard_error is None
+    result = generalized_difference(
+        population, gold=gold, pi=pi, design="srswor"
+    )
+    assert result.estimated_mean == pytest.approx(old.estimated_mean)
+    assert result.standard_error_total == pytest.approx(math.sqrt(2.0))
+    pi._frame.loc[0, "pi"] = 0.75
+    with pytest.raises(ArtifactError, match="SRSWOR pi"):
+        generalized_difference(population, gold=gold, pi=pi, design="srswor")
+
+
+def test_external_bernoulli_variance_with_unequal_pi():
+    project = _FakeProject()
+    population = _artifact(
+        project, "pop_bern",
+        pd.DataFrame({"row_id": range(3), "prediction": [0, 0, 0]}),
+        ["prediction"],
+    )
+    gold = _artifact(
+        project, "gold_bern",
+        pd.DataFrame({"row_id": [0, 2], "label": [1, 2]}),
+        ["label"],
+    )
+    pi = _artifact(
+        project, "pi_bern",
+        pd.DataFrame({"row_id": [2, 0], "pi": [0.75, 0.25]}), ["pi"],
+    )
+    result = generalized_difference(
+        population, gold=gold, pi=pi, design="bernoulli"
+    )
+    expected = 0.75 / (0.25**2) + 0.25 * 4 / (0.75**2)
+    assert result.variance_design == "bernoulli"
+    assert result.standard_error_total**2 == pytest.approx(expected)
+    assert "researcher asserted" in result.variance_note
+
+
+def test_internal_new_srs_probability_sample_recovers_se():
+    from text_analysis_lab.core.probability_sample import ProbabilitySampleTranslator
+
+    project = _FakeProject()
+    documents = _artifact(
+        project, "source_new_srs",
+        pd.DataFrame({"row_id": range(4)}), [],
+    )
+    population = _artifact(
+        project, "pop_new_srs",
+        pd.DataFrame({"row_id": range(4), "prediction": [0, 0, 0, 0]}),
+        ["prediction"],
+    )
+    gold = _artifact(
+        project, "gold_new_srs",
+        pd.DataFrame({"row_id": [0, 2], "label": [1, 0]}),
+        ["label"],
+    )
+    pi = _artifact(
+        project, "pi_new_srs",
+        pd.DataFrame({"row_id": [2, 0], "pi": [0.5, 0.5]}),
+        ["pi"], operation_id="new_srs_op",
+    )
+    op = ProbabilitySampleTranslator(n=2, random_state=8)
+    _record_probability_split(project, pi=pi, documents=documents, translator=op)
+    project.add(_FakeArtifact(
+        pd.DataFrame({"row_id": [0, 2]}), [],
+        project=project, artifact_id="audit",
+    ))
+    result = generalized_difference(population, gold=gold, pi=pi)
+    assert result.standard_error_total == pytest.approx(math.sqrt(2.0))
+    assert result.variance_design == "srswor"
+
+
+def test_superpopulation_is_explicitly_unavailable_before_stage_three():
+    project = _FakeProject()
+    population = _artifact(
+        project, "s_pop",
+        pd.DataFrame({"row_id": [0, 1], "prediction": [0, 1]}),
+        ["prediction"],
+    )
+    gold = _artifact(
+        project, "s_gold",
+        pd.DataFrame({"row_id": [1], "label": [1]}),
+        ["label"],
+    )
+    pi = _artifact(
+        project, "s_pi", pd.DataFrame({"row_id": [1], "pi": [0.5]}), ["pi"],
+    )
+    with pytest.raises(ValueError, match="Superpopulation"):
+        generalized_difference(
+            population, gold=gold, pi=pi, inference="superpopulation",
+        )
+
+
+
+@pytest.mark.parametrize(
+    ("design", "group_assignment", "probabilities", "expected_variances"),
+    [
+        (
+            "srswor",
+            ["D"] * 4 + ["R"] * 4,
+            [0.5] * 4,
+            (11 / 24, 17 / 8, 13 / 3),
+        ),
+        (
+            "stratified_srswor",
+            ["D", "R"] * 4,
+            [0.5] * 4,
+            (5 / 4, 5 / 2, 29 / 4),
+        ),
+        (
+            "bernoulli",
+            ["D", "R"] * 4,
+            [0.25, 0.5, 0.75, 1.0],
+            (1.0, 0.5, 1.5),
+        ),
+    ],
+)
+def test_grouped_external_design_se_and_contrasts_are_numeric(
+    design, group_assignment, probabilities, expected_variances
+):
+    """Independent hand calculations catch missed covariance and key misalignment.
+
+    N=8, audited keys=[0, 1, 4, 5], residuals=[1, 2, 3, 4].
+    Group totals use coefficient-weighted residuals divided by N_g=4.
+    For SRS: V=8*s2 of the four transformed audit residuals.
+    For stratified SRS: each N_h=4, n_h=2, giving V=4*(s2_h0+s2_h1).
+    For Bernoulli: V=sum((1-p_i)*(transformed_i/p_i)**2).
+    """
+    from text_analysis_lab.analysis.generalized_difference import (
+        generalized_difference_by,
+    )
+
+    project = _FakeProject()
+    surrogate = _artifact(
+        project, "hand_calc_surrogate",
+        pd.DataFrame({"row_id": range(8), "prediction": [0.] * 8}),
+        ["prediction"],
+    )
+    group = _artifact(
+        project, "hand_calc_groups",
+        pd.DataFrame({
+            "row_id": [7, 2, 0, 5, 3, 4, 6, 1],
+            "party": [group_assignment[i] for i in [7, 2, 0, 5, 3, 4, 6, 1]],
+        }),
+        ["party"],
+    )
+    gold = _artifact(
+        project, "hand_calc_gold",
+        pd.DataFrame({"row_id": [5, 0, 4, 1], "label": [4., 1., 3., 2.]}),
+        ["label"],
+    )
+    pi = _artifact(
+        project, "hand_calc_pi",
+        pd.DataFrame({"row_id": [4, 0, 5, 1],
+                      "pi": [probabilities[i] for i in [2, 0, 3, 1]]}),
+        ["pi"],
+    )
+    strata = None
+    if design == "stratified_srswor":
+        strata = _artifact(
+            project, "hand_calc_strata",
+            pd.DataFrame({
+                "row_id": [4, 3, 7, 1, 0, 6, 2, 5],
+                "H": [1, 0, 1, 0, 0, 1, 0, 1],
+            }),
+            ["H"],
+        )
+    grouped = generalized_difference_by(
+        surrogate, gold=gold, pi=pi, group=group, group_field="party",
+        design=design, strata=strata,
+    )
+    result = grouped.to_frame().set_index("group")
+    vd, vr, vdiff = expected_variances
+    assert result.loc["D", "standard_error"]**2 == pytest.approx(vd)
+    assert result.loc["R", "standard_error"]**2 == pytest.approx(vr)
+    contrast = grouped.contrast("D", "R")
+    assert contrast.standard_error**2 == pytest.approx(vdiff)
+    by_reference = grouped.contrasts(reference="R")
+    pairwise = grouped.pairwise_contrasts()
+    assert by_reference.loc[0, "standard_error"]**2 == pytest.approx(vdiff)
+    assert pairwise.loc[0, "standard_error"]**2 == pytest.approx(vdiff)
+    if design != "bernoulli":
+        # Under fixed-size sampling the disjoint groups have nonzero covariance.
+        assert vdiff != pytest.approx(vd + vr)
+    else:
+        assert vdiff == pytest.approx(vd + vr)

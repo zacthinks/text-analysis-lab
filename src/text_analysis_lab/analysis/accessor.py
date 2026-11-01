@@ -288,6 +288,9 @@ class ArtifactAnalysis:
         surrogate_field: str = "prediction",
         gold_field: str = "label",
         pi_field: str = "pi",
+        design: str | None = None,
+        strata: BaseArtifact | str | None = None,
+        inference: str = "finite",
     ) -> GeneralizedDifferenceResult:
         from text_analysis_lab.analysis.generalized_difference import (
             generalized_difference,
@@ -300,6 +303,9 @@ class ArtifactAnalysis:
             surrogate_field=surrogate_field,
             gold_field=gold_field,
             pi_field=pi_field,
+            design=design,
+            strata=strata,
+            inference=inference,
         )
 
     def generalized_difference_by(
@@ -312,6 +318,9 @@ class ArtifactAnalysis:
         surrogate_field: str = "prediction",
         gold_field: str = "label",
         pi_field: str = "pi",
+        design: str | None = None,
+        strata: BaseArtifact | str | None = None,
+        inference: str = "finite",
     ) -> GeneralizedDifferenceGroupedResult:
         from text_analysis_lab.analysis.generalized_difference import (
             generalized_difference_by,
@@ -326,6 +335,9 @@ class ArtifactAnalysis:
             surrogate_field=surrogate_field,
             gold_field=gold_field,
             pi_field=pi_field,
+            design=design,
+            strata=strata,
+            inference=inference,
         )
 
     def crosstab(
