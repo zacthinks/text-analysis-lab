@@ -129,11 +129,14 @@ class GeneralizedDifferenceResult:
             "estimated_total": self.estimated_total,
             "standard_error_total": self.standard_error_total,
             "variance_design": self.variance_design,
-            "inference": self.inference,
-            "variance_audit": self.variance_audit,
-            "variance_corpus": self.variance_corpus,
-            "variance_total": self.variance_total,
         }
+        if self.inference == "superpopulation":
+            row.update({
+                "inference": self.inference,
+                "variance_audit": self.variance_audit,
+                "variance_corpus": self.variance_corpus,
+                "variance_total": self.variance_total,
+            })
         if self.gold_is_binary:
             row["estimated_prevalence"] = self.estimated_mean
         return pd.DataFrame([row])
