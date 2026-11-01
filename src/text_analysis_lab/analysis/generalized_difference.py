@@ -95,9 +95,9 @@ class GeneralizedDifferenceResult:
     def p_value(self, *, null: float = 0.0, scale: str = "mean") -> float:
         """Return a two-sided normal-approximation design p-value.
 
-        This p-value reflects the recovered audit-sampling design conditional on
-        the finite corpus. It is not an additional outer-population sampling
-        variance calculation.
+        In finite mode this uses design uncertainty conditional on the
+        realized corpus. In superpopulation mode it uses the combined corpus
+        and audit variance, assuming IID corpus generation and frozen predictions.
         """
         if scale == "mean":
             estimate = self.estimated_mean
