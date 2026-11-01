@@ -1,9 +1,13 @@
-"""Direct design-based inference from human-coded probability samples.
+"""Direct design-based inference from high-warrant human measurements.
 
-No surrogate model is required: known sampled labels contribute to the
-Horvitz-Thompson total with their actual first-order inclusion probabilities.
-The target finite frame must be observed directly or recovered from verified
-TeAL probability-sampling provenance. A design assertion cannot invent N.
+Only use this estimator when the audited outcome is a defensible human-coded
+measurement under a documented, frozen coding procedure. This is a scientific
+input contract, not a claim TeAL can establish warrant from numeric values or
+field names. Do not substitute uncorrected surrogate/model predictions; use
+generalized_difference() with an independent high-warrant audit instead.
+
+The target finite frame must be provided or recovered from verified TeAL
+probability-sampling provenance. An external design assertion cannot invent N.
 """
 from __future__ import annotations
 
@@ -137,12 +141,31 @@ def _recorded_frame(project, pi_artifact):
         return None
 
 
+def _gold_data_field(gold: BaseArtifact, requested: str | None) -> str:
+    """Select the audited measurement field, never a key or metadata column.
+
+    A single data field is unambiguous regardless of its name; multi-field
+    artifacts require explicit selection rather than silently guessing which
+    variable is the human measurement.
+    """
+    columns = [str(column) for column in gold.get_data_columns()]
+    if requested is None:
+        if len(columns) != 1:
+            raise ArtifactError(
+                "gold_field= is required unless the gold artifact has exactly "
+                f"one data field; available data fields: {columns}."
+            )
+        return columns[0]
+    _require_field(gold, requested, role="gold")
+    return requested
+
+
 def estimate(
     gold: BaseArtifact,
     *,
     pi: BaseArtifact | str,
     population: BaseArtifact | str | None = None,
-    gold_field: str = "label",
+    gold_field: str | None = None,
     pi_field: str = "pi",
     statistic: str = "mean",
     design: str | None = None,
@@ -154,7 +177,11 @@ def estimate(
     With TeAL-recorded pi, the frame and design can be recovered automatically.
     For external pi, provide the full keyed population frame and assert design=
     to obtain a conditional SE. An external assertion is not proof of sampling.
-    The audited labels must be independent of any frozen measurement choices.
+    `gold` must hold high-warrant human measurements, not model predictions.
+    Numeric data, operator provenance and field names do not prove this:
+    the researcher is responsible for the measurement's warrant and for keeping
+    the audit independent of model selection and fitting. If the artifact has
+    exactly one data field, gold_field is inferred; otherwise it is required.
     """
     if statistic != "mean":
         raise ValueError("Only statistic='mean' is implemented at this checkpoint.")
@@ -173,7 +200,7 @@ def estimate(
             "sampling-frame provenance; inclusion probabilities cannot identify N."
         )
     strata_artifact = None if strata is None else project.get_artifact(strata)
-    _require_field(gold, gold_field, role="gold")
+    gold_field = _gold_data_field(gold, gold_field)
     _require_field(pi_artifact, pi_field, role="pi")
     keys = tuple(str(x) for x in gold.primary_key)
     if not keys:
