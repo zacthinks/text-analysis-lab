@@ -4,13 +4,12 @@ The estimator treats the focal artifact's surrogate values as auxiliary values
 known for the full finite corpus, then uses inverse-probability weighted audit
 residuals to correct their population total/mean.  No nuisance model is fitted.
 
-When ``pi`` is the output of TeAL's ``Project.probability_split`` operation, the
-analysis also recovers the sampling design from operation provenance and reports
-an estimated design-based standard error for SRSWOR or stratified SRSWOR.
-First-order inclusion probabilities by themselves are not enough to identify the
-variance of a general fixed-size without-replacement design, so externally
-supplied ``pi`` artifacts still receive the point estimate but not an invented
-standard error.
+TeAL probability sampling records permit design-based standard errors for
+SRSWOR, stratified SRSWOR and independent Bernoulli audits. An external audit
+can also explicitly declare one of these designs (and provide strata when
+needed); its actual randomized selection is a researcher assertion, not
+something TeAL can infer from first-order inclusion probabilities alone.
+Design variance is conditional on the finite frame and frozen surrogate values.
 """
 
 from __future__ import annotations
@@ -468,11 +467,13 @@ def generalized_difference(
     ``surrogate`` therefore defines the target finite population and must cover
     every audited key.  ``gold`` and ``pi`` must have exactly the same key set.
 
-    No model is learned.  If ``pi`` was created by TeAL ``probability_split``,
-    SRSWOR/stratified-SRSWOR provenance is used to estimate the design variance
-    of the residual correction.  Otherwise the point estimate is still returned
-    but the standard error is left unavailable rather than assuming a design from
-    first-order inclusion probabilities alone.
+    No model is learned. Recorded TeAL probability sampling provenance can
+    identify SRSWOR, stratified SRSWOR or independent Bernoulli variance.
+    An external audit may pass ``design=`` (and full-frame ``strata=`` for
+    stratification), subject to observable validation; actual randomization
+    and frozen surrogate predictions remain the researcher's assumptions.
+    Without verified provenance or an asserted design, the point estimate is
+    returned with no estimated design standard error.
     """
     if inference != "finite":
         raise ValueError("Superpopulation inference is not enabled until its variance model is validated.")
