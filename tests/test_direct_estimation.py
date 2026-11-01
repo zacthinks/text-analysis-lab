@@ -106,3 +106,44 @@ def test_inconsistent_external_probability_rejected(tmp_path):
             estimate(gold, pi=pi, population=frame, design="srswor")
     finally:
         project.close()
+
+
+def test_single_human_data_field_is_inferred_and_multiple_fields_are_ambiguous(tmp_path):
+    project = teal.Project.create(tmp_path / "field_selection", name="fields")
+    try:
+        population = _register(project, range(4), "text", list("abcd"))
+        gold = _register(project, [0, 2], "human_judgment", [1., 0.])
+        pi = _register(project, [2, 0], "pi", [.5, .5])
+        inferred = gold.analysis.estimate(
+            pi=pi, population=population, design="srswor",
+        )
+        explicit = gold.analysis.estimate(
+            pi=pi, population=population, design="srswor",
+            gold_field="human_judgment",
+        )
+        assert inferred.estimate == pytest.approx(explicit.estimate)
+        assert inferred.standard_error == pytest.approx(explicit.standard_error)
+        multi = project.register_external(
+            pd.DataFrame({
+                "row_id": [0, 2],
+                "human_judgment": [1., 0.],
+                "second_measure": [2., 3.],
+            }),
+            primary_key="row_id",
+            data_fields=["human_judgment", "second_measure"],
+        )
+        with pytest.raises(ArtifactError, match="gold_field="):
+            multi.analysis.estimate(
+                pi=pi, population=population, design="srswor",
+            )
+        assert multi.analysis.estimate(
+            pi=pi, population=population, design="srswor",
+            gold_field="human_judgment",
+        ).estimate == pytest.approx(inferred.estimate)
+        with pytest.raises(ArtifactError, match="must expose data field"):
+            gold.analysis.estimate(
+                pi=pi, population=population, design="srswor",
+                gold_field="does_not_exist",
+            )
+    finally:
+        project.close()
