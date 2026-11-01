@@ -100,3 +100,87 @@ def test_external_stratified_validates_missing_labels_and_pi(tmp_path):
             )
     finally:
         project.close()
+
+
+
+@pytest.mark.parametrize(
+    ("mode", "missing_input"),
+    [
+        ("srswor", "sample"),
+        ("stratified_srswor", "strata"),
+        ("bernoulli", "probabilities"),
+    ],
+)
+def test_unavailable_recorded_artifact_preserves_point_estimate(
+    tmp_path, monkeypatch, mode, missing_input
+):
+    """Use a reopened Project, whose artifact lookup raises TeAL's real exception.
+
+    Inject only the unavailable lookup, rather than corrupting project storage.
+    A missing historical sampling artifact should disable its SE, not GD itself.
+    """
+    from text_analysis_lab.core.errors import ArtifactNotFoundError
+
+    root = tmp_path / mode
+    project = teal.Project.create(root, name="gd_missing_provenance")
+    try:
+        ids = np.arange(24)
+        source = _register(project, ids, "text", [f"doc {i}" for i in ids])
+        surrogate = _register(project, ids, "prediction", ids / 30.0)
+        strata = _register(project, ids, "H", [0] * 12 + [1] * 12)
+        p = _register(project, ids[::-1], "probability", [0.7] * 24)
+        if mode == "srswor":
+            sampled = project.probability_sample(source, n=12, random_state=4)
+        elif mode == "stratified_srswor":
+            sampled = project.probability_sample(
+                source, n=12, strata=strata, random_state=4
+            )
+        else:
+            sampled = project.probability_sample(
+                source, probability=p, random_state=4
+            )
+        selected = sampled["sample"].query(
+            key_columns=True, data_columns=False, metadata_columns=False,
+            form="table",
+        )["row_id"].to_numpy(dtype=int)
+        assert len(selected) >= 2
+        gold = _register(
+            project, selected, "label",
+            [(int(i) % 4) / 3.0 for i in selected],
+        )
+        artifact_ids = {
+            "surrogate": surrogate.artifact_id,
+            "gold": gold.artifact_id,
+            "pi": sampled["pi"].artifact_id,
+            "sample": sampled["sample"].artifact_id,
+            "strata": strata.artifact_id,
+            "probabilities": p.artifact_id,
+        }
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(root)
+    try:
+        q = reopened.get_artifact(artifact_ids["surrogate"])
+        y = reopened.get_artifact(artifact_ids["gold"])
+        pi = reopened.get_artifact(artifact_ids["pi"])
+        original = generalized_difference(q, gold=y, pi=pi)
+        assert original.standard_error is not None
+
+        unavailable_id = artifact_ids[missing_input]
+        lookup = reopened.get_artifact
+
+        def fail_one_lookup(ref, **kwargs):
+            if ref == unavailable_id:
+                raise ArtifactNotFoundError(unavailable_id)
+            return lookup(ref, **kwargs)
+
+        monkeypatch.setattr(reopened, "get_artifact", fail_one_lookup)
+        recovered = generalized_difference(q, gold=y, pi=pi)
+        assert recovered.estimated_total == pytest.approx(original.estimated_total)
+        assert recovered.estimated_mean == pytest.approx(original.estimated_mean)
+        assert recovered.standard_error is None
+        assert recovered.variance_note is not None
+        assert "unavailable" in recovered.variance_note
+    finally:
+        reopened.close()
