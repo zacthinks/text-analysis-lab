@@ -351,6 +351,7 @@ Browse analysis methods by task (methods may appear in multiple families):
 <details>
 <summary>Statistical Estimation</summary>
 
+- `estimate` (direct inference from high-warrant human-coded probability samples)
 - `generalized_difference`
 - `generalized_difference_by`
 
