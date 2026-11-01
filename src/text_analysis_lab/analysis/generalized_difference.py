@@ -49,6 +49,10 @@ class GeneralizedDifferenceResult:
     variance_design: str | None
     variance_note: str | None = None
     gold_is_binary: bool = False
+    inference: str = "finite"
+    variance_audit: float | None = None
+    variance_corpus: float | None = None
+    variance_total: float | None = None
 
     @property
     def estimated_prevalence(self) -> float:
@@ -125,6 +129,10 @@ class GeneralizedDifferenceResult:
             "estimated_total": self.estimated_total,
             "standard_error_total": self.standard_error_total,
             "variance_design": self.variance_design,
+            "inference": self.inference,
+            "variance_audit": self.variance_audit,
+            "variance_corpus": self.variance_corpus,
+            "variance_total": self.variance_total,
         }
         if self.gold_is_binary:
             row["estimated_prevalence"] = self.estimated_mean
@@ -307,7 +315,7 @@ def generalized_difference_by(
     returns the corrected difference in group means with its design-based SE.
     """
     if inference != "finite":
-        raise ValueError("Superpopulation inference is not enabled until its variance model is validated.")
+        raise ValueError("Grouped superpopulation inference is not supported; use inference='finite'.")
     from text_analysis_lab.analysis.gd_design_variance import check_design
     check_design(design)
     project = surrogate.project
@@ -475,8 +483,8 @@ def generalized_difference(
     Without verified provenance or an asserted design, the point estimate is
     returned with no estimated design standard error.
     """
-    if inference != "finite":
-        raise ValueError("Superpopulation inference is not enabled until its variance model is validated.")
+    if inference not in {"finite", "superpopulation"}:
+        raise ValueError("inference must be 'finite' or 'superpopulation'.")
     from text_analysis_lab.analysis.gd_design_variance import check_design
     check_design(design)
     project = surrogate.project
@@ -562,10 +570,54 @@ def generalized_difference(
         design=design,
         strata=strata_artifact,
     )
-    se_total = (
-        None if variance_total is None else float(math.sqrt(max(variance_total, 0.0)))
+    variance_audit = None if variance_total is None else float(variance_total / N**2)
+    variance_corpus = None
+    combined_variance = variance_audit
+    if inference == "superpopulation":
+        if variance_audit is None or design is None:
+            raise ValueError(
+                "Superpopulation inference requires a verified or asserted "
+                "supported audit design and an estimable audit variance."
+            )
+        from text_analysis_lab.analysis.gd_superpopulation import corpus_variance
+        h_full, h_sample = None, None
+        if design == "stratified_srswor":
+            strata_for_model = strata_artifact
+            if strata_for_model is None:
+                op = project.get_operation(str(pi_artifact.operation_id))
+                recorded_sources = project.operation_sources(str(pi_artifact.operation_id))
+                ids = {
+                    str(row["source_label"]): str(row["source_artifact_id"])
+                    for row in recorded_sources
+                }
+                if "strata" not in ids:
+                    raise ValueError("Stratified superpopulation inference requires strata.")
+                strata_for_model = project.get_artifact(ids["strata"])
+            fields = [str(col) for col in strata_for_model.get_data_columns()]
+            if len(fields) != 1:
+                raise ArtifactError("Superpopulation strata must have one data field.")
+            frame = _frame(strata_for_model, fields[0])
+            _validate_unique(frame, keys, role="superpopulation strata")
+            if set(_key_tuples(frame, keys)) != population_keys:
+                raise ArtifactError("Superpopulation strata must cover the frame.")
+            population_aligned = population.loc[:, list(keys)].merge(
+                frame, on=list(keys), validate="one_to_one", sort=False
+            )
+            audit_aligned = merged.loc[:, list(keys)].merge(
+                frame, on=list(keys), validate="one_to_one", sort=False
+            )
+            h_full = population_aligned[fields[0]].to_numpy()
+            h_sample = audit_aligned[fields[0]].to_numpy()
+        variance_corpus = corpus_variance(
+            gold=y, inclusion=inclusion, population_size=N,
+            design=design, stratum_population=h_full, stratum_audit=h_sample,
+        )
+        combined_variance = variance_audit + variance_corpus
+    se_mean = (
+        None if combined_variance is None
+        else float(math.sqrt(max(combined_variance, 0.0)))
     )
-    se_mean = None if se_total is None else float(se_total / N)
+    se_total = None if se_mean is None else float(se_mean * N)
 
     return GeneralizedDifferenceResult(
         population_size=N,
@@ -584,6 +636,10 @@ def generalized_difference(
         variance_design=design,
         variance_note=variance_note,
         gold_is_binary=bool(np.all(np.isin(y, [0.0, 1.0]))),
+        inference=inference,
+        variance_audit=variance_audit,
+        variance_corpus=variance_corpus,
+        variance_total=combined_variance,
     )
 
 
