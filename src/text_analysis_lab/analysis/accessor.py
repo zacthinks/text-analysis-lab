@@ -280,6 +280,27 @@ class ArtifactAnalysis:
             pi_field=pi_field,
         )
 
+    def estimate(
+        self,
+        *,
+        pi: BaseArtifact | str,
+        population: BaseArtifact | str | None = None,
+        gold_field: str = "label",
+        pi_field: str = "pi",
+        statistic: str = "mean",
+        design: str | None = None,
+        strata: BaseArtifact | str | None = None,
+        inference: str = "finite",
+    ):
+        """Estimate an audited human-label mean without a surrogate model."""
+        from text_analysis_lab.analysis.estimation import estimate
+        return estimate(
+            self._artifact, pi=pi, population=population,
+            gold_field=gold_field, pi_field=pi_field,
+            statistic=statistic, design=design, strata=strata,
+            inference=inference,
+        )
+
     def generalized_difference(
         self,
         *,
