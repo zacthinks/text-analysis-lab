@@ -119,7 +119,7 @@ def test_single_human_data_field_is_inferred_and_multiple_fields_are_ambiguous(t
         )
         explicit = gold.analysis.estimate(
             pi=pi, population=population, design="srswor",
-            gold_field="human_judgment",
+            field="human_judgment",
         )
         assert inferred.estimate == pytest.approx(explicit.estimate)
         assert inferred.standard_error == pytest.approx(explicit.standard_error)
@@ -132,18 +132,43 @@ def test_single_human_data_field_is_inferred_and_multiple_fields_are_ambiguous(t
             primary_key="row_id",
             data_fields=["human_judgment", "second_measure"],
         )
-        with pytest.raises(ArtifactError, match="gold_field="):
+        with pytest.raises(ArtifactError, match="field="):
             multi.analysis.estimate(
                 pi=pi, population=population, design="srswor",
             )
         assert multi.analysis.estimate(
             pi=pi, population=population, design="srswor",
-            gold_field="human_judgment",
+            field="human_judgment",
         ).estimate == pytest.approx(inferred.estimate)
         with pytest.raises(ArtifactError, match="must expose data field"):
             gold.analysis.estimate(
                 pi=pi, population=population, design="srswor",
-                gold_field="does_not_exist",
+                field="does_not_exist",
             )
+    finally:
+        project.close()
+
+
+def test_full_artifact_naive_prediction_mean_and_statistical_limits(tmp_path):
+    project = teal.Project.create(tmp_path / "naive", name="naive")
+    try:
+        predictions = _register(
+            project, [3, 0, 1, 2], "model_prediction", [1., 0., 1., 1.]
+        )
+        result = predictions.analysis.estimate()
+        assert result.estimate == pytest.approx(.75)
+        assert result.estimated_total == pytest.approx(3.)
+        assert result.population_size == 4
+        assert result.audit_size == 0
+        assert result.standard_error == pytest.approx(0.)
+        assert result.variance_design == "census"
+        outer = predictions.analysis.estimate(inference="superpopulation")
+        assert outer.standard_error == pytest.approx(
+            np.sqrt(np.var([1., 0., 1., 1.], ddof=1) / 4)
+        )
+        with pytest.raises(ValueError, match="require pi"):
+            predictions.analysis.estimate(design="srswor")
+        with pytest.raises(ValueError, match="require pi"):
+            predictions.analysis.estimate(population=predictions)
     finally:
         project.close()
