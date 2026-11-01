@@ -285,7 +285,7 @@ class ArtifactAnalysis:
         *,
         pi: BaseArtifact | str,
         population: BaseArtifact | str | None = None,
-        gold_field: str = "label",
+        gold_field: str | None = None,
         pi_field: str = "pi",
         statistic: str = "mean",
         design: str | None = None,
