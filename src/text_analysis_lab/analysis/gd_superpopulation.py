@@ -76,10 +76,13 @@ def corpus_variance(
             )
         mean = float(np.mean(values))
         sample_var = float(np.var(values, ddof=1)) if nh > 1 else 0.0
-        # E[s2_h] = S2_h, and E[sum_{i!=j in h} (yi-yj)^2] is
-        # Nh*(Nh-1)*s2_h, where values denote an unordered pair sum.
+        # Across strata, (mean_h - mean_k)^2 already includes the
+        # sampling variance of the two sample means. Therefore the
+        # within-stratum dispersion correction here uses n_h, not N_h.
+        # The separate within-stratum population-pair term below still
+        # correctly uses N_h * (N_h - 1) * s2_h.
         groups.append((
-            Nh, mean, sample_var, (Nh - 1) * sample_var / Nh
+            Nh, mean, sample_var, (nh - 1) * sample_var / nh
         ))
     pair_sum = sum(Nh * (Nh - 1) * s2 for Nh, _, s2, _ in groups)
     for i, (Nh, mean_h, _, centered_h) in enumerate(groups):
