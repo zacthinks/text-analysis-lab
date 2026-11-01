@@ -1,13 +1,9 @@
-"""Direct design-based inference from high-warrant human measurements.
+"""Descriptive and probability-sample estimation of numeric artifact fields.
 
-Only use this estimator when the audited outcome is a defensible human-coded
-measurement under a documented, frozen coding procedure. This is a scientific
-input contract, not a claim TeAL can establish warrant from numeric values or
-field names. Do not substitute uncorrected surrogate/model predictions; use
-generalized_difference() with an independent high-warrant audit instead.
-
-The target finite frame must be provided or recovered from verified TeAL
-probability-sampling provenance. An external design assertion cannot invent N.
+An unweighted full-artifact mean is exact for those recorded values. It does
+not establish that surrogate predictions measure the underlying human outcome.
+Probability-audit inference requires an actual randomized sampling design;
+scientific interpretation remains the researcher's responsibility.
 """
 from __future__ import annotations
 
@@ -33,7 +29,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class EstimateResult:
-    """Ephemeral HT mean/proportion with explicit inference and variance scale."""
+    """Ephemeral descriptive or HT mean/proportion with explicit variance scale."""
 
     statistic: str
     estimate: float
@@ -141,54 +137,81 @@ def _recorded_frame(project, pi_artifact):
         return None
 
 
-def _gold_data_field(gold: BaseArtifact, requested: str | None) -> str:
-    """Select the audited measurement field, never a key or metadata column.
+def _data_field(artifact: BaseArtifact, requested: str | None) -> str:
+    """Select a numeric data field, never a key or metadata column.
 
     A single data field is unambiguous regardless of its name; multi-field
     artifacts require explicit selection rather than silently guessing which
     variable is the human measurement.
     """
-    columns = [str(column) for column in gold.get_data_columns()]
+    columns = [str(column) for column in artifact.get_data_columns()]
     if requested is None:
         if len(columns) != 1:
             raise ArtifactError(
-                "gold_field= is required unless the gold artifact has exactly "
+                "field= is required unless the artifact has exactly "
                 f"one data field; available data fields: {columns}."
             )
         return columns[0]
-    _require_field(gold, requested, role="gold")
+    _require_field(artifact, requested, role="input")
     return requested
 
 
 def estimate(
-    gold: BaseArtifact,
+    artifact: BaseArtifact,
     *,
-    pi: BaseArtifact | str,
+    pi: BaseArtifact | str | None = None,
     population: BaseArtifact | str | None = None,
-    gold_field: str | None = None,
+    field: str | None = None,
     pi_field: str = "pi",
     statistic: str = "mean",
     design: str | None = None,
     strata: BaseArtifact | str | None = None,
     inference: str = "finite",
 ) -> EstimateResult:
-    """HT mean or proportion of a probability-audited, known finite frame.
+    """Mean/proportion of a complete artifact or an HT probability sample.
 
-    With TeAL-recorded pi, the frame and design can be recovered automatically.
-    For external pi, provide the full keyed population frame and assert design=
-    to obtain a conditional SE. An external assertion is not proof of sampling.
-    `gold` must hold high-warrant human measurements, not model predictions.
-    Numeric data, operator provenance and field names do not prove this:
-    the researcher is responsible for the measurement's warrant and for keeping
-    the audit independent of model selection and fitting. If the artifact has
-    exactly one data field, gold_field is inferred; otherwise it is required.
+    With no pi, compute the exact descriptive mean of recorded numeric values.
+    This has no finite-population sampling uncertainty for those recorded values
+    and conveys no guarantee about prediction accuracy or measurement warrant.
+    With pi, a verified sampling frame or explicit population= is necessary.
     """
     if statistic != "mean":
         raise ValueError("Only statistic='mean' is implemented at this checkpoint.")
     if inference not in {"finite", "superpopulation"}:
         raise ValueError("inference must be 'finite' or 'superpopulation'.")
     check_design(design)
-    project = gold.project
+    project = artifact.project
+    field = _data_field(artifact, field)
+    if pi is None:
+        if population is not None or strata is not None or design is not None:
+            raise ValueError("population=, strata= and design= require pi=.")
+        values_frame = _frame(artifact, field)
+        keys = tuple(str(x) for x in artifact.primary_key)
+        _validate_unique(values_frame, keys, role="input")
+        if len(values_frame) == 0:
+            raise ArtifactError("Cannot estimate an empty artifact.")
+        values = _numeric(values_frame[field], name=f"field {field!r}")
+        if inference == "superpopulation":
+            if len(values) < 2:
+                raise ValueError("IID superpopulation variance requires at least two observations.")
+            corpus = float(np.var(values, ddof=1) / len(values))
+            se = float(np.sqrt(corpus))
+        else:
+            corpus = None
+            se = 0.0
+        total = float(np.sum(values))
+        return EstimateResult(
+            statistic=statistic, estimate=total / len(values),
+            estimated_total=total, population_size=len(values),
+            audit_size=0, standard_error=se,
+            standard_error_total=float(se * len(values)),
+            inference=inference, variance_design="census",
+            variance_note="Exact descriptive mean of the recorded values; "
+                "not an assertion about human-label accuracy or construct validity.",
+            variance_audit=0.0, variance_corpus=corpus,
+            variance_total=0.0 if corpus is None else corpus,
+            gold_is_binary=bool(np.all(np.isin(values, [0., 1.]))),
+        )
     pi_artifact = project.get_artifact(pi)
     frame_artifact = (
         _recorded_frame(project, pi_artifact)
@@ -200,16 +223,16 @@ def estimate(
             "sampling-frame provenance; inclusion probabilities cannot identify N."
         )
     strata_artifact = None if strata is None else project.get_artifact(strata)
-    gold_field = _gold_data_field(gold, gold_field)
+
     _require_field(pi_artifact, pi_field, role="pi")
-    keys = tuple(str(x) for x in gold.primary_key)
+    keys = tuple(str(x) for x in artifact.primary_key)
     if not keys:
         raise ArtifactError("Gold has no primary-key columns.")
     for role, art in (("pi", pi_artifact), ("population", frame_artifact)):
         if tuple(str(x) for x in art.primary_key) != keys:
             raise ArtifactError(f"{role} and gold primary-key columns differ.")
     frame = _key_only_frame(frame_artifact)
-    audit = _frame(gold, gold_field)
+    audit = _frame(artifact, field)
     probabilities = _frame(pi_artifact, pi_field)
     for role, table in (
         ("population", frame), ("gold", audit), ("pi", probabilities)
@@ -229,7 +252,7 @@ def estimate(
     merged = audit.merge(
         probabilities, on=list(keys), validate="one_to_one", sort=False
     )
-    y = _numeric(merged[gold_field], name=f"gold field {gold_field!r}")
+    y = _numeric(merged[field], name=f"gold field {field!r}")
     inclusion = _numeric(merged[pi_field], name=f"pi field {pi_field!r}")
     if np.any((inclusion <= 0) | (inclusion > 1)):
         raise ArtifactError("pi must satisfy 0 < pi <= 1.")
