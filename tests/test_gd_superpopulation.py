@@ -52,8 +52,8 @@ def test_disproportionate_strata_corpus_variance_is_not_audit_variance():
         stratum_population=h_full, stratum_audit=h_sample,
     )
     # Population within pair sums: A 4*3*2, B 2*1*8.
-    # Between strata: 4*2 * ((3/4)*2 + (1/2)*8 + (1-12)**2).
-    expected = (24 + 16 + 8 * (1.5 + 4 + 121)) / (36 * 5)
+    # Between strata: 4*2 * ((1/2)*2 + (1/2)*8 + (1-12)**2).
+    expected = (24 + 16 + 8 * (1 + 4 + 121)) / (36 * 5)
     assert estimated == pytest.approx(expected)
 
 
@@ -142,3 +142,85 @@ def test_external_superpopulation_components_are_explicit(tmp_path, design):
         assert "variance_corpus" not in finite.to_frame().columns
     finally:
         project.close()
+
+
+
+def test_stratified_corpus_variance_exact_enumeration():
+    """Average over every valid audit: the estimated finite-frame corpus term
+    must equal the known S_Y**2 / N, including the cross-stratum term."""
+    from itertools import combinations
+
+    full_y = np.array([0., 2., 4., 10., 14.])
+    full_h = np.array(["A"] * 3 + ["B"] * 2)
+    estimates = []
+    for selected_a in combinations(range(3), 2):
+        sample_ids = np.array([*selected_a, 3, 4])
+        estimates.append(corpus_variance(
+            gold=full_y[sample_ids],
+            inclusion=np.array([2 / 3, 2 / 3, 1., 1.]),
+            population_size=5, design="stratified_srswor",
+            stratum_population=full_h, stratum_audit=full_h[sample_ids],
+        ))
+    assert np.mean(estimates) == pytest.approx(
+        np.var(full_y, ddof=1) / 5, abs=1e-12
+    )
+
+
+@pytest.mark.parametrize("design", ["srswor", "stratified_srswor", "bernoulli"])
+def test_nested_iid_interval_calibration_for_supported_designs(design):
+    """Small seeded nested frame-and-audit check; no heavy simulation suite."""
+    rng = np.random.default_rng({"srswor": 771, "stratified_srswor": 772,
+                                  "bernoulli": 773}[design])
+    N = 96
+    actual = []
+    predicted = []
+    covered = []
+    for _ in range(240):
+        x = rng.normal(size=N)
+        y = x + rng.normal(scale=.75, size=N)
+        q = 0.7 * x
+        residual = y - q
+        if design == "srswor":
+            idx = rng.choice(N, size=40, replace=False)
+            pi = np.full(40, 40 / N)
+            audit_v = (1 - 40 / N) * np.var(residual[idx], ddof=1) / 40
+            corpus = corpus_variance(
+                gold=y[idx], inclusion=pi, population_size=N, design=design
+            )
+        elif design == "stratified_srswor":
+            # Deterministic frame strata of unequal sizes and allocations.
+            h = np.array(["A"] * 64 + ["B"] * 32)
+            idx = np.concatenate([
+                rng.choice(64, size=16, replace=False),
+                64 + rng.choice(32, size=24, replace=False),
+            ])
+            pi = np.array([.25] * 16 + [.75] * 24)
+            audit_v = (
+                (64 / N)**2 * (1 - .25) * np.var(residual[idx[:16]], ddof=1) / 16
+                + (32 / N)**2 * (1 - .75) * np.var(residual[idx[16:]], ddof=1) / 24
+            )
+            corpus = corpus_variance(
+                gold=y[idx], inclusion=pi, population_size=N,
+                design=design, stratum_population=h, stratum_audit=h[idx],
+            )
+        else:
+            full_pi = np.where(np.arange(N) % 3 == 0, .35, .7)
+            idx = np.flatnonzero(rng.random(N) < full_pi)
+            if len(idx) < 2:
+                continue
+            pi = full_pi[idx]
+            audit_v = float(np.sum(
+                (1 - pi) * (residual[idx] / pi)**2
+            ) / N**2)
+            corpus = corpus_variance(
+                gold=y[idx], inclusion=pi, population_size=N, design=design
+            )
+        estimate = float(np.mean(q) + np.sum(residual[idx] / pi) / N)
+        total_v = audit_v + corpus
+        actual.append(estimate)
+        predicted.append(total_v)
+        covered.append(abs(estimate) <= 1.96 * np.sqrt(total_v))
+    assert np.var(actual, ddof=1) == pytest.approx(
+        np.mean(predicted), rel=.35
+    )
+    assert 0.84 <= np.mean(covered) <= 0.99
