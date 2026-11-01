@@ -53,7 +53,7 @@ class EstimateResult:
     @property
     def estimated_prevalence(self) -> float:
         if not self.gold_is_binary:
-            raise ValueError("estimated_prevalence requires binary 0/1 gold labels.")
+            raise ValueError("estimated_prevalence requires binary 0/1 values.")
         return self.estimate
 
     def confidence_interval(
@@ -141,8 +141,7 @@ def _data_field(artifact: BaseArtifact, requested: str | None) -> str:
     """Select a numeric data field, never a key or metadata column.
 
     A single data field is unambiguous regardless of its name; multi-field
-    artifacts require explicit selection rather than silently guessing which
-    variable is the human measurement.
+    artifacts require explicit selection rather than silently guessing.
     """
     columns = [str(column) for column in artifact.get_data_columns()]
     if requested is None:
@@ -230,7 +229,7 @@ def estimate(
         raise ArtifactError("Gold has no primary-key columns.")
     for role, art in (("pi", pi_artifact), ("population", frame_artifact)):
         if tuple(str(x) for x in art.primary_key) != keys:
-            raise ArtifactError(f"{role} and gold primary-key columns differ.")
+            raise ArtifactError(f"{role} and input primary-key columns differ.")
     frame = _key_only_frame(frame_artifact)
     audit = _frame(artifact, field)
     probabilities = _frame(pi_artifact, pi_field)
@@ -252,7 +251,7 @@ def estimate(
     merged = audit.merge(
         probabilities, on=list(keys), validate="one_to_one", sort=False
     )
-    y = _numeric(merged[field], name=f"gold field {field!r}")
+    y = _numeric(merged[field], name=f"field {field!r}")
     inclusion = _numeric(merged[pi_field], name=f"pi field {pi_field!r}")
     if np.any((inclusion <= 0) | (inclusion > 1)):
         raise ArtifactError("pi must satisfy 0 < pi <= 1.")
