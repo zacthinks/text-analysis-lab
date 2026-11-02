@@ -43,6 +43,13 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.core.types import DEFAULT_SOURCE_LABEL
+from text_analysis_lab.linguistics.cache import user_cache_paths
+from text_analysis_lab.models.spacy import (
+    APPROVED_SPACY_MODELS,
+    SpacyResourceError,
+    resolve_spacy,
+    verify_managed_spacy,
+)
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.artifact_base import BaseArtifact
@@ -176,6 +183,31 @@ class SpacyTranslator(BaseTranslator):
         self.resource_identity: dict[str, str] | None = None
         self._frozen_model_path: str | None = None
         self._resource_verified = False
+        self._unfrozen_spacy_resolution: Any | None = None
+        self._verified_managed_source: str | None = None
+
+    def _spacy_load_source(self) -> str:
+        """Select the resource without substituting an alternative for a frozen one."""
+        if self._frozen_model_path is not None:
+            return self._frozen_model_path
+        if self.is_frozen:
+            if (self.resource_identity or {}).get("kind") == "managed_cache":
+                if self._verified_managed_source is None:
+                    raise OperatorError("Frozen managed spaCy resource was not verified.")
+                return self._verified_managed_source
+            # Legacy frozen package references MUST keep using their original package.
+            return self.model
+        if self.model not in APPROVED_SPACY_MODELS:
+            # Preserve pre-existing explicit directory and custom installed-package behavior.
+            return self.model
+        if self._unfrozen_spacy_resolution is None:
+            try:
+                self._unfrozen_spacy_resolution = resolve_spacy(
+                    user_cache_paths(create=False).models, self.model, allow_download=False
+                )
+            except SpacyResourceError as exc:
+                raise OperatorError(str(exc)) from exc
+        return str(self._unfrozen_spacy_resolution.load_target)
 
     def translate(
         self,
@@ -194,11 +226,10 @@ class SpacyTranslator(BaseTranslator):
                 "or pandas Series."
             )
 
-        model_source = self._frozen_model_path or self.model
         if self.is_frozen and not self._resource_verified:
             self._verify_frozen_resource()
             self._resource_verified = True
-        nlp = _load_spacy_pipeline(model_source, self.disable)
+        nlp = _load_spacy_pipeline(self._spacy_load_source(), self.disable)
         docs = nlp.pipe(values, batch_size=self.spacy_batch_size, n_process=1)
         sentence_rows: list[dict[str, Any]] = []
         token_rows: list[dict[str, Any]] = []
@@ -384,13 +415,30 @@ class SpacyTranslator(BaseTranslator):
         worker = self.from_json_state(self.to_json_state())
         worker._frozen_model_path = self._frozen_model_path
         worker._resource_verified = False
+        worker._verified_managed_source = None
         worker.is_frozen = self.is_frozen
         return worker
 
     def prepare_for_freeze(self) -> None:
         """Resolve exact spaCy resource identity before durable snapshot commit."""
-        nlp = _load_spacy_pipeline(self.model, self.disable)
+        nlp = _load_spacy_pipeline(self._spacy_load_source(), self.disable)
         self.resolved_spacy_version = _spacy_runtime_version()
+        resolution = self._unfrozen_spacy_resolution
+        if resolution is not None and resolution.source == "managed_cache":
+            if self.save_model:
+                self.resource_identity = {"kind": "vendor"}
+            else:
+                try:
+                    verified = verify_managed_spacy(
+                        user_cache_paths(create=False).models,
+                        resolution.model_id,
+                        resolution.version,
+                        resolution.digest,
+                    )
+                except SpacyResourceError as exc:
+                    raise OperatorError(str(exc)) from exc
+                self.resource_identity = verified.frozen_identity()
+            return
         try:
             self.resource_identity = _spacy_resource_identity(self.model, nlp)
         except OperatorError:
@@ -416,12 +464,27 @@ class SpacyTranslator(BaseTranslator):
                     f"Vendored spaCy model asset is missing: {self._frozen_model_path}."
                 )
             return
+        if self.resource_identity.get("kind") == "managed_cache":
+            identity = self.resource_identity
+            try:
+                resolved = verify_managed_spacy(
+                    user_cache_paths(create=False).models,
+                    str(identity.get("name", "")),
+                    str(identity.get("model_version", "")),
+                    str(identity.get("content_sha256", "")),
+                )
+            except SpacyResourceError as exc:
+                raise OperatorError(f"Frozen managed spaCy resource failed verification: {exc}") from exc
+            if identity.get("digest_algorithm") != "sha256-tree-v1" or self.model != resolved.model_id:
+                raise OperatorError("Frozen managed spaCy resource identity does not match the snapshot.")
+            self._verified_managed_source = resolved.load_target
+            return
         _verify_spacy_resource_identity(self.model, self.resource_identity)
 
     def save_assets(self, assets_dir: Path) -> Mapping[str, Any]:
         if not self.save_model:
             return {}
-        nlp = _load_spacy_pipeline(self.model, self.disable)
+        nlp = _load_spacy_pipeline(self._spacy_load_source(), self.disable)
         model_dir = assets_dir / "spacy_model"
         if model_dir.exists():
             shutil.rmtree(model_dir)
