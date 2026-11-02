@@ -288,6 +288,7 @@ class ArtifactAnalysis:
         field: str | None = None,
         pi_field: str = "pi",
         statistic: str = "mean",
+        quantile: float = 0.5,
         known: BaseArtifact | str | list[BaseArtifact | str] | None = None,
         design: str | None = None,
         strata: BaseArtifact | str | None = None,
@@ -298,7 +299,7 @@ class ArtifactAnalysis:
         return estimate(
             self._artifact, pi=pi, population=population,
             field=field, pi_field=pi_field,
-            statistic=statistic, known=known, design=design, strata=strata,
+            statistic=statistic, quantile=quantile, known=known, design=design, strata=strata,
             inference=inference,
         )
 
@@ -315,6 +316,7 @@ class ArtifactAnalysis:
         inference: str = "finite",
         known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
         statistic: str = "mean",
+        quantile: float = 0.5,
     ) -> GeneralizedDifferenceResult:
         from text_analysis_lab.analysis.generalized_difference import (
             generalized_difference,
@@ -332,6 +334,7 @@ class ArtifactAnalysis:
             inference=inference,
             known=known,
             statistic=statistic,
+            quantile=quantile,
         )
 
     def generalized_difference_by(
