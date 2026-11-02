@@ -313,6 +313,7 @@ class ArtifactAnalysis:
         design: str | None = None,
         strata: BaseArtifact | str | None = None,
         inference: str = "finite",
+        known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
     ) -> GeneralizedDifferenceResult:
         from text_analysis_lab.analysis.generalized_difference import (
             generalized_difference,
@@ -328,6 +329,7 @@ class ArtifactAnalysis:
             design=design,
             strata=strata,
             inference=inference,
+            known=known,
         )
 
     def generalized_difference_by(
@@ -343,6 +345,7 @@ class ArtifactAnalysis:
         design: str | None = None,
         strata: BaseArtifact | str | None = None,
         inference: str = "finite",
+        known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
     ) -> GeneralizedDifferenceGroupedResult:
         from text_analysis_lab.analysis.generalized_difference import (
             generalized_difference_by,
@@ -360,6 +363,7 @@ class ArtifactAnalysis:
             design=design,
             strata=strata,
             inference=inference,
+            known=known,
         )
 
     def crosstab(
