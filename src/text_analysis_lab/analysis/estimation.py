@@ -358,6 +358,32 @@ def estimate(
             QuantileEstimateResult, left_weighted_quantile,
         )
         median = left_weighted_quantile(y, 1.0 / inclusion, probability=.5)
+        from text_analysis_lab.analysis.gd_quantile_design import prepare_threshold_design
+        validated = prepare_threshold_design(
+            surrogate=recorded_frame_artifact or frame_artifact,
+            pi_artifact=pi_artifact,
+            audit_frame=merged.loc[:, list(keys)].copy(),
+            population_keys=full_keys, primary_key=keys,
+            inclusion=inclusion, design=design, strata=strata_artifact,
+        )
+        weights = 1.0 / inclusion
+        weight_sum = float(np.sum(weights))
+        observed = np.unique(y)
+        cdf = []
+        cdf_se = []
+        for threshold in observed:
+            z = (y <= threshold).astype(float)
+            level = float(np.dot(weights, z) / weight_sum)
+            # Delta-method ratio linearization: Var(HT[z-F]) / HT[1]^2.
+            variance = validated.variance_total(z - level)
+            cdf.append(level)
+            cdf_se.append(
+                float(np.sqrt(max(0.0, variance)) / weight_sum)
+                if variance is not None else np.nan
+            )
+        cdf_frame = pd.DataFrame({
+            "threshold": observed, "weighted_cdf": cdf, "cdf_se": cdf_se,
+        })
         # Treat a probability-audit result as a census only when inclusion
         # probabilities are one for all units. Otherwise a complete realized
         # Bernoulli draw still uses its declared weighted-CDF procedure.
@@ -377,6 +403,7 @@ def estimate(
                 "median sampling variance and confidence intervals unavailable."
             ) + (f" Design/provenance: {note}" if note else ""),
             standard_error=0.0 if census else None,
+            _cdf=cdf_frame,
         )
     ht_total = float(np.sum(y / inclusion)) + float(known_data["__known_y__"].sum())
     variance_audit = (
