@@ -147,6 +147,7 @@ class SpacyTranslator(BaseTranslator):
         spacy_batch_size: int = 128,
         disable: Sequence[str] = (),
         save_model: bool = False,
+        download_model: bool = True,
         operator_id: str | None = None,
     ) -> None:
         super().__init__(operator_id=operator_id)
@@ -179,6 +180,7 @@ class SpacyTranslator(BaseTranslator):
         self.spacy_batch_size = int(spacy_batch_size)
         self.disable = normalized_disable
         self.save_model = bool(save_model)
+        self.download_model = bool(download_model)
         self.resolved_spacy_version: str | None = None
         self.resource_identity: dict[str, str] | None = None
         self._frozen_model_path: str | None = None
@@ -202,8 +204,14 @@ class SpacyTranslator(BaseTranslator):
             return self.model
         if self._unfrozen_spacy_resolution is None:
             try:
-                self._unfrozen_spacy_resolution = resolve_spacy(
-                    user_cache_paths(create=False).models, self.model, allow_download=False
+                from text_analysis_lab.models.spacy_install import install_official_spacy
+                import os
+
+                offline = os.environ.get("TEAL_OFFLINE", "").lower() in {"1", "true", "yes"}
+                self._unfrozen_spacy_resolution = install_official_spacy(
+                    user_cache_paths(create=False).models,
+                    self.model,
+                    allow_download=self.download_model and not offline,
                 )
             except SpacyResourceError as exc:
                 raise OperatorError(str(exc)) from exc
@@ -528,6 +536,7 @@ class SpacyTranslator(BaseTranslator):
             "spacy_batch_size": self.spacy_batch_size,
             "disable": list(self.disable),
             "save_model": self.save_model,
+            "download_model": self.download_model,
             "resolved_spacy_version": self.resolved_spacy_version,
             "resource_identity": self.resource_identity,
         }
@@ -542,6 +551,7 @@ class SpacyTranslator(BaseTranslator):
             spacy_batch_size=int(state.get("spacy_batch_size", 128)),
             disable=cast(Sequence[str], state.get("disable", ())),
             save_model=bool(state.get("save_model", False)),
+            download_model=bool(state.get("download_model", True)),
         )
         raw_version = state.get("resolved_spacy_version")
         raw_identity = state.get("resource_identity")
