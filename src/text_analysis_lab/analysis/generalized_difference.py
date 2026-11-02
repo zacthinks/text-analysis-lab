@@ -569,6 +569,7 @@ def generalized_difference(
             surrogate_field=surrogate_field, gold_field=gold_field,
             pi_field=pi_field, design=design, strata=strata,
             quantile=(.5 if statistic == "median" else quantile),
+            statistic=statistic,
         )
     if known is not None and inference != "finite":
         raise ValueError("known= supports only finite-population inference.")
