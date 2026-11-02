@@ -528,6 +528,7 @@ def generalized_difference(
     strata: BaseArtifact | str | None = None,
     inference: str = "finite",
     known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
+    statistic: str = "mean",
 ) -> GeneralizedDifferenceResult:
     """Correct a full-corpus surrogate using a probability audit.
 
@@ -552,6 +553,19 @@ def generalized_difference(
     is sum_K(y) + sum_U(q) + sum_A((y-q)/pi), and its variance is conditional
     on the audit design over U, not F. Superpopulation known= is not supported.
     """
+    if statistic not in {"mean", "median"}:
+        raise ValueError("statistic must be 'mean' or 'median'.")
+    if statistic == "median":
+        if known is not None:
+            raise ValueError("GD median known= requires a separate combined-CDF contract.")
+        if inference != "finite":
+            raise ValueError("GD median supports only finite-population inference.")
+        from text_analysis_lab.analysis.gd_quantiles import generalized_difference_median
+        return generalized_difference_median(
+            surrogate, gold=gold, pi=pi,
+            surrogate_field=surrogate_field, gold_field=gold_field,
+            pi_field=pi_field, design=design, strata=strata,
+        )
     if known is not None and inference != "finite":
         raise ValueError("known= supports only finite-population inference.")
     if inference not in {"finite", "superpopulation"}:
