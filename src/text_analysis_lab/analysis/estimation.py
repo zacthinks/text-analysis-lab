@@ -346,7 +346,12 @@ def estimate(
             QuantileEstimateResult, left_weighted_quantile,
         )
         median = left_weighted_quantile(y, 1.0 / inclusion, probability=.5)
-        census = len(gold_keys) == len(full_keys)
+        # Treat a probability-audit result as a census only when inclusion
+        # probabilities are one for all units. Otherwise a complete realized
+        # Bernoulli draw still uses its declared weighted-CDF procedure.
+        census = len(gold_keys) == len(full_keys) and bool(
+            np.all(inclusion == 1.0)
+        )
         return QuantileEstimateResult(
             statistic="median", estimate=median, quantile_level=.5,
             population_size=N, audit_size=len(audit), inference="finite",
