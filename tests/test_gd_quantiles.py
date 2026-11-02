@@ -46,7 +46,9 @@ def test_gd_median_thresholdwise_matches_manual_and_mean_gd(tmp_path):
             assert raw == pytest.approx((proxy_total + correction) / 4)
         with pytest.raises(ValueError, match="unavailable"):
             result.confidence_interval()
-        assert "pointwise_lower" in result.cdf_frame(level=.95)
+        assert "cdf_se" in result.cdf_frame()
+        with pytest.raises(ValueError, match="unavailable"):
+            result.cdf_frame(level=.95)
     finally:
         project.close()
 
