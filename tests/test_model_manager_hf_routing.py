@@ -145,3 +145,59 @@ def test_teal_owned_cache_removal_does_not_touch_other_directories(tmp_path):
     assert manager.remove("teal-cache:wordnet-mwe-indices", confirm=True)["removed"] is True
     assert not mwe.exists()
     assert (wsd / "keep.txt").read_text(encoding="utf-8") == "saved"
+
+
+
+def test_native_hub_cache_offline_prefetch_reuse_and_revision_eviction(tmp_path, monkeypatch):
+    """Exercise the real Hub cache scanner and download resolver, not mocks."""
+    import os
+    import pytest
+    from text_analysis_lab.models import ModelManager
+    from text_analysis_lab.linguistics.coreference.runtime import prepare_fastcoref_model
+
+    pytest.importorskip("huggingface_hub")
+    if os.name == "nt":
+        pytest.skip("Native Hub symlink fixtures require platform-specific permissions")
+
+    cache = tmp_path / "hub"
+    repository = cache / "models--biu-nlp--f-coref"
+    blobs = repository / "blobs"
+    blobs.mkdir(parents=True)
+    revisions = ("a" * 40, "b" * 40)
+    for revision in revisions:
+        snapshot = repository / "snapshots" / revision
+        snapshot.mkdir(parents=True)
+        for name, content in (
+            ("config.json", b"{}"),
+            ("model.safetensors", b"test-weights"),
+        ):
+            blob_name = revision + "-" + name.replace(".", "-")
+            (blobs / blob_name).write_bytes(content)
+            (snapshot / name).symlink_to(
+                ("../../blobs/" + blob_name)
+            )
+    refs = repository / "refs"
+    refs.mkdir()
+    (refs / "main").write_text(revisions[1], encoding="utf-8")
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache))
+    manager = ModelManager(cache_root=tmp_path / "teal", hf_cache_dir=cache)
+    key = "huggingface:biu-nlp/f-coref"
+    selected = manager.install(key, allow_download=False)
+    assert selected == repository / "snapshots" / revisions[1]
+    assert manager.verify(key).ready is None  # Fake weights do not prove loadability.
+    prepared = prepare_fastcoref_model(
+        tmp_path / "unrelated-project", cache_dir=cache, show_progress=False
+    )
+    assert prepared == selected
+    assert not (tmp_path / "materialized").exists()
+    assert not (tmp_path / "unrelated-project").exists()
+
+    preview = manager.remove(key, revision=revisions[0])
+    assert preview["removed"] is False
+    assert (repository / "snapshots" / revisions[0]).is_dir()
+    manager.remove(key, revision=revisions[0], confirm=True)
+    assert not (repository / "snapshots" / revisions[0]).exists()
+    assert selected.is_dir()
+    assert manager.install(key, allow_download=False) == selected
+    assert manager.verify(key).ready is None

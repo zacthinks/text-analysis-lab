@@ -116,3 +116,47 @@ def test_lexical_auxiliary_caches_are_discovered_without_creating_them(tmp_path:
     assert status.present
     assert status.candidate_path == auxiliary
     assert status.ready is None and status.verified is None
+
+
+
+def test_wordnet_aggregate_is_not_independently_removable(tmp_path: Path) -> None:
+    from text_analysis_lab.models import ModelManager
+
+    root = tmp_path / "teal"
+    wordnet = root / "wordnet"
+    mwe = wordnet / "mwe_indices"
+    mwe.mkdir(parents=True)
+    (wordnet / "other-owned-data.txt").write_text("keep", encoding="utf-8")
+    (mwe / "index.json").write_text("{}", encoding="utf-8")
+    manager = ModelManager(cache_root=root, hf_cache_dir=tmp_path / "hub")
+    assert manager.inspect("teal-cache:wordnet").present
+    assert manager.inspect("teal-cache:wordnet-mwe-indices").present
+    with pytest.raises(NotImplementedError, match="separately managed"):
+        manager.remove("teal-cache:wordnet", confirm=True)
+    assert (wordnet / "other-owned-data.txt").is_file()
+    assert (mwe / "index.json").is_file()
+    preview = manager.remove("teal-cache:wordnet-mwe-indices")
+    assert preview["removed"] is False
+    assert "mwe_indices" in preview["path"]
+    assert (mwe / "index.json").is_file()
+    manager.remove("teal-cache:wordnet-mwe-indices", confirm=True)
+    assert not mwe.exists()
+    assert (wordnet / "other-owned-data.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_huggingface_structural_presence_does_not_claim_verified_or_ready(tmp_path: Path) -> None:
+    from text_analysis_lab.models import ModelManager
+
+    hub = tmp_path / "hub"
+    fake = hub / "models--biu-nlp--f-coref" / "snapshots" / ("c" * 40)
+    fake.mkdir(parents=True)
+    (fake / "config.json").write_text("{}", encoding="utf-8")
+    (fake / "model.safetensors").write_bytes(b"not-a-real-model")
+    manager = ModelManager(cache_root=tmp_path / "teal", hf_cache_dir=hub)
+    status = manager.verify("huggingface:biu-nlp/f-coref")
+    assert status.present
+    assert status.candidate_path == fake
+    assert status.verified is None
+    assert status.compatible is None
+    assert status.ready is None
+    assert "not been validated" in status.detail

@@ -55,14 +55,20 @@ def verify_resource(manager, key):
              _model_is_present(loc.path)), None,
         )
         if valid is None:
-            return replace(status, verified=False, compatible=None, ready=False,
-                           detail="No complete config and weights in the selected local cache.")
-        coref = desc.task == "coreference"
+            return replace(
+                status, verified=None, compatible=None, ready=False,
+                detail=("No structurally complete config-and-weights snapshot "
+                        "was found; resource loading has not been attempted."),
+            )
+        # Filenames alone are insufficient to validate weights, tokenizers,
+        # model architecture or optional runtimes. This is structural presence,
+        # not a successful load/compatibility check.
         return replace(
-            status, present=True, candidate_path=valid, verified=True,
-            compatible=None, ready=True if coref else None,
-            detail=("Coreference data ready; runtime/GPU loading not tested." if coref
-                    else "WSL checkpoint present; tokenizer/base-model loading not tested."),
+            status, present=True, candidate_path=valid, verified=None,
+            compatible=None, ready=None,
+            detail=("Config and recognized weight filenames exist locally. "
+                    "Contents, tokenizer, dependencies and runtime compatibility "
+                    "have not been validated."),
         )
     return replace(status, detail="Auxiliary cache presence only; runtime validation not applicable.")
 
@@ -133,6 +139,13 @@ def remove_resource(manager, key, *, version=None, digest=None, revision=None,
         }
         if key not in candidates:
             raise KeyError(f"Unknown cache resource {key!r}.")
+        if key == "teal-cache:wordnet":
+            raise NotImplementedError(
+                "The WordNet cache path is an aggregate containing the separately "
+                "managed wordnet-mwe-indices resource. Delete that exact child "
+                "instead; TeAL will not recursively remove the parent or wn's "
+                "provider-managed lexicon."
+            )
         target = candidates[key]
         if target.is_symlink() or any(
             parent.is_symlink() for parent in target.parents
