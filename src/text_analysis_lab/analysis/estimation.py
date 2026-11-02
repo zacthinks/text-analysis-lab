@@ -180,8 +180,13 @@ def estimate(
     calculated from U's sampling design then scaled by N=|K union U|.
     An external population= may describe U or the complete union.
     """
-    if statistic != "mean":
-        raise ValueError("Only statistic='mean' is implemented at this checkpoint.")
+    if statistic not in {"mean", "median"}:
+        raise ValueError("statistic must be 'mean' or 'median'.")
+    if statistic == "median":
+        if known is not None:
+            raise ValueError("known= is not supported for median until a combined-CDF contract is defined.")
+        if inference != "finite":
+            raise ValueError("Median superpopulation inference is not implemented.")
     if inference not in {"finite", "superpopulation"}:
         raise ValueError("inference must be 'finite' or 'superpopulation'.")
     if known is not None and inference != "finite":
@@ -208,6 +213,21 @@ def estimate(
         else:
             corpus = None
             se = 0.0
+        if statistic == "median":
+            from text_analysis_lab.analysis.quantiles import (
+                QuantileEstimateResult, left_weighted_quantile,
+            )
+            med = left_weighted_quantile(
+                values, np.ones(len(values), dtype=float), probability=.5,
+            )
+            return QuantileEstimateResult(
+                statistic="median", estimate=med, quantile_level=.5,
+                population_size=len(values), audit_size=0, inference="finite",
+                weighting="census", total_weight=float(len(values)),
+                variance_design="census",
+                variance_note="Exact left median of the recorded values.",
+                standard_error=0.0,
+            )
         total = float(np.sum(values))
         return EstimateResult(
             statistic=statistic, estimate=total / len(values),
@@ -321,6 +341,26 @@ def estimate(
     if np.any((inclusion <= 0) | (inclusion > 1)):
         raise ArtifactError("pi must satisfy 0 < pi <= 1.")
     N = len(full_keys) + len(known_keys)
+    if statistic == "median":
+        from text_analysis_lab.analysis.quantiles import (
+            QuantileEstimateResult, left_weighted_quantile,
+        )
+        median = left_weighted_quantile(y, 1.0 / inclusion, probability=.5)
+        census = len(gold_keys) == len(full_keys)
+        return QuantileEstimateResult(
+            statistic="median", estimate=median, quantile_level=.5,
+            population_size=N, audit_size=len(audit), inference="finite",
+            weighting="normalized_inverse_probability",
+            total_weight=float(np.sum(1.0 / inclusion)),
+            variance_design="census" if census else design,
+            variance_note=(
+                "Exact finite-population left median."
+                if census else
+                "Normalized inverse-probability weighted CDF (Hajek); "
+                "median sampling variance and confidence intervals unavailable."
+            ),
+            standard_error=0.0 if census else None,
+        )
     ht_total = float(np.sum(y / inclusion)) + float(known_data["__known_y__"].sum())
     audit_variance_total, actual_design, note = _design_variance_from_pi_provenance(
         surrogate=recorded_frame_artifact or frame_artifact, pi_artifact=pi_artifact,
