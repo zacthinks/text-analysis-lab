@@ -367,6 +367,47 @@ Browse analysis methods by task (methods may appear in multiple families):
 
 </details>
 
+## Shared model cache
+
+TeAL stores reusable model data in a user-level cache rather than copying it into
+each research project. For supported official spaCy models such as
+`en_core_web_sm`, ordinary first use looks for a verified compatible cached
+pipeline, then an installed compatible spaCy package, and finally downloads
+official model data into the shared cache if needed. No Python package is
+installed or upgraded by this process.
+
+```python
+from text_analysis_lab.translators import SpacyTranslator
+
+tokens = SpacyTranslator(model="en_core_web_sm").translate("An example sentence.")
+# For offline or controlled environments:
+tokens = SpacyTranslator(
+    model="en_core_web_sm", download_model=False
+).translate("An example sentence.")
+```
+
+Set `TEAL_OFFLINE=1` to prevent automatic spaCy downloads for all normal
+translator calls in a process. `TEAL_CACHE_DIR` selects TeAL's shared resource
+cache; native Hugging Face caches follow their own settings. Explicit local
+spaCy paths continue to work. Frozen translators require the exact recorded
+model resource and never download or silently substitute another version.
+
+The standalone model manager works without creating a project:
+
+```bash
+teal models list
+teal models info spacy:en_core_web_sm --json
+teal models cache-path
+teal models install spacy:en_core_web_sm --allow-download
+```
+
+Current management support is intentionally conservative: only approved
+official English spaCy models can be downloaded this way. Inventory also
+reports recognized existing Hugging Face and AllenNLP resources, but that
+does not imply every provider supports installation, verification, or removal
+through the manager yet. Model redistribution and usage remain subject to the
+upstream model's license.
+
 ## Project Center
 
 The Project Center provides a visual interface to the same TeAL project used from Python. It supports project graph inspection, lineage/provenance views, artifact previews, storage inspection, and versioned memos for projects, artifacts, operations, and operators.
