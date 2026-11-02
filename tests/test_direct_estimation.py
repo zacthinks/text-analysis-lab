@@ -437,3 +437,22 @@ def test_median_rejects_contradictory_external_sampling_design(tmp_path):
             )
     finally:
         project.close()
+
+
+def test_direct_weighted_cdf_ratio_bernoulli_variance(tmp_path):
+    project = teal.Project.create(tmp_path / "cdf_ratio", name="ratio")
+    try:
+        frame = _register(project, range(8), "text", ["x"] * 8)
+        gold = _register(project, [4, 0, 2], "value", [8., 1., 3.])
+        pi = _register(project, [2, 4, 0], "pi", [.25, .8, .5])
+        result = gold.analysis.estimate(
+            statistic="median", pi=pi, population=frame, design="bernoulli")
+        cdf = result.cdf_frame().set_index("threshold")
+        value = 6. / 7.25
+        expected = (2*(1-value)**2 + 12*(1-value)**2 +
+                    .3125*value**2) / (7.25**2)
+        assert cdf.loc[3., "weighted_cdf"] == pytest.approx(value)
+        assert cdf.loc[3., "cdf_se"]**2 == pytest.approx(expected)
+        assert result.standard_error is None
+    finally:
+        project.close()
