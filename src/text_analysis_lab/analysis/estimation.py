@@ -163,6 +163,7 @@ def estimate(
     field: str | None = None,
     pi_field: str = "pi",
     statistic: str = "mean",
+    quantile: float = 0.5,
     known: BaseArtifact | str | list[BaseArtifact | str] | None = None,
     design: str | None = None,
     strata: BaseArtifact | str | None = None,
@@ -180,9 +181,11 @@ def estimate(
     calculated from U's sampling design then scaled by N=|K union U|.
     An external population= may describe U or the complete union.
     """
-    if statistic not in {"mean", "median"}:
+    if statistic not in {"mean", "median", "quantile"}:
         raise ValueError("statistic must be 'mean' or 'median'.")
-    if statistic == "median":
+    if statistic in {"median", "quantile"}:
+        if statistic == "quantile" and not 0.0 < quantile < 1.0:
+            raise ValueError("quantile must satisfy 0 < quantile < 1.")
         if known is not None:
             raise ValueError("known= is not supported for median until a combined-CDF contract is defined.")
         if inference != "finite":
@@ -213,15 +216,15 @@ def estimate(
         else:
             corpus = None
             se = 0.0
-        if statistic == "median":
+        if statistic in {"median", "quantile"}:
             from text_analysis_lab.analysis.quantiles import (
                 QuantileEstimateResult, left_weighted_quantile,
             )
             med = left_weighted_quantile(
-                values, np.ones(len(values), dtype=float), probability=.5,
+                values, np.ones(len(values), dtype=float), probability=(.5 if statistic == "median" else quantile),
             )
             return QuantileEstimateResult(
-                statistic="median", estimate=med, quantile_level=.5,
+                statistic=statistic, estimate=med, quantile_level=(.5 if statistic == "median" else quantile),
                 population_size=len(values), audit_size=0, inference="finite",
                 weighting="census", total_weight=float(len(values)),
                 variance_design="census",
@@ -353,11 +356,11 @@ def estimate(
         population_keys=full_keys, primary_key=keys,
         inclusion=inclusion, design=design, strata=strata_artifact,
     )
-    if statistic == "median":
+    if statistic in {"median", "quantile"}:
         from text_analysis_lab.analysis.quantiles import (
             QuantileEstimateResult, left_weighted_quantile,
         )
-        median = left_weighted_quantile(y, 1.0 / inclusion, probability=.5)
+        median = left_weighted_quantile(y, 1.0 / inclusion, probability=(.5 if statistic == "median" else quantile))
         from text_analysis_lab.analysis.gd_quantile_design import prepare_threshold_design
         validated = prepare_threshold_design(
             surrogate=recorded_frame_artifact or frame_artifact,
@@ -391,7 +394,7 @@ def estimate(
             np.all(inclusion == 1.0)
         )
         return QuantileEstimateResult(
-            statistic="median", estimate=median, quantile_level=.5,
+            statistic=statistic, estimate=median, quantile_level=(.5 if statistic == "median" else quantile),
             population_size=N, audit_size=len(audit), inference="finite",
             weighting="normalized_inverse_probability",
             total_weight=float(np.sum(1.0 / inclusion)),
