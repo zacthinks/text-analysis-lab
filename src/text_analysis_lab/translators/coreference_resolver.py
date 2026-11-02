@@ -16,7 +16,7 @@ from text_analysis_lab.core.operator import (
     SourceRequest,
     TranslationRequest,
 )
-from text_analysis_lab.linguistics.cache import user_cache_paths
+from text_analysis_lab.linguistics.cache import active_hf_cache_path, user_cache_paths
 from text_analysis_lab.linguistics.coreference.runtime import FastCorefRuntime
 from text_analysis_lab.linguistics.device import resolve_devices
 from text_analysis_lab.linguistics.heads import (
@@ -492,7 +492,7 @@ def _make_runtime(*, model: str, device: str, compile_model: bool, show_progress
         device=device,
         compile_model=compile_model,
         show_progress=show_progress,
-        cache_dir=paths.huggingface_hub,
+        cache_dir=active_hf_cache_path(get_fastcoref_model_spec(model).repository),
     )
 
 
