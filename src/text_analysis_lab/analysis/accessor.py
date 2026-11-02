@@ -288,6 +288,7 @@ class ArtifactAnalysis:
         field: str | None = None,
         pi_field: str = "pi",
         statistic: str = "mean",
+        known: BaseArtifact | str | list[BaseArtifact | str] | None = None,
         design: str | None = None,
         strata: BaseArtifact | str | None = None,
         inference: str = "finite",
@@ -297,7 +298,7 @@ class ArtifactAnalysis:
         return estimate(
             self._artifact, pi=pi, population=population,
             field=field, pi_field=pi_field,
-            statistic=statistic, design=design, strata=strata,
+            statistic=statistic, known=known, design=design, strata=strata,
             inference=inference,
         )
 
