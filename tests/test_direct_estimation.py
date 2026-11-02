@@ -405,3 +405,35 @@ def test_direct_weighted_median_census_and_stratified(tmp_path):
         assert exact.standard_error == 0.
     finally:
         project.close()
+
+
+def test_median_rejects_contradictory_external_sampling_design(tmp_path):
+    project = teal.Project.create(tmp_path / "median_bad_design", name="median")
+    try:
+        frame = _register(project, range(4), "text", list("abcd"))
+        outcomes = _register(project, [2, 0], "score", [5., 1.])
+        wrong_srs_pi = _register(project, [0, 2], "pi", [.5, .75])
+        with pytest.raises(ArtifactError, match="SRSWOR pi contradicts"):
+            outcomes.analysis.estimate(
+                statistic="median", pi=wrong_srs_pi, population=frame,
+                design="srswor",
+            )
+        # The same unequal probabilities can describe an externally
+        # asserted independent Bernoulli audit, not an SRSWOR audit.
+        valid = outcomes.analysis.estimate(
+            statistic="median", pi=wrong_srs_pi, population=frame,
+            design="bernoulli",
+        )
+        assert valid.estimate == 1.
+        assert valid.standard_error is None
+
+        # An asserted stratified design must also agree with observed
+        # within-stratum selection rates rather than return a median.
+        strata = _register(project, range(4), "stratum", ["A", "A", "B", "B"])
+        with pytest.raises(ArtifactError, match="pi contradicts"):
+            outcomes.analysis.estimate(
+                statistic="median", pi=wrong_srs_pi, population=frame,
+                design="stratified_srswor", strata=strata,
+            )
+    finally:
+        project.close()
