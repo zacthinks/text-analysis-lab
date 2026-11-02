@@ -72,6 +72,9 @@ _BUILTINS: tuple[ResourceDescriptor, ...] = (
         "allennlp", ALLENNLP_SRL_BERT.model_id, "archive_and_runtime",
         "semantic-role-labeling",
     ),
+    ResourceDescriptor("teal-cache", "wordnet", "directory", "lexical-data"),
+    ResourceDescriptor("teal-cache", "wordnet-mwe-indices", "directory", "lexical-data"),
+    ResourceDescriptor("teal-cache", "wsd-gloss-text", "directory", "word-sense-disambiguation"),
 )
 
 
@@ -151,6 +154,15 @@ class ModelManager:
                 prepared = _runtime_is_ready(resource_paths)
                 if prepared:
                     locations.append(ResourceLocation("srl_runtime", resource_paths.runtime_dir))
+            elif descriptor.provider == "teal-cache":
+                teal = user_cache_paths(self._cache_root, create=False)
+                directory = {
+                    "wordnet": teal.wordnet,
+                    "wordnet-mwe-indices": teal.wordnet_mwe_indices,
+                    "wsd-gloss-text": teal.wsd_gloss_text,
+                }[descriptor.model_id]
+                if directory.is_dir() and any(directory.iterdir()):
+                    locations.append(ResourceLocation("teal_cache", directory))
             elif descriptor.provider == "spacy":
                 from text_analysis_lab.models.spacy import available_managed_spacy, spacy_cache_root
 
