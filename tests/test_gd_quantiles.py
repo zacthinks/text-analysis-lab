@@ -44,13 +44,8 @@ def test_gd_median_thresholdwise_matches_manual_and_mean_gd(tmp_path):
                 for i in (0, 2)
             )
             assert raw == pytest.approx((proxy_total + correction) / 4)
-        # The small audit may yield finite bounds or explicit unavailability.
-        try:
-            bounds = result.confidence_interval()
-        except ValueError as exc:
-            assert "unavailable" in str(exc)
-        else:
-            assert all(np.isfinite(bounds))
+        with pytest.raises(ValueError, match="unavailable"):
+            result.confidence_interval()
         assert "pointwise_lower" in result.cdf_frame(level=.95)
     finally:
         project.close()
