@@ -225,6 +225,7 @@ class ModelManager:
             cache = active_hf_cache_path(
                 descriptor.model_id, revision=descriptor.revision,
                 teal_root=self.cache_paths()["teal"],
+                cache_dir=self._hf_cache_dir,
             )
             return Path(snapshot_download(
                 repo_id=descriptor.model_id,
