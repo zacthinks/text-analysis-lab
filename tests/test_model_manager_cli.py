@@ -60,10 +60,11 @@ def test_models_install_http_failure_is_reported_without_traceback(tmp_path, cap
     import text_analysis_lab.models.spacy_install as installer
     import text_analysis_lab.models.spacy as provider
 
+    original_version = provider.importlib.metadata.version
     monkeypatch.setattr(provider.importlib.metadata, "version",
                         lambda name: (_ for _ in ()).throw(
                             provider.importlib.metadata.PackageNotFoundError(name)
-                        ) if name == "en_core_web_sm" else __import__("importlib").metadata.version(name))
+                        ) if name == "en_core_web_sm" else original_version(name))
 
     class FailedOpener:
         def open(self, *args, **kwargs):
