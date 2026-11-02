@@ -341,6 +341,18 @@ def estimate(
     if np.any((inclusion <= 0) | (inclusion > 1)):
         raise ArtifactError("pi must satisfy 0 < pi <= 1.")
     N = len(full_keys) + len(known_keys)
+    # Validate the asserted or recorded sampling design for BOTH statistics.
+    # Median uses an unrelated weighted-CDF point estimator, so zero residuals
+    # are supplied only to exercise the existing design/provenance checks;
+    # the returned HT variance must never be presented as median variance.
+    audit_variance_total, actual_design, note = _design_variance_from_pi_provenance(
+        surrogate=recorded_frame_artifact or frame_artifact,
+        pi_artifact=pi_artifact,
+        audit_frame=merged.loc[:, list(keys)].copy(),
+        residual=y if statistic == "mean" else np.zeros_like(y),
+        population_keys=full_keys, primary_key=keys,
+        inclusion=inclusion, design=design, strata=strata_artifact,
+    )
     if statistic == "median":
         from text_analysis_lab.analysis.quantiles import (
             QuantileEstimateResult, left_weighted_quantile,
@@ -357,22 +369,16 @@ def estimate(
             population_size=N, audit_size=len(audit), inference="finite",
             weighting="normalized_inverse_probability",
             total_weight=float(np.sum(1.0 / inclusion)),
-            variance_design="census" if census else design,
+            variance_design="census" if census else actual_design,
             variance_note=(
                 "Exact finite-population left median."
                 if census else
                 "Normalized inverse-probability weighted CDF (Hajek); "
                 "median sampling variance and confidence intervals unavailable."
-            ),
+            ) + (f" Design/provenance: {note}" if note else ""),
             standard_error=0.0 if census else None,
         )
     ht_total = float(np.sum(y / inclusion)) + float(known_data["__known_y__"].sum())
-    audit_variance_total, actual_design, note = _design_variance_from_pi_provenance(
-        surrogate=recorded_frame_artifact or frame_artifact, pi_artifact=pi_artifact,
-        audit_frame=merged.loc[:, list(keys)].copy(),
-        residual=y, population_keys=full_keys, primary_key=keys,
-        inclusion=inclusion, design=design, strata=strata_artifact,
-    )
     variance_audit = (
         None if audit_variance_total is None
         else float(audit_variance_total / N**2)
