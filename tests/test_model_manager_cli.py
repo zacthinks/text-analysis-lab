@@ -78,3 +78,15 @@ def test_models_install_http_failure_is_reported_without_traceback(tmp_path, cap
     error = capsys.readouterr().err
     assert "Check your network connection" in error
     assert "Traceback" not in error
+
+
+def test_verify_hf_reports_missing_and_teal_cache_remove_is_preview(tmp_path, capsys):
+    root = tmp_path / "teal"
+    assert main(["models", "--cache-root", str(root), "verify",
+                 "huggingface:biu-nlp/f-coref"]) == 2
+    assert "No complete" in capsys.readouterr().err
+    assert main(["models", "--cache-root", str(root), "remove",
+                 "teal-cache:wordnet-mwe-indices", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["removed"] is False
+    assert not root.exists()

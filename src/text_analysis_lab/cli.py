@@ -33,14 +33,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     models.add_argument(
         "--hf-cache-dir", type=Path, default=None,
-        help="Override the Hugging Face hub cache for inventory inspection.",
+        help="Override Hugging Face Hub cache for inventory, prefetch and removal.",
     )
     actions = models.add_subparsers(dest="model_command", required=True)
     for command, help_text in (
         ("list", "List recognized resources and candidate locations."),
         ("info", "Show read-only inventory details for one model."),
-        ("verify", "Verify a spaCy model can be resolved in this interpreter."),
-        ("install", "Resolve or explicitly download an approved spaCy model."),
+        ("verify", "Check cached model-data readiness without downloading."),
+        ("install", "Resolve/prepare a supported model (download opt-in)."),
         ("cache-path", "Show user-level cache paths without creating them."),
         ("remove", "Preview or confirm deletion of an exact managed cache entry."),
     ):
@@ -52,8 +52,9 @@ def _build_parser() -> argparse.ArgumentParser:
         if command in {"info", "verify", "install", "remove"}:
             action.add_argument("model", help="Model resource ID, e.g. spacy:en_core_web_sm.")
         if command == "remove":
-            action.add_argument("--version", required=True, help="Exact cached model version.")
-            action.add_argument("--digest", required=True, help="Exact model tree SHA-256.")
+            action.add_argument("--version", help="Exact managed spaCy model version.")
+            action.add_argument("--digest", help="Exact managed spaCy tree SHA-256.")
+            action.add_argument("--revision", help="Exact Hugging Face commit revision.")
             action.add_argument("--confirm", action="store_true", help="Delete the selected cache entry.")
         if command == "install":
             action.add_argument(
@@ -104,7 +105,7 @@ def _show(value: Any, *, json_output: bool) -> None:
 
 def _run_models(args: argparse.Namespace) -> int:
     from text_analysis_lab.models import ModelManager
-    from text_analysis_lab.models.spacy import SpacyResourceError, resolve_spacy
+    from text_analysis_lab.models.spacy import SpacyResourceError
 
     manager = ModelManager(cache_root=args.cache_root, hf_cache_dir=args.hf_cache_dir)
     action = args.model_command
@@ -116,17 +117,13 @@ def _run_models(args: argparse.Namespace) -> int:
         elif action == "info":
             value = manager.inspect(args.model)
         elif action == "verify":
-            if not args.model.startswith("spacy:"):
-                raise NotImplementedError(
-                    "Verification is currently supported for spaCy models only."
-                )
-            value = resolve_spacy(
-                manager.cache_paths()["models"], args.model.removeprefix("spacy:"),
-                allow_download=False,
-            )
+            value = manager.verify(args.model)
+            if value.ready is False:
+                raise ValueError(value.detail or "Model data missing or incompatible.")
         elif action == "remove":
             value = manager.remove(args.model, version=args.version,
-                                   digest=args.digest, confirm=args.confirm)
+                                   digest=args.digest, revision=args.revision,
+                                   confirm=args.confirm)
         elif action == "install":
             value = manager.install(
                 args.model, allow_download=args.allow_download,

@@ -149,7 +149,7 @@ def _snapshot_download(
     *,
     repository: str,
     cache_dir: Path,
-    local_dir: Path,
+    local_dir: Path | None = None,
     force_download: bool = False,
 ) -> Path:
     try:
@@ -161,16 +161,15 @@ def _snapshot_download(
             "Hugging Face model download support is unavailable. Run `uv sync --all-extras`."
         ) from exc
 
-    local_dir.mkdir(parents=True, exist_ok=True)
-    return Path(
-        snapshot_download(
-            repo_id=repository,
-            cache_dir=str(cache_dir),
-            local_dir=str(local_dir),
-            local_dir_use_symlinks=False,
-            force_download=force_download,
-        )
-    )
+    kwargs: dict[str, Any] = {
+        "repo_id": repository, "cache_dir": str(cache_dir),
+        "force_download": force_download,
+    }
+    # Direct snapshot reuse avoids a second full copy of prefetched weights.
+    if local_dir is not None:
+        local_dir.mkdir(parents=True, exist_ok=True)
+        kwargs["local_dir"] = str(local_dir)
+    return Path(snapshot_download(**kwargs))
 
 
 def _set_eager_attention(config: Any) -> Any:
@@ -252,7 +251,7 @@ def prepare_fastcoref_model(
     model_dir = _snapshot_download(
         repository=spec.repository,
         cache_dir=effective_cache,
-        local_dir=materialized_dir,
+        local_dir=None,
         force_download=force_download,
     )
     if not _model_is_present(model_dir):

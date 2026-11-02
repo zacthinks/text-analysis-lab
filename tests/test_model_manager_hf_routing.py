@@ -49,3 +49,32 @@ def test_explicit_hf_cache_override_used_by_manager_install(tmp_path, monkeypatc
     assert captured["cache_dir"] == str(explicit)
     assert captured["local_files_only"] is True
     assert not root.exists()
+
+
+def test_prefetched_coref_snapshot_is_used_without_second_materialized_copy(tmp_path, monkeypatch):
+    from text_analysis_lab.linguistics.coreference import runtime
+    import sys
+    import types
+
+    cache = tmp_path / "hub"
+    snapshot = cache / "models--biu-nlp--f-coref" / "snapshots" / ("a" * 40)
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (snapshot / "model.safetensors").write_bytes(b"test")
+    seen = []
+
+    def snapshot_download(**kwargs):
+        seen.append(kwargs)
+        return str(snapshot)
+
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub",
+        types.SimpleNamespace(snapshot_download=snapshot_download),
+    )
+    model = runtime.prepare_fastcoref_model(
+        tmp_path / "workspace", model="fcoref", cache_dir=cache, show_progress=False,
+    )
+    assert model == snapshot
+    assert len(seen) == 1 and seen[0]["cache_dir"] == str(cache)
+    assert "local_dir" not in seen[0]
+    assert not (tmp_path / "materialized").exists()

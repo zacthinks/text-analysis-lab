@@ -53,6 +53,7 @@ class ResourceStatus:
     ready: bool | None = None
     locations: tuple[ResourceLocation, ...] = ()
     prepared: bool = False
+    detail: str | None = None
 
 
 # Small curated set of models already used by TeAL, plus official spaCy pipelines.
@@ -207,7 +208,7 @@ class ModelManager:
     ):
         """Resolve or explicitly download one supported model without a Project.
 
-        Non-spaCy model installation remains a future provider operation.
+        Uses native provider functions; unsupported callback behavior is explicit.
         """
         if model_key.startswith("spacy:"):
             from text_analysis_lab.models.spacy_install import install_official_spacy
@@ -218,6 +219,8 @@ class ModelManager:
                 progress=progress,
                 cancelled=cancelled,
             )
+        if (progress is not None or cancelled is not None) and not model_key.startswith("spacy:"):
+            raise NotImplementedError("Progress/cancellation callbacks are currently spaCy-only.")
         if model_key == f"allennlp:{ALLENNLP_SRL_BERT.model_id}":
             from text_analysis_lab.linguistics.srl.resources import prepare_project_srl_runtime
             return prepare_project_srl_runtime(
@@ -248,64 +251,17 @@ class ModelManager:
         raise KeyError(f"Unknown TeAL model resource {model_key!r}.")
 
 
+    def verify(self, model_key: str) -> ResourceStatus:
+        """Run offline provider checks; no downloads or model initialization."""
+        from text_analysis_lab.models.lifecycle import verify_resource
+        return verify_resource(self, model_key)
+
     def remove(
-        self,
-        model_key: str,
-        *,
-        version: str | None = None,
-        digest: str | None = None,
+        self, model_key: str, *, version: str | None = None,
+        digest: str | None = None, revision: str | None = None,
         confirm: bool = False,
     ) -> dict[str, str | bool]:
-        """Preview, then optionally remove one exact managed spaCy cache identity.
-
-        Installed Python packages, project assets, and provider-native caches
-        are deliberately outside this operation. No implicit eviction.
-        """
-        if not model_key.startswith("spacy:"):
-            raise NotImplementedError(
-                "Removal for this provider is not supported by TeAL; "
-                "provider-native caches must be managed by their own APIs."
-            )
-        from text_analysis_lab.models.spacy import (
-            APPROVED_SPACY_MODELS, SpacyResourceError,
-            spacy_cache_root, verify_managed_spacy,
-        )
-        from text_analysis_lab.models.spacy_install import _install_lock
-        import re
-        import shutil
-
-        name = model_key.removeprefix("spacy:")
-        if name not in APPROVED_SPACY_MODELS:
-            raise KeyError(f"Unknown TeAL model resource {model_key!r}.")
-        if not version or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", version):
-            raise ValueError("Specify the exact model version to remove.")
-        if not digest or not re.fullmatch(r"[a-f0-9]{64}", digest):
-            raise ValueError("Specify the exact 64-character content SHA-256 digest.")
-        root = spacy_cache_root(self.cache_paths()["models"])
-        directory = root / name / version / digest
-        plan: dict[str, str | bool] = {
-            "model": model_key,
-            "version": version,
-            "digest": digest,
-            "path": str(directory),
-            "shared_cache_warning": (
-                "Other projects or interpreters may reference this exact model. "
-                "Frozen operations requiring it will fail until restored."
-            ),
-            "removed": False,
-        }
-        if not confirm:
-            return plan
-        if not directory.is_dir() or directory.is_symlink():
-            raise FileNotFoundError(f"Managed spaCy cache entry not found: {directory}")
-        # Never delete a mismatched, corrupt or substituted directory.
-        try:
-            verify_managed_spacy(self.cache_paths()["models"], name, version, digest)
-        except SpacyResourceError as exc:
-            raise ValueError("Refusing removal of an unverified cache entry.") from exc
-        lock = root / name / ".install.lock"
-        with _install_lock(lock):
-            verify_managed_spacy(self.cache_paths()["models"], name, version, digest)
-            shutil.rmtree(directory)
-        plan["removed"] = True
-        return plan
+        """Preview/confirm exact cache deletion without uninstalling packages."""
+        from text_analysis_lab.models.lifecycle import remove_resource
+        return remove_resource(self, model_key, version=version, digest=digest,
+                               revision=revision, confirm=confirm)
