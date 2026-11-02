@@ -13,6 +13,8 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from text_analysis_lab.core.project import Project
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -139,8 +141,6 @@ def main(argv: list[str] | None = None) -> int:
         return _run_models(args)
 
     if args.command == "gui":
-        from text_analysis_lab.core.project import Project
-
         project_path = args.path.expanduser().resolve()
         if not project_path.is_dir():
             parser.error(f"Project directory does not exist: {project_path}")
