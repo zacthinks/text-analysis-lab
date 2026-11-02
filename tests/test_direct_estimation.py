@@ -333,3 +333,75 @@ def test_known_certainty_labels_recombine_with_probability_audit(tmp_path):
             )
     finally:
         project.close()
+
+
+def test_direct_left_median_census_even_and_ties(tmp_path):
+    project = teal.Project.create(tmp_path / "median_census", name="median")
+    try:
+        even = _register(project, [3, 1, 0, 2], "score", [8., 4., 1., 6.])
+        result = even.analysis.estimate(statistic="median")
+        assert result.estimate == pytest.approx(4.)
+        assert result.standard_error == 0.
+        assert result.confidence_interval() == (4., 4.)
+        ties = _register(project, range(6), "score", [1., 1., 2., 2., 2., 9.])
+        assert ties.analysis.estimate(statistic="median").estimate == 2.
+        with pytest.raises(ValueError, match="not available"):
+            result.p_value()
+    finally:
+        project.close()
+
+
+def test_direct_weighted_median_unequal_pi_shuffled_and_no_fake_ci(tmp_path):
+    project = teal.Project.create(tmp_path / "median_weighted", name="median")
+    try:
+        population = _register(project, range(8), "text", ["x"] * 8)
+        outcome = _register(project, [4, 0, 2], "value", [8., 1., 3.])
+        pi = _register(project, [2, 4, 0], "pi", [.25, .8, .5])
+        # Sorted observations 1,3,8 with inverse weights 2,4,1.25.
+        # Half mass=3.625, reached first at value 3.
+        med = outcome.analysis.estimate(
+            statistic="median", pi=pi, population=population, design="bernoulli",
+        )
+        assert med.estimate == pytest.approx(3.)
+        assert med.total_weight == pytest.approx(7.25)
+        assert med.standard_error is None
+        with pytest.raises(ValueError, match="Quantile confidence intervals"):
+            med.confidence_interval()
+        with pytest.raises(ValueError, match="known="):
+            med2 = outcome.analysis.estimate(
+                statistic="median", pi=pi, population=population, known=outcome,
+            )
+        with pytest.raises(ValueError, match="superpopulation"):
+            outcome.analysis.estimate(
+                statistic="median", pi=pi, population=population,
+                inference="superpopulation",
+            )
+    finally:
+        project.close()
+
+
+def test_direct_weighted_median_census_and_stratified(tmp_path):
+    project = teal.Project.create(tmp_path / "median_designs", name="median")
+    try:
+        population = _register(project, range(10), "text", ["x"] * 10)
+        strata = _register(project, range(10), "H", ["A"] * 4 + ["B"] * 6)
+        outcome = _register(project, [5, 0, 4, 1], "score", [6., 1., 2., 3.])
+        pi = _register(project, [1, 4, 0, 5], "pi", [.5, 1/3, .5, 1/3])
+        # Sorted values 1,2,3,6 have weights 2,3,2,3; half mass=5.
+        # Left inverse returns 2, not the arithmetic midpoint 2.5.
+        result = outcome.analysis.estimate(
+            statistic="median", pi=pi, population=population,
+            design="stratified_srswor", strata=strata,
+        )
+        assert result.estimate == pytest.approx(2.)
+        all_outcome = _register(project, [4, 2, 0, 1, 3], "score", [8., 3., 1., 2., 5.])
+        all_pi = _register(project, [3, 1, 4, 0, 2], "pi", [1.] * 5)
+        all_population = _register(project, range(5), "text", ["x"] * 5)
+        exact = all_outcome.analysis.estimate(
+            statistic="median", pi=all_pi, population=all_population,
+            design="bernoulli",
+        )
+        assert exact.estimate == 3.
+        assert exact.standard_error == 0.
+    finally:
+        project.close()
