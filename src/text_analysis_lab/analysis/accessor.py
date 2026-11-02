@@ -313,6 +313,7 @@ class ArtifactAnalysis:
         design: str | None = None,
         strata: BaseArtifact | str | None = None,
         inference: str = "finite",
+        statistic: str = "mean",
         known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
     ) -> GeneralizedDifferenceResult:
         from text_analysis_lab.analysis.generalized_difference import (
@@ -330,6 +331,7 @@ class ArtifactAnalysis:
             strata=strata,
             inference=inference,
             known=known,
+            statistic=statistic,
         )
 
     def generalized_difference_by(
