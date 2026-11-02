@@ -122,7 +122,7 @@ class GeneralizedDifferenceQuantileResult:
 def generalized_difference_median(
     surrogate, *, gold, pi,
     surrogate_field: str, gold_field: str, pi_field: str,
-    design: str | None, strata,
+    design: str | None, strata, quantile: float = 0.5,
 ) -> GeneralizedDifferenceQuantileResult:
     """Compute thresholdwise GD CDF followed by bounded isotonic inversion."""
     from text_analysis_lab.analysis.generalized_difference import (
@@ -225,7 +225,7 @@ def generalized_difference_median(
         )
         notes.append(note)
     projected = bounded_isotonic_cdf(np.asarray(raw))
-    median_index = int(np.searchsorted(projected, 0.5, side="left"))
+    median_index = int(np.searchsorted(projected, quantile, side="left"))
     median_index = min(median_index, len(knots) - 1)
     census = len(audit_keys) == len(full_keys) and bool(np.all(inclusion == 1.0))
     note = next((x for x in notes if x), None)
@@ -242,8 +242,8 @@ def generalized_difference_median(
         "admissible_cdf": projected, "cdf_se": se,
     })
     return GeneralizedDifferenceQuantileResult(
-        statistic="median", estimate=float(knots[median_index]),
-        quantile_level=.5, population_size=N, audit_size=len(audit),
+        statistic="median" if quantile == .5 else "quantile", estimate=float(knots[median_index]),
+        quantile_level=quantile, population_size=N, audit_size=len(audit),
         inference="finite", variance_design="census" if census else actual_design,
         variance_note=message, projection_method="bounded_isotonic_equal_knots",
         _cdf=frame, standard_error=0.0 if census else None,
