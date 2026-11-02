@@ -317,6 +317,8 @@ def generalized_difference_by(
     resolved from the surrogate artifact; pass ``group=`` when the grouping
     variable lives on another same-key artifact. ``result.contrast(a, b)``
     returns the corrected difference in group means with its design-based SE.
+    With finite-only known=, group labels must cover the full target including
+    exact known units K, while design covariance uses only the audited U frame.
     """
     if known is not None and inference != "finite":
         raise ValueError("known= supports only finite-population inference.")
@@ -539,6 +541,11 @@ def generalized_difference(
     and frozen surrogate predictions remain the researcher's assumptions.
     Without verified provenance or an asserted design, the point estimate is
     returned with no estimated design standard error.
+
+    Optional finite-only known= accepts disjoint certainty-known outcome labels
+    K; an independent probability audit is drawn from U=F minus K. The total
+    is sum_K(y) + sum_U(q) + sum_A((y-q)/pi), and its variance is conditional
+    on the audit design over U, not F. Superpopulation known= is not supported.
     """
     if known is not None and inference != "finite":
         raise ValueError("known= supports only finite-population inference.")
