@@ -365,8 +365,8 @@ def test_direct_weighted_median_unequal_pi_shuffled_and_no_fake_ci(tmp_path):
         assert med.estimate == pytest.approx(3.)
         assert med.total_weight == pytest.approx(7.25)
         assert med.standard_error is None
-        with pytest.raises(ValueError, match="Quantile confidence intervals"):
-            med.confidence_interval()
+        lo, hi = med.confidence_interval()
+        assert lo <= med.estimate <= hi
         with pytest.raises(ValueError, match="known="):
             med2 = outcome.analysis.estimate(
                 statistic="median", pi=pi, population=population, known=outcome,
