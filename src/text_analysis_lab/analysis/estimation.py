@@ -258,9 +258,9 @@ def estimate(
                 raise ArtifactError("population= must describe U or U union known=.")
             eligible_keys = recorded_keys
         else:
-            if not known_keys.issubset(supplied_keys):
+            if known_keys & supplied_keys and not known_keys.issubset(supplied_keys):
                 raise ArtifactError(
-                    "External known= requires population= covering all known keys."
+                    "External population= must contain either all known= keys or none."
                 )
             eligible_keys = supplied_keys - known_keys
         if not eligible_keys:
