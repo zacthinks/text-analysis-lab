@@ -78,3 +78,70 @@ def test_prefetched_coref_snapshot_is_used_without_second_materialized_copy(tmp_
     assert len(seen) == 1 and seen[0]["cache_dir"] == str(cache)
     assert "local_dir" not in seen[0]
     assert not (tmp_path / "materialized").exists()
+
+
+def test_native_hf_revision_removal_uses_provider_plan_and_preserves_other_revisions(
+    tmp_path, monkeypatch,
+):
+    import sys
+    import types
+    from text_analysis_lab.models import ModelManager
+
+    cache = tmp_path / "hub"
+    cache.mkdir()
+    selected_sha = "a" * 40
+    other_sha = "b" * 40
+    selected = types.SimpleNamespace(
+        commit_hash=selected_sha, snapshot_path=cache / "selected"
+    )
+    other = types.SimpleNamespace(commit_hash=other_sha, snapshot_path=cache / "other")
+    repository = types.SimpleNamespace(
+        repo_id="biu-nlp/f-coref", repo_type="model",
+        revisions=(selected, other),
+    )
+    executed = []
+
+    class Strategy:
+        expected_freed_size_str = "12.0 MB"
+        def execute(self):
+            executed.append(True)
+
+    class Info:
+        repos = (repository,)
+        def delete_revisions(self, revision):
+            assert revision == selected_sha
+            return Strategy()
+
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub",
+        types.SimpleNamespace(scan_cache_dir=lambda cache_dir: Info()),
+    )
+    manager = ModelManager(cache_root=tmp_path / "teal", hf_cache_dir=cache)
+    key = "huggingface:biu-nlp/f-coref"
+    preview = manager.remove(key, revision=selected_sha)
+    assert preview["removed"] is False
+    assert preview["expected_freed_size"] == "12.0 MB"
+    assert not executed
+    result = manager.remove(key, revision=selected_sha, confirm=True)
+    assert result["removed"] is True
+    assert executed == [True]
+    assert other.commit_hash == other_sha
+    assert not (tmp_path / "teal").exists()
+
+
+def test_teal_owned_cache_removal_does_not_touch_other_directories(tmp_path):
+    from text_analysis_lab.models import ModelManager
+
+    root = tmp_path / "teal"
+    mwe = root / "wordnet" / "mwe_indices"
+    mwe.mkdir(parents=True)
+    (mwe / "index.json").write_text("{}", encoding="utf-8")
+    wsd = root / "wsd" / "gloss_text"
+    wsd.mkdir(parents=True)
+    (wsd / "keep.txt").write_text("saved", encoding="utf-8")
+    manager = ModelManager(cache_root=root, hf_cache_dir=tmp_path / "hub")
+    assert manager.remove("teal-cache:wordnet-mwe-indices")["removed"] is False
+    assert mwe.exists()
+    assert manager.remove("teal-cache:wordnet-mwe-indices", confirm=True)["removed"] is True
+    assert not mwe.exists()
+    assert (wsd / "keep.txt").read_text(encoding="utf-8") == "saved"
