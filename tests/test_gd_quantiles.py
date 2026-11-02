@@ -86,3 +86,61 @@ def test_gd_median_rejects_invalid_asserted_srs(tmp_path):
             )
     finally:
         project.close()
+
+
+@pytest.mark.parametrize("design", ["stratified_srswor", "bernoulli"])
+def test_threshold_cdf_independent_ordinary_gd_parity(tmp_path, design):
+    project = teal.Project.create(tmp_path / design, name="threshold_parity")
+    try:
+        q_values = [0., 3., 1., 5., 2., 4.]
+        y_values = {4: 5., 0: 2., 3: 1., 1: 6.}
+        proxy = reg(project, range(6), "prediction", q_values)
+        gold = reg(project, [3, 0, 4, 1], "label",
+                   [y_values[i] for i in [3, 0, 4, 1]])
+        if design == "stratified_srswor":
+            # Two 3-unit strata, two observations per stratum.
+            probs = [.6666666666666666] * 4
+            h = reg(project, range(6), "stratum", [0, 0, 0, 1, 1, 1])
+        else:
+            probs = [.8, .25, .5, .75]
+            h = None
+        pi = reg(project, [1, 4, 0, 3], "pi", probs)
+        result = proxy.analysis.generalized_difference(
+            gold=gold, pi=pi, design=design, strata=h, statistic="median"
+        )
+        for row in result.cdf_frame().itertuples():
+            t = row.threshold
+            qt = reg(project, range(6), "prediction",
+                     [float(v <= t) for v in q_values])
+            yt = reg(project, [3, 0, 4, 1], "label",
+                     [float(y_values[i] <= t) for i in [3, 0, 4, 1]])
+            reference = qt.analysis.generalized_difference(
+                gold=yt, pi=pi, design=design, strata=h
+            )
+            assert row.raw_cdf == pytest.approx(reference.estimated_mean)
+            assert row.cdf_se**2 == pytest.approx(reference.variance_audit)
+    finally:
+        project.close()
+
+
+def test_gd_cdf_design_validation_called_once_per_result(tmp_path, monkeypatch):
+    from text_analysis_lab.analysis import gd_quantile_design
+    project = teal.Project.create(tmp_path / "once", name="once")
+    try:
+        q = reg(project, range(10), "prediction", list(range(10)))
+        y = reg(project, [0, 2, 4, 6, 8], "label", [2., 3., 1., 5., 7.])
+        pi = reg(project, [8, 4, 0, 6, 2], "pi", [.5] * 5)
+        from text_analysis_lab.analysis import generalized_difference as gd
+        real = gd_quantile_design.prepare_threshold_design
+        count = [0]
+        def counted(**kwargs):
+            count[0] += 1
+            return real(**kwargs)
+        monkeypatch.setattr(gd_quantile_design, "prepare_threshold_design", counted)
+        result = q.analysis.generalized_difference(
+            gold=y, pi=pi, statistic="median", design="srswor"
+        )
+        assert len(result.cdf_frame()) >= 10
+        assert count[0] == 1
+    finally:
+        project.close()
