@@ -151,6 +151,14 @@ class QuantileEstimateResult:
                 self._srs_order, population_size=self.population_size,
                 probability=self.quantile_level, level=level,
             )
+        if self._cdf is not None and self.variance_design in {"stratified_srswor", "bernoulli"}:
+            from text_analysis_lab.analysis.quantile_intervals import cdf_quantile_interval
+            return cdf_quantile_interval(
+                self._cdf["threshold"], self._cdf["weighted_cdf"],
+                self._cdf["cdf_se"], probability=self.quantile_level,
+                level=level, population_size=self.population_size,
+                point=self.estimate,
+            )
         raise ValueError(
             "Quantile confidence intervals require a separately validated "
             "quantile procedure; mean-based SEs are not applicable."
