@@ -280,3 +280,56 @@ def test_hand_calculated_unequal_bernoulli_ht_shuffled_rows(tmp_path):
         assert result.standard_error == pytest.approx(np.sqrt(4.6525))
     finally:
         project.close()
+
+
+def test_known_certainty_labels_recombine_with_probability_audit(tmp_path):
+    project = teal.Project.create(tmp_path / "known", name="known")
+    try:
+        # F=8, K={0,1}, U={2,...,7}. The four audited U units
+        # have pi=4/6; sum_K y=5, sum_A y=12, total=5+18=23.
+        full = _register(project, range(8), "text", ["x"] * 8)
+        remainder = _register(project, range(2, 8), "text", ["x"] * 6)
+        known1 = _register(project, [0], "score", [2.])
+        known2 = _register(project, [1], "score", [3.])
+        sample = project.probability_sample(remainder, n=4, random_state=13)
+        selected = sample["sample"].query(
+            key_columns=True, data_columns=False,
+            metadata_columns=False, form="table"
+        )["row_id"].tolist()
+        outcomes = {i: float(i - 1) for i in selected}
+        labels = _register(
+            project, selected[::-1], "score",
+            [outcomes[i] for i in selected[::-1]],
+        )
+        result = labels.analysis.estimate(
+            pi=sample["pi"], known=[known1, known2], population=full
+        )
+        manual_total = 5. + sum(outcomes.values()) * 6 / 4
+        assert result.estimated_total == pytest.approx(manual_total)
+        assert result.estimate == pytest.approx(manual_total / 8)
+        assert result.standard_error is not None
+        result_u = labels.analysis.estimate(
+            pi=sample["pi"], known=[known1, known2]
+        )
+        assert result_u.estimate == pytest.approx(result.estimate)
+        with pytest.raises(ArtifactError, match="overlap"):
+            labels.analysis.estimate(
+                pi=sample["pi"], known=[known1, known1]
+            )
+        with pytest.raises(ArtifactError, match="overlap"):
+            labels.analysis.estimate(
+                pi=sample["pi"], known=[labels]
+            )
+        with pytest.raises(ValueError, match="finite"):
+            labels.analysis.estimate(
+                pi=sample["pi"], known=known1,
+                inference="superpopulation",
+            )
+        incorrect = _register(project, range(7), "text", ["x"] * 7)
+        with pytest.raises(ArtifactError, match="U or U union"):
+            labels.analysis.estimate(
+                pi=sample["pi"], known=[known1, known2],
+                population=incorrect
+            )
+    finally:
+        project.close()
