@@ -163,6 +163,7 @@ def estimate(
     field: str | None = None,
     pi_field: str = "pi",
     statistic: str = "mean",
+    known: BaseArtifact | str | list[BaseArtifact | str] | None = None,
     design: str | None = None,
     strata: BaseArtifact | str | None = None,
     inference: str = "finite",
@@ -178,10 +179,14 @@ def estimate(
         raise ValueError("Only statistic='mean' is implemented at this checkpoint.")
     if inference not in {"finite", "superpopulation"}:
         raise ValueError("inference must be 'finite' or 'superpopulation'.")
+    if known is not None and inference != "finite":
+        raise ValueError("known= supports only finite-population inference.")
     check_design(design)
     project = artifact.project
     field = _data_field(artifact, field)
     if pi is None:
+        if known is not None:
+            raise ValueError("known= requires a separate probability audit with pi=.")
         if population is not None or strata is not None or design is not None:
             raise ValueError("population=, strata= and design= require pi=.")
         values_frame = _frame(artifact, field)
@@ -235,7 +240,34 @@ def estimate(
         if tuple(str(x) for x in art.primary_key) != keys:
             raise ArtifactError(f"{role} and input primary-key columns differ.")
     frame = _key_only_frame(frame_artifact)
-    if population is not None and recorded_frame_artifact is not None:
+    from text_analysis_lab.analysis.gd_known import known_table
+    known_data, known_keys = known_table(
+        project, known, primary_key=keys, label_field=field,
+    )
+    recorded_keys = None
+    if recorded_frame_artifact is not None:
+        recorded_frame = _key_only_frame(recorded_frame_artifact)
+        _validate_unique(recorded_frame, keys, role="recorded sampling frame")
+        recorded_keys = set(_key_tuples(recorded_frame, keys))
+    if known is not None:
+        supplied_keys = set(_key_tuples(frame, keys))
+        if recorded_keys is not None:
+            if known_keys & recorded_keys:
+                raise ArtifactError("known= overlaps the recorded audit sampling frame.")
+            if supplied_keys not in (recorded_keys, recorded_keys | known_keys):
+                raise ArtifactError("population= must describe U or U union known=.")
+            eligible_keys = recorded_keys
+        else:
+            if not known_keys.issubset(supplied_keys):
+                raise ArtifactError(
+                    "External known= requires population= covering all known keys."
+                )
+            eligible_keys = supplied_keys - known_keys
+        if not eligible_keys:
+            raise ArtifactError("known= leaves no probability-audit remainder.")
+    else:
+        eligible_keys = set(_key_tuples(frame, keys))
+    if known is None and population is not None and recorded_frame_artifact is not None:
         if tuple(str(k) for k in recorded_frame_artifact.primary_key) != keys:
             raise ArtifactError(
                 "Explicit population= has different primary keys from the "
@@ -255,7 +287,7 @@ def estimate(
         ("population", frame), ("gold", audit), ("pi", probabilities)
     ):
         _validate_unique(table, keys, role=role)
-    full_keys = set(_key_tuples(frame, keys))
+    full_keys = eligible_keys
     gold_keys = set(_key_tuples(audit, keys))
     pi_keys = set(_key_tuples(probabilities, keys))
     if not full_keys:
@@ -264,6 +296,8 @@ def estimate(
         raise ArtifactError("Direct estimation requires at least one audited label.")
     if gold_keys != pi_keys:
         raise ArtifactError("Gold and pi must have identical audit key sets.")
+    if known_keys & gold_keys:
+        raise ArtifactError("known= and probability-audit labels overlap.")
     if not gold_keys.issubset(full_keys):
         raise ArtifactError("Gold contains keys outside the population frame.")
     # The measurement field can legitimately be named "pi". Keep
@@ -281,10 +315,10 @@ def estimate(
     )
     if np.any((inclusion <= 0) | (inclusion > 1)):
         raise ArtifactError("pi must satisfy 0 < pi <= 1.")
-    N = len(frame)
-    ht_total = float(np.sum(y / inclusion))
+    N = len(full_keys) + len(known_keys)
+    ht_total = float(np.sum(y / inclusion)) + float(known_data["__known_y__"].sum())
     audit_variance_total, actual_design, note = _design_variance_from_pi_provenance(
-        surrogate=frame_artifact, pi_artifact=pi_artifact,
+        surrogate=recorded_frame_artifact or frame_artifact, pi_artifact=pi_artifact,
         audit_frame=merged.loc[:, list(keys)].copy(),
         residual=y, population_keys=full_keys, primary_key=keys,
         inclusion=inclusion, design=design, strata=strata_artifact,
