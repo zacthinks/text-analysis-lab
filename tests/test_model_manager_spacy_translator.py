@@ -88,3 +88,36 @@ def test_explicit_local_directory_still_loads(tmp_path: Path) -> None:
     model = tmp_path / "custom"
     nlp.to_disk(model)
     assert len(SpacyTranslator(model=str(model)).translate("First. Second.")["sentences"]) == 2
+
+def test_ordinary_first_use_calls_shared_installer_once(tmp_path, monkeypatch):
+    entry, digest = _managed(tmp_path, monkeypatch)
+    import text_analysis_lab.models.spacy_install as installer
+
+    calls = []
+    original = installer.install_official_spacy
+
+    def recording_install(root, name, *, allow_download=False, **kwargs):
+        calls.append((name, allow_download))
+        return original(root, name, allow_download=False)
+
+    monkeypatch.setattr(installer, "install_official_spacy", recording_install)
+    translator = SpacyTranslator(model="en_core_web_sm")
+    translator.translate("First sentence.")
+    translator.translate("Second sentence.")
+    assert calls == [("en_core_web_sm", True)]
+    assert translator.resource_identity is None
+
+
+def test_explicit_offline_never_attempts_download(tmp_path, monkeypatch):
+    import text_analysis_lab.models.spacy_install as installer
+
+    monkeypatch.setenv("TEAL_CACHE_DIR", str(tmp_path / "empty-cache"))
+    monkeypatch.setenv("TEAL_OFFLINE", "1")
+    def no_network(*args, **kwargs):
+        assert kwargs["allow_download"] is False
+        from text_analysis_lab.models.spacy import SpacyResourceError
+        raise SpacyResourceError("unavailable offline")
+    monkeypatch.setattr(installer, "install_official_spacy", no_network)
+    with pytest.raises(Exception, match="unavailable offline"):
+        SpacyTranslator(model="en_core_web_sm").translate("No download.")
+    assert not (tmp_path / "empty-cache").exists()
