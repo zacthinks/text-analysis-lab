@@ -171,6 +171,16 @@ class ModelManager:
                 if prepared:
                     locations.append(ResourceLocation("srl_runtime", resource_paths.runtime_dir))
             elif descriptor.provider == "spacy":
+                from text_analysis_lab.models.spacy import available_managed_spacy, spacy_cache_root
+
+                for version, digest in available_managed_spacy(
+                    paths["models"], descriptor.model_id
+                ):
+                    candidate = (
+                        spacy_cache_root(paths["models"])
+                        / descriptor.model_id / version / digest / "pipeline"
+                    )
+                    locations.append(ResourceLocation("managed_cache", candidate, version))
                 try:
                     version = importlib.metadata.version(descriptor.model_id)
                 except importlib.metadata.PackageNotFoundError:
@@ -193,3 +203,30 @@ class ModelManager:
             if item.descriptor.key == model_key:
                 return item
         raise KeyError(f"Unknown TeAL model resource {model_key!r}.")
+
+    def install(
+        self,
+        model_key: str,
+        *,
+        allow_download: bool = False,
+        progress=None,
+        cancelled=None,
+    ):
+        """Resolve or explicitly download one supported model without a Project.
+
+        Non-spaCy model installation remains a future provider operation.
+        """
+        prefix = "spacy:"
+        if not model_key.startswith(prefix):
+            raise NotImplementedError(
+                f"Model installation is not implemented for {model_key!r}."
+            )
+        from text_analysis_lab.models.spacy_install import install_official_spacy
+
+        return install_official_spacy(
+            self.cache_paths()["models"],
+            model_key[len(prefix):],
+            allow_download=allow_download,
+            progress=progress,
+            cancelled=cancelled,
+        )
