@@ -343,8 +343,26 @@ def test_direct_left_median_census_even_and_ties(tmp_path):
         assert result.estimate == pytest.approx(4.)
         assert result.standard_error == 0.
         assert result.confidence_interval() == (4., 4.)
+        cdf = result.cdf_frame()
+        assert cdf["threshold"].tolist() == [1., 4., 6., 8.]
+        assert cdf["weighted_cdf"].tolist() == pytest.approx([.25, .5, .75, 1.])
+        assert cdf["cdf_se"].tolist() == [0.] * 4
+        assert cdf["weighted_cdf"].is_monotonic_increasing
+        pi = _register(project, [2, 0, 3, 1], "pi", [1.] * 4)
+        explicit = even.analysis.estimate(
+            statistic="median", pi=pi, population=even, design="bernoulli",
+        )
+        pd.testing.assert_frame_equal(
+            cdf.reset_index(drop=True),
+            explicit.cdf_frame().reset_index(drop=True),
+            check_exact=False, atol=1e-12,
+        )
+        assert explicit.estimate == result.estimate
         ties = _register(project, range(6), "score", [1., 1., 2., 2., 2., 9.])
-        assert ties.analysis.estimate(statistic="median").estimate == 2.
+        tied = ties.analysis.estimate(statistic="median")
+        assert tied.estimate == 2.
+        assert tied.cdf_frame()["weighted_cdf"].tolist() == pytest.approx([2/6, 5/6, 1.])
+        assert tied.cdf_frame()["cdf_se"].eq(0.).all()
         with pytest.raises(ValueError, match="not available"):
             result.p_value()
     finally:
