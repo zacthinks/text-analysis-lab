@@ -394,41 +394,51 @@ def generalized_difference_by(
     population = population.loc[
         [k in remainder_keys for k in _key_tuples(population, keys)]
     ].copy()
+    # Distinct internal value columns prevent pandas suffixes when any input
+    # artifacts use the same user-facing field name (including the group).
+    reserved = set(keys) | {surrogate_field, gold_field, pi_field, group_field}
+    gold_col = _unique_join_column(reserved, "__teal_gd_gold__")
+    proxy_col = _unique_join_column(reserved, "__teal_gd_proxy__")
+    pi_col = _unique_join_column(reserved, "__teal_gd_pi__")
+    group_col = _unique_join_column(reserved, "__teal_gd_group__")
+    named_group = group_frame.rename(columns={group_field: group_col})
     pop = population.merge(
-        group_frame, on=list(keys), validate="one_to_one", sort=False
+        named_group, on=list(keys), validate="one_to_one", sort=False
     )
     known_groups = known_data.merge(
-        group_frame, on=list(keys), validate="one_to_one", sort=False,
+        named_group, on=list(keys), validate="one_to_one", sort=False,
     )
     merged = (
-        audit.merge(
-            population.loc[:, [*keys, surrogate_field]],
-            on=list(keys),
-            validate="one_to_one",
-            sort=False,
+        audit.rename(columns={gold_field: gold_col})
+        .merge(
+            population.loc[:, [*keys, surrogate_field]].rename(
+                columns={surrogate_field: proxy_col}
+            ),
+            on=list(keys), validate="one_to_one", sort=False,
         )
-        .merge(pi_frame, on=list(keys), validate="one_to_one", sort=False)
-        .merge(group_frame, on=list(keys), validate="one_to_one", sort=False)
+        .merge(
+            pi_frame.rename(columns={pi_field: pi_col}),
+            on=list(keys), validate="one_to_one", sort=False,
+        )
+        .merge(named_group, on=list(keys), validate="one_to_one", sort=False)
     )
     q_all = _numeric(pop[surrogate_field], name=f"surrogate field {surrogate_field!r}")
-    y = _numeric(merged[gold_field], name=f"gold field {gold_field!r}")
-    q_audit = _numeric(
-        merged[surrogate_field], name=f"surrogate field {surrogate_field!r}"
-    )
-    inclusion = _numeric(merged[pi_field], name=f"pi field {pi_field!r}")
+    y = _numeric(merged[gold_col], name=f"gold field {gold_field!r}")
+    q_audit = _numeric(merged[proxy_col], name=f"surrogate field {surrogate_field!r}")
+    inclusion = _numeric(merged[pi_col], name=f"pi field {pi_field!r}")
     if np.any(inclusion <= 0.0) or np.any(inclusion > 1.0):
         raise ArtifactError("pi values must satisfy 0 < pi <= 1.")
     residual = y - q_audit
-    if pop[group_field].isna().any() or merged[group_field].isna().any():
+    if pop[group_col].isna().any() or merged[group_col].isna().any():
         raise ArtifactError("group_field may not contain missing values.")
 
     rows: list[dict[str, Any]] = []
-    audit_groups = merged[group_field].to_numpy(dtype=object)
-    pop_groups = pop[group_field].to_numpy(dtype=object)
+    audit_groups = merged[group_col].to_numpy(dtype=object)
+    pop_groups = pop[group_col].to_numpy(dtype=object)
     # Preserve the historical order given by the surrogate's keyed frame.
     # Known-only groups have no surrogate rows and follow in known-label order.
-    group_values = list(pd.unique(pop[group_field]))
-    for value in pd.unique(known_groups[group_field]):
+    group_values = list(pd.unique(pop[group_col]))
+    for value in pd.unique(known_groups[group_col]):
         if value not in group_values:
             group_values.append(value)
     if group_frame[group_field].isna().any():
@@ -444,7 +454,7 @@ def generalized_difference_by(
         )
         if known is not None:
             correction_total += float(known_groups.loc[
-                known_groups[group_field] == value, "__known_y__"
+                known_groups[group_col] == value, "__known_y__"
             ].sum())
         estimated_total = surrogate_total + correction_total
         transformed = residual * audit_mask.astype(float) / float(N_g)
@@ -647,24 +657,22 @@ def generalized_difference(
         population.loc[remainder_mask, surrogate_field],
         name=f"surrogate field {surrogate_field!r} on audit remainder",
     )
-    merged = audit.merge(
-        population.loc[:, [*keys, surrogate_field]],
-        on=list(keys),
-        how="left",
-        validate="one_to_one",
-        sort=False,
+    reserved = set(keys) | {surrogate_field, gold_field, pi_field}
+    gold_col = _unique_join_column(reserved, "__teal_gd_gold__")
+    proxy_col = _unique_join_column(reserved, "__teal_gd_proxy__")
+    pi_col = _unique_join_column(reserved, "__teal_gd_pi__")
+    merged = audit.rename(columns={gold_field: gold_col}).merge(
+        population.loc[:, [*keys, surrogate_field]].rename(
+            columns={surrogate_field: proxy_col}
+        ),
+        on=list(keys), how="left", validate="one_to_one", sort=False,
     ).merge(
-        pi_frame,
-        on=list(keys),
-        how="left",
-        validate="one_to_one",
-        sort=False,
+        pi_frame.rename(columns={pi_field: pi_col}),
+        on=list(keys), how="left", validate="one_to_one", sort=False,
     )
-    y = _numeric(merged[gold_field], name=f"gold field {gold_field!r}")
-    q_audit = _numeric(
-        merged[surrogate_field], name=f"surrogate field {surrogate_field!r}"
-    )
-    inclusion = _numeric(merged[pi_field], name=f"pi field {pi_field!r}")
+    y = _numeric(merged[gold_col], name=f"gold field {gold_field!r}")
+    q_audit = _numeric(merged[proxy_col], name=f"surrogate field {surrogate_field!r}")
+    inclusion = _numeric(merged[pi_col], name=f"pi field {pi_field!r}")
     if np.any(inclusion <= 0.0) or np.any(inclusion > 1.0):
         raise ArtifactError("pi values must satisfy 0 < pi <= 1.")
 
@@ -853,6 +861,14 @@ def _stratified_srswor_variance(
 
 def _variance_unavailable(note: str) -> tuple[None, None, str]:
     return None, None, str(note)
+
+
+def _unique_join_column(reserved: set[str], candidate: str) -> str:
+    """Choose a private join column distinct from user fields and other joins."""
+    while candidate in reserved:
+        candidate += "_"
+    reserved.add(candidate)
+    return candidate
 
 
 def _frame(artifact: BaseArtifact, field: str) -> pd.DataFrame:
