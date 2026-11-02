@@ -117,18 +117,30 @@ def active_hf_cache_path(
     *,
     revision: str | None = None,
     teal_root: str | Path | None = None,
+    cache_dir: str | Path | None = None,
 ) -> Path:
-    """Reuse a legacy TeAL snapshot when present; otherwise use the native Hub cache.
+    """Explicit override > complete legacy TeAL snapshot > standard native Hub.
 
-    Existing TeAL downloads remain in place. New Hub downloads honor standard
-    Hugging Face settings; this decision neither copies files nor alters env vars.
+    Returning the cache root never migrates or modifies any cached files.
+    Explicit cache_dir is also what native Hub APIs already accept per call.
     """
+    if cache_dir is not None:
+        return Path(cache_dir).expanduser()
     legacy = user_cache_paths(teal_root, create=False).huggingface_hub
-    repo_snapshots = legacy / ("models--" + repository.replace("/", "--")) / "snapshots"
-    if revision is not None:
-        cached = repo_snapshots / revision
-        if cached.is_dir() and any(cached.iterdir()):
-            return legacy
-    elif repo_snapshots.is_dir() and any(p.is_dir() for p in repo_snapshots.iterdir()):
-        return legacy
+    snapshots = legacy / ("models--" + repository.replace("/", "--")) / "snapshots"
+    if snapshots.is_dir() and not snapshots.is_symlink():
+        candidates = (snapshots / revision,) if revision else tuple(snapshots.iterdir())
+        for candidate in candidates:
+            if not candidate.is_dir() or candidate.is_symlink():
+                continue
+            # A nonempty snapshot isn't necessarily usable; avoid shadowing the
+            # native cache with an interrupted legacy download.
+            if not (candidate / "config.json").is_file():
+                continue
+            weights = (
+                "model.safetensors", "model.safetensors.index.json",
+                "pytorch_model.bin", "pytorch_model.bin.index.json",
+            )
+            if any((candidate / name).is_file() for name in weights):
+                return legacy
     return standard_hf_cache_path()
