@@ -143,3 +143,24 @@ def test_first_use_http_failure_reports_operator_error(tmp_path, monkeypatch):
                         ) if name == "en_core_web_sm" else original_version(name))
     with pytest.raises(OperatorError, match="Check your network connection"):
         SpacyTranslator(model="en_core_web_sm").translate("Example sentence.")
+
+
+def test_exact_spacy_removal_is_preview_first_and_preserves_other_versions(
+    tmp_path, monkeypatch,
+):
+    from text_analysis_lab.models import ModelManager
+    entry, digest = _managed(tmp_path, monkeypatch)
+    manager = ModelManager()
+    key = "spacy:en_core_web_sm"
+    preview = manager.remove(key, version="3.8.0", digest=digest)
+    assert preview["removed"] is False
+    assert "Other projects" in preview["shared_cache_warning"]
+    assert entry.is_dir()
+    with pytest.raises(ValueError, match="exact 64-character"):
+        manager.remove(key, version="3.8.0", digest="../wrong", confirm=True)
+    another = entry.parent / ("1" * 64)
+    another.mkdir()
+    output = manager.remove(key, version="3.8.0", digest=digest, confirm=True)
+    assert output["removed"] is True
+    assert not entry.exists()
+    assert another.is_dir()
