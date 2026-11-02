@@ -280,6 +280,28 @@ class ArtifactAnalysis:
             pi_field=pi_field,
         )
 
+    def estimate(
+        self,
+        *,
+        pi: BaseArtifact | str | None = None,
+        population: BaseArtifact | str | None = None,
+        field: str | None = None,
+        pi_field: str = "pi",
+        statistic: str = "mean",
+        known: BaseArtifact | str | list[BaseArtifact | str] | None = None,
+        design: str | None = None,
+        strata: BaseArtifact | str | None = None,
+        inference: str = "finite",
+    ):
+        """Estimate a descriptive mean or a probability-audited mean."""
+        from text_analysis_lab.analysis.estimation import estimate
+        return estimate(
+            self._artifact, pi=pi, population=population,
+            field=field, pi_field=pi_field,
+            statistic=statistic, known=known, design=design, strata=strata,
+            inference=inference,
+        )
+
     def generalized_difference(
         self,
         *,
@@ -291,6 +313,7 @@ class ArtifactAnalysis:
         design: str | None = None,
         strata: BaseArtifact | str | None = None,
         inference: str = "finite",
+        known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
     ) -> GeneralizedDifferenceResult:
         from text_analysis_lab.analysis.generalized_difference import (
             generalized_difference,
@@ -306,6 +329,7 @@ class ArtifactAnalysis:
             design=design,
             strata=strata,
             inference=inference,
+            known=known,
         )
 
     def generalized_difference_by(
@@ -321,6 +345,7 @@ class ArtifactAnalysis:
         design: str | None = None,
         strata: BaseArtifact | str | None = None,
         inference: str = "finite",
+        known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
     ) -> GeneralizedDifferenceGroupedResult:
         from text_analysis_lab.analysis.generalized_difference import (
             generalized_difference_by,
@@ -338,6 +363,7 @@ class ArtifactAnalysis:
             design=design,
             strata=strata,
             inference=inference,
+            known=known,
         )
 
     def crosstab(

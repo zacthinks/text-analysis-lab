@@ -309,6 +309,7 @@ def generalized_difference_by(
     design: str | None = None,
     strata: BaseArtifact | str | None = None,
     inference: str = "finite",
+    known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
 ) -> GeneralizedDifferenceGroupedResult:
     """Estimate corrected finite-corpus means/prevalences within known groups.
 
@@ -316,7 +317,11 @@ def generalized_difference_by(
     resolved from the surrogate artifact; pass ``group=`` when the grouping
     variable lives on another same-key artifact. ``result.contrast(a, b)``
     returns the corrected difference in group means with its design-based SE.
+    With finite-only known=, group labels must cover the full target including
+    exact known units K, while design covariance uses only the audited U frame.
     """
+    if known is not None and inference != "finite":
+        raise ValueError("known= supports only finite-population inference.")
     if inference != "finite":
         raise ValueError("Grouped superpopulation inference is not supported; use inference='finite'.")
     from text_analysis_lab.analysis.gd_design_variance import check_design
@@ -354,20 +359,61 @@ def generalized_difference_by(
     ):
         _validate_unique(frame, keys, role=role)
     population_keys = set(_key_tuples(population, keys))
-    if set(_key_tuples(group_frame, keys)) != population_keys:
+    from text_analysis_lab.analysis.gd_known import known_table
+    known_data, known_keys = known_table(
+        project, known, primary_key=keys, label_field=gold_field,
+    )
+    if known is not None:
+        from text_analysis_lab.analysis.estimation import _recorded_frame
+        recorded = _recorded_frame(project, pi_artifact)
+        if recorded is not None:
+            if tuple(str(k) for k in recorded.primary_key) != keys:
+                raise ArtifactError("Recorded audit frame has different primary keys.")
+            recorded_table = _key_only_frame(recorded)
+            _validate_unique(recorded_table, keys, role="recorded audit frame")
+            remainder_keys = set(_key_tuples(recorded_table, keys))
+            if known_keys & remainder_keys:
+                raise ArtifactError("known= overlaps the recorded audit sampling frame.")
+            if population_keys not in (remainder_keys, remainder_keys | known_keys):
+                raise ArtifactError(
+                    "Surrogate must cover the audit remainder U or U union known=."
+                )
+            variance_surrogate = recorded
+        else:
+            if known_keys & population_keys and not known_keys.issubset(population_keys):
+                raise ArtifactError(
+                    "External surrogate must contain either all known= keys or none."
+                )
+            remainder_keys = population_keys - known_keys
+            variance_surrogate = surrogate
+        if not remainder_keys:
+            raise ArtifactError("No remaining probability-audit frame U.")
+    else:
+        remainder_keys = population_keys
+        variance_surrogate = surrogate
+    target_keys = remainder_keys | known_keys
+    if set(_key_tuples(group_frame, keys)) != target_keys:
         raise ArtifactError(
-            "group key set must exactly equal the surrogate population key set."
+            "group= must describe exactly the full target F, including known= keys."
         )
     audit_keys = set(_key_tuples(audit, keys))
     if set(_key_tuples(pi_frame, keys)) != audit_keys:
         raise ArtifactError("pi key set must exactly equal the gold/audit key set.")
-    if not audit_keys.issubset(population_keys):
+    if audit_keys & known_keys:
+        raise ArtifactError("known= overlaps audited gold labels.")
+    if not audit_keys.issubset(remainder_keys):
         raise ArtifactError(
-            "gold/audit contains keys outside the surrogate population."
+            "gold/audit contains keys outside the probability-audit remainder."
         )
 
+    population = population.loc[
+        [k in remainder_keys for k in _key_tuples(population, keys)]
+    ].copy()
     pop = population.merge(
         group_frame, on=list(keys), validate="one_to_one", sort=False
+    )
+    known_groups = known_data.merge(
+        group_frame, on=list(keys), validate="one_to_one", sort=False,
     )
     merged = (
         audit.merge(
@@ -394,24 +440,30 @@ def generalized_difference_by(
     rows: list[dict[str, Any]] = []
     audit_groups = merged[group_field].to_numpy(dtype=object)
     pop_groups = pop[group_field].to_numpy(dtype=object)
-    group_values = list(pd.unique(pop[group_field]))
+    group_values = list(pd.unique(group_frame[group_field]))
+    if group_frame[group_field].isna().any():
+        raise ArtifactError("group_field may not contain missing values.")
     for value in group_values:
         pop_mask = pop_groups == value
         audit_mask = audit_groups == value
-        N_g = int(np.sum(pop_mask))
+        N_g = int(np.sum((group_frame[group_field] == value).to_numpy()))
         n_g = int(np.sum(audit_mask))
         surrogate_total = float(np.sum(q_all[pop_mask]))
         correction_total = float(
             np.sum((residual * audit_mask.astype(float)) / inclusion)
         )
+        if known is not None:
+            correction_total += float(known_groups.loc[
+                known_groups[group_field] == value, "__known_y__"
+            ].sum())
         estimated_total = surrogate_total + correction_total
         transformed = residual * audit_mask.astype(float) / float(N_g)
         variance_mean, variance_design, note = _design_variance_from_pi_provenance(
-            surrogate=surrogate,
+            surrogate=variance_surrogate,
             pi_artifact=pi_artifact,
             audit_frame=merged.loc[:, list(keys)].copy(),
             residual=transformed,
-            population_keys=population_keys,
+            population_keys=remainder_keys,
             primary_key=keys,
             inclusion=inclusion,
             design=design,
@@ -432,7 +484,10 @@ def generalized_difference_by(
                 "estimated_total": estimated_total,
                 "variance_design": variance_design,
                 "variance_note": note,
-                "gold_is_binary": bool(np.all(np.isin(y, [0.0, 1.0]))),
+                "gold_is_binary": bool(
+            np.all(np.isin(y, [0.0, 1.0])) and
+            np.all(np.isin(known_data["__known_y__"], [0.0, 1.0]))
+        ),
             }
         )
     estimates = pd.DataFrame(rows)
@@ -444,10 +499,10 @@ def generalized_difference_by(
         _contrast_inputs={
             "residual": residual,
             "audit_groups": audit_groups,
-            "surrogate": surrogate,
+            "surrogate": variance_surrogate,
             "pi_artifact": pi_artifact,
             "audit_keys": merged.loc[:, list(keys)].copy(),
-            "population_keys": population_keys,
+            "population_keys": remainder_keys,
             "primary_key": keys,
             "inclusion": inclusion,
             "design": design,
@@ -467,6 +522,7 @@ def generalized_difference(
     design: str | None = None,
     strata: BaseArtifact | str | None = None,
     inference: str = "finite",
+    known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
 ) -> GeneralizedDifferenceResult:
     """Correct a full-corpus surrogate using a probability audit.
 
@@ -485,7 +541,14 @@ def generalized_difference(
     and frozen surrogate predictions remain the researcher's assumptions.
     Without verified provenance or an asserted design, the point estimate is
     returned with no estimated design standard error.
+
+    Optional finite-only known= accepts disjoint certainty-known outcome labels
+    K; an independent probability audit is drawn from U=F minus K. The total
+    is sum_K(y) + sum_U(q) + sum_A((y-q)/pi), and its variance is conditional
+    on the audit design over U, not F. Superpopulation known= is not supported.
     """
+    if known is not None and inference != "finite":
+        raise ValueError("known= supports only finite-population inference.")
     if inference not in {"finite", "superpopulation"}:
         raise ValueError("inference must be 'finite' or 'superpopulation'.")
     from text_analysis_lab.analysis.gd_design_variance import check_design
@@ -532,8 +595,48 @@ def generalized_difference(
         missing = len(audit_keys - population_keys)
         raise ArtifactError(f"Surrogate is missing {missing} gold/audit key(s).")
 
-    q_all = _numeric(
-        population[surrogate_field], name=f"surrogate field {surrogate_field!r}"
+    from text_analysis_lab.analysis.gd_known import known_table
+    known_data, known_keys = known_table(
+        project, known, primary_key=keys, label_field=gold_field,
+    )
+    if known_keys & audit_keys:
+        raise ArtifactError("known= overlaps audited gold labels.")
+    if known is not None:
+        from text_analysis_lab.analysis.estimation import _recorded_frame
+        recorded = _recorded_frame(project, pi_artifact)
+        if recorded is not None:
+            if tuple(str(k) for k in recorded.primary_key) != keys:
+                raise ArtifactError("Recorded audit frame has different primary keys.")
+            recorded_frame = _key_only_frame(recorded)
+            _validate_unique(recorded_frame, keys, role="recorded audit frame")
+            remainder_keys = set(_key_tuples(recorded_frame, keys))
+            if known_keys & remainder_keys:
+                raise ArtifactError("known= overlaps the recorded audit sampling frame.")
+            if population_keys not in (remainder_keys, remainder_keys | known_keys):
+                raise ArtifactError(
+                    "Surrogate must cover the audit remainder U or U union known=."
+                )
+            variance_surrogate = recorded
+        else:
+            if not known_keys.issubset(population_keys):
+                raise ArtifactError(
+                    "External known= requires the surrogate to cover known keys."
+                )
+            remainder_keys = population_keys - known_keys
+            variance_surrogate = surrogate
+        if not remainder_keys or not audit_keys.issubset(remainder_keys):
+            raise ArtifactError("Audit keys must lie in the remaining frame U.")
+    else:
+        remainder_keys = population_keys
+        variance_surrogate = surrogate
+    # q is needed on U only. Predictive values on certainty-known K
+    # are irrelevant and may legitimately be unavailable or missing.
+    remainder_mask = np.asarray([
+        key in remainder_keys for key in _key_tuples(population, keys)
+    ], dtype=bool)
+    q_remaining = _numeric(
+        population.loc[remainder_mask, surrogate_field],
+        name=f"surrogate field {surrogate_field!r} on audit remainder",
     )
     merged = audit.merge(
         population.loc[:, [*keys, surrogate_field]],
@@ -557,17 +660,19 @@ def generalized_difference(
         raise ArtifactError("pi values must satisfy 0 < pi <= 1.")
 
     residual = y - q_audit
-    N = len(population)
-    surrogate_total = float(q_all.sum())
+    N = len(remainder_keys) + len(known_keys)
+    surrogate_total = float(q_remaining.sum())
     correction_total = float(np.sum(residual / inclusion))
+    if known is not None:
+        correction_total += float(known_data["__known_y__"].sum())
     estimated_total = surrogate_total + correction_total
 
     variance_total, design, variance_note = _design_variance_from_pi_provenance(
-        surrogate=surrogate,
+        surrogate=variance_surrogate,
         pi_artifact=pi_artifact,
         audit_frame=merged.loc[:, [*keys]].copy(),
         residual=residual,
-        population_keys=population_keys,
+        population_keys=remainder_keys,
         primary_key=keys,
         inclusion=inclusion,
         design=design,
@@ -638,7 +743,10 @@ def generalized_difference(
         standard_error=se_mean,
         variance_design=design,
         variance_note=variance_note,
-        gold_is_binary=bool(np.all(np.isin(y, [0.0, 1.0]))),
+        gold_is_binary=bool(
+            np.all(np.isin(y, [0.0, 1.0])) and
+            np.all(np.isin(known_data["__known_y__"], [0.0, 1.0]))
+        ),
         inference=inference,
         variance_audit=variance_audit,
         variance_corpus=variance_corpus,
