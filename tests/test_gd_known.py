@@ -38,7 +38,7 @@ def test_finite_known_direct_and_gd_grouped_manual_covariance(tmp_path):
         # Known 5 exactly + q_U=4 + 2*((2-1)+(4-1)) = 17.
         assert gd.estimated_total == pytest.approx(17.)
         assert gd.estimated_mean == pytest.approx(17 / 5)
-        assert gd.variance_audit == pytest.approx(16 / 25)
+        assert gd.variance_audit == pytest.approx(8 / 25)
         grouped = generalized_difference_by(
             predictor, gold=audit, pi=pi, known=known,
             group=group, group_field="group", design="srswor",
