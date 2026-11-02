@@ -526,7 +526,7 @@ def test_exact_srs_rank_interval_requires_verified_internal_sample(tmp_path, mon
         )
         assert unverified.variance_design is None
         assert unverified._srs_order is None
-        with pytest.raises(ValueError, match="validated"):
+        with pytest.raises(ValueError, match="unavailable"):
             unverified.confidence_interval()
     finally:
         project.close()
