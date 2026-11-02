@@ -121,3 +121,24 @@ def test_explicit_offline_never_attempts_download(tmp_path, monkeypatch):
     with pytest.raises(Exception, match="unavailable offline"):
         SpacyTranslator(model="en_core_web_sm").translate("No download.")
     assert not (tmp_path / "empty-cache").exists()
+
+def test_first_use_http_failure_reports_operator_error(tmp_path, monkeypatch):
+    from urllib.error import URLError
+    import text_analysis_lab.models.spacy_install as installer
+    from text_analysis_lab.core.errors import OperatorError
+
+    monkeypatch.setenv("TEAL_CACHE_DIR", str(tmp_path / "empty-cache"))
+    monkeypatch.delenv("TEAL_OFFLINE", raising=False)
+
+    class FailedOpener:
+        def open(self, *args, **kwargs):
+            raise URLError("offline test")
+    monkeypatch.setattr(installer, "build_opener", lambda *args: FailedOpener())
+    # Avoid an installed model package masking the missing-resource path.
+    import text_analysis_lab.models.spacy as provider
+    monkeypatch.setattr(provider.importlib.metadata, "version",
+                        lambda name: (_ for _ in ()).throw(
+                            provider.importlib.metadata.PackageNotFoundError(name)
+                        ) if name == "en_core_web_sm" else __import__("importlib").metadata.version(name))
+    with pytest.raises(OperatorError, match="Check your network connection"):
+        SpacyTranslator(model="en_core_web_sm").translate("Example sentence.")
