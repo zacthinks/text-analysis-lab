@@ -8,7 +8,6 @@ scientific interpretation remains the researcher's responsibility.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from statistics import NormalDist
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -45,6 +44,7 @@ class EstimateResult:
     variance_corpus: float | None
     variance_total: float | None
     gold_is_binary: bool
+    exact_census: bool = False
 
     @property
     def estimated_mean(self) -> float:
@@ -59,37 +59,42 @@ class EstimateResult:
     def confidence_interval(
         self, *, level: float = 0.95, scale: str = "mean"
     ) -> tuple[float, float]:
+        """Return an exact finite census statement, not a sampled Wald CI.
+
+        Design-based point estimates and standard errors remain available.
+        Automatic Wald confidence intervals have been withdrawn because their
+        normal approximation is not reliably supported for all audit regimes.
+        """
         if not 0 < level < 1:
             raise ValueError("level must satisfy 0 < level < 1.")
         if scale == "mean":
-            estimate, se = self.estimate, self.standard_error
+            value = self.estimate
         elif scale == "total":
-            estimate, se = self.estimated_total, self.standard_error_total
+            value = self.estimated_total
         else:
             raise ValueError("scale must be 'mean' or 'total'.")
-        if se is None:
+        if not self.exact_census or self.inference != "finite":
             raise ValueError(
-                "Cannot form an interval because "
-                + (self.variance_note or "sampling variance is unavailable.")
+                "Confidence interval unavailable for sampled or superpopulation "
+                "mean/total inference: automatic Wald intervals are not supported; "
+                "the point estimate and design standard error remain available."
             )
-        z = NormalDist().inv_cdf(.5 + level / 2)
-        return float(estimate - z * se), float(estimate + z * se)
+        return float(value), float(value)
 
     def p_value(self, *, null: float = 0.0, scale: str = "mean") -> float:
+        """Only deterministic finite-census equality is available."""
         if scale == "mean":
-            value, se = self.estimate, self.standard_error
+            value = self.estimate
         elif scale == "total":
-            value, se = self.estimated_total, self.standard_error_total
+            value = self.estimated_total
         else:
             raise ValueError("scale must be 'mean' or 'total'.")
-        if se is None:
+        if not self.exact_census or self.inference != "finite":
             raise ValueError(
-                "Cannot test because "
-                + (self.variance_note or "sampling variance is unavailable.")
+                "P-value unavailable for sampled or superpopulation mean/total "
+                "inference: automatic normal/Wald tests are not supported."
             )
-        if se == 0:
-            return 1.0 if value == float(null) else 0.0
-        return float(2 * (1 - NormalDist().cdf(abs((value - float(null)) / se))))
+        return 1.0 if float(value) == float(null) else 0.0
 
     def to_frame(self) -> pd.DataFrame:
         return pd.DataFrame([{
@@ -243,6 +248,7 @@ def estimate(
             variance_audit=0.0, variance_corpus=corpus,
             variance_total=0.0 if corpus is None else corpus,
             gold_is_binary=bool(np.all(np.isin(values, [0., 1.]))),
+            exact_census=inference == "finite",
         )
     pi_artifact = project.get_artifact(pi)
     # Resolve recorded provenance even when an explicit population is supplied.
@@ -476,5 +482,9 @@ def estimate(
         gold_is_binary=bool(
             np.all(np.isin(y, [0., 1.])) and
             np.all(np.isin(known_data["__known_y__"], [0., 1.]))
+        ),
+        exact_census=(
+            inference == "finite" and len(gold_keys) == len(full_keys)
+            and bool(np.all(inclusion == 1.0))
         ),
     )
