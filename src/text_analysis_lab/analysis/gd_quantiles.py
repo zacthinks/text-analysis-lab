@@ -65,6 +65,8 @@ class GeneralizedDifferenceQuantileResult:
 
     @property
     def estimated_median(self) -> float:
+        if self.statistic != "median":
+            raise ValueError("estimated_median is available only for median results.")
         return self.estimate
 
     def cdf_frame(self, *, level: float | None = None) -> pd.DataFrame:
