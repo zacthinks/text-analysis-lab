@@ -5,7 +5,6 @@ Tests record coverage and informativeness across distinct randomization laws.
 """
 from __future__ import annotations
 
-import itertools
 import math
 
 import numpy as np
@@ -16,7 +15,7 @@ from text_analysis_lab.analysis.quantile_intervals import cdf_quantile_interval
 
 def _cdf_ci(y, q, selected, pi, design, strata, level):
     n = len(y)
-    values = np.unique(np.concatenate((y[selected], q)))
+    values = np.unique(y[selected] if q is None else np.concatenate((y[selected], q)))
     sample_y = y[selected]
     weights = 1. / pi[selected]
     weight_total = np.sum(weights)
