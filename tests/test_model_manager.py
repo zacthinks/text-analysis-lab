@@ -27,7 +27,7 @@ def test_listing_does_not_create_directories_or_claim_readiness(tmp_path: Path) 
     models = manager.list_models()
     assert len(models) >= 7
     assert len({item.descriptor.key for item in models}) == len(models)
-    assert all(not item.verified and not item.compatible and not item.ready for item in models)
+    assert all(item.verified is None and item.compatible is None and item.ready is None for item in models)
     assert not teal.exists()
     assert not hub.exists()
 
@@ -49,7 +49,7 @@ def test_exact_revision_and_legacy_hub_inventory(tmp_path: Path) -> None:
     assert status.present
     assert status.candidate_path == pinned
     assert [x.revision for x in status.locations] == [descriptor.revision]
-    assert not status.verified and not status.ready
+    assert status.verified is None and status.ready is None
 
     legacy = teal / "huggingface" / "hub" / "models--biu-nlp--f-coref" / "snapshots" / "commitA"
     legacy.mkdir(parents=True)
@@ -62,8 +62,8 @@ def test_exact_revision_and_legacy_hub_inventory(tmp_path: Path) -> None:
 def test_srl_archive_and_converted_runtime_are_distinct(tmp_path: Path) -> None:
     from text_analysis_lab.linguistics.model_resources import ALLENNLP_SRL_BERT, project_model_paths
     manager = ModelManager(cache_root=tmp_path, hf_cache_dir=tmp_path / "hub")
-    paths = project_model_paths(tmp_path / "models", ALLENNLP_SRL_BERT)
-    assert paths.root == tmp_path / "models" / "models" / ALLENNLP_SRL_BERT.model_id
+    paths = project_model_paths(tmp_path, ALLENNLP_SRL_BERT)
+    assert paths.root == tmp_path / "models" / ALLENNLP_SRL_BERT.model_id
     paths.source_dir.mkdir(parents=True)
     paths.archive_path.write_bytes(b"fake archive")
     srl = manager.inspect(f"allennlp:{ALLENNLP_SRL_BERT.model_id}")
@@ -79,7 +79,7 @@ def test_srl_archive_and_converted_runtime_are_distinct(tmp_path: Path) -> None:
     srl = manager.inspect(f"allennlp:{ALLENNLP_SRL_BERT.model_id}")
     assert srl.prepared
     assert [loc.source for loc in srl.locations] == ["srl_archive", "srl_runtime"]
-    assert not srl.verified and not srl.ready
+    assert srl.verified is None and srl.ready is None
 
 
 def test_spacy_package_presence_does_not_imply_ready(tmp_path: Path, monkeypatch) -> None:
@@ -94,7 +94,7 @@ def test_spacy_package_presence_does_not_imply_ready(tmp_path: Path, monkeypatch
     assert model.present
     assert model.locations[0].revision == "3.8.0"
     assert model.candidate_path is None  # Distribution presence is not a directory path.
-    assert not model.compatible and not model.verified and not model.ready
+    assert model.compatible is None and model.verified is None and model.ready is None
 
 
 def test_unknown_model_is_explicit(tmp_path: Path) -> None:
