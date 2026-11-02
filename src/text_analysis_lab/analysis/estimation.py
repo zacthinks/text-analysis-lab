@@ -174,6 +174,11 @@ def estimate(
     This has no finite-population sampling uncertainty for those recorded values
     and conveys no guarantee about prediction accuracy or measurement warrant.
     With pi, a verified sampling frame or explicit population= is necessary.
+    Optional known= accepts one or more disjoint artifacts of exact observed
+    outcomes for fixed-population inference. The randomized audit must cover
+    only the remaining frame U; known outcomes contribute exactly, and SE is
+    calculated from U's sampling design then scaled by N=|K union U|.
+    An external population= may describe U or the complete union.
     """
     if statistic != "mean":
         raise ValueError("Only statistic='mean' is implemented at this checkpoint.")
