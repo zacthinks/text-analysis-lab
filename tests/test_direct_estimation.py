@@ -494,3 +494,64 @@ def test_finite_srs_median_rank_interval_handles_ties_and_unknown_support(tmp_pa
         assert result.standard_error is None
     finally:
         project.close()
+
+
+def test_exact_srs_rank_interval_requires_verified_internal_sample(tmp_path, monkeypatch):
+    """An SRS claim cannot revive a failed recorded-sample provenance check."""
+    project = teal.Project.create(tmp_path / "srs_provenance", name="rank")
+    try:
+        frame = _register(project, range(12), "text", ["x"] * 12)
+        sampled = project.probability_sample(frame, n=6, random_state=9)
+        keys = sampled["sample"].query(
+            key_columns=True, data_columns=False, metadata_columns=False,
+            form="table",
+        )["row_id"].tolist()
+        gold = _register(project, keys[::-1], "score", [float(i) for i in keys[::-1]])
+        pi = sampled["pi"]
+
+        verified = gold.analysis.estimate(pi=pi, statistic="median")
+        assert verified.variance_design == "srswor"
+        assert verified._srs_order is not None
+
+        real_outputs = project.operation_outputs
+        def missing_sample(operation_id):
+            outputs = real_outputs(operation_id)
+            if str(operation_id) == str(pi.operation_id):
+                return [row for row in outputs if row.get("output_label") != "sample"]
+            return outputs
+        monkeypatch.setattr(project, "operation_outputs", missing_sample)
+        unverified = gold.analysis.estimate(
+            pi=pi, statistic="median", design="srswor",
+        )
+        assert unverified.variance_design is None
+        assert unverified._srs_order is None
+        with pytest.raises(ValueError, match="validated"):
+            unverified.confidence_interval()
+    finally:
+        project.close()
+
+
+def test_direct_quantile_design_validation_is_single_pass(tmp_path, monkeypatch):
+    from text_analysis_lab.analysis import generalized_difference as gd_function
+    from text_analysis_lab.analysis import gd_quantile_design
+    from text_analysis_lab.analysis import estimation as estimation_module
+
+    project = teal.Project.create(tmp_path / "once_quantile", name="single")
+    try:
+        frame = _register(project, range(10), "text", ["x"] * 10)
+        gold = _register(project, [0, 2, 4, 6, 8], "score", [1., 2., 3., 4., 5.])
+        pi = _register(project, [8, 6, 4, 2, 0], "pi", [.5] * 5)
+        calls = [0]
+        real = gd_quantile_design.prepare_threshold_design
+        def count(**kwargs):
+            calls[0] += 1
+            return real(**kwargs)
+        monkeypatch.setattr(gd_quantile_design, "prepare_threshold_design", count)
+        result = estimation_module.estimate(
+            gold, pi=pi, population=frame, design="srswor",
+            statistic="quantile", quantile=.5,
+        )
+        assert result.variance_design == "srswor"
+        assert calls == [1]
+    finally:
+        project.close()
