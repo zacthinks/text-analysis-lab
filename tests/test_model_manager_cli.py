@@ -90,3 +90,73 @@ def test_verify_hf_reports_missing_and_teal_cache_remove_is_preview(tmp_path, ca
     data = json.loads(capsys.readouterr().out)
     assert data["removed"] is False
     assert not root.exists()
+
+
+def test_models_list_json_keys_can_roundtrip_into_info(tmp_path, capsys):
+    root = tmp_path / "cache"
+    assert main(["models", "--cache-root", str(root), "list", "--json"]) == 0
+    models = json.loads(capsys.readouterr().out)
+    chosen = next(x for x in models if x["descriptor"]["provider"] == "huggingface")
+    key = chosen["key"]
+    assert key == chosen["descriptor"]["key"]
+    assert key == "huggingface:" + chosen["descriptor"]["model_id"]
+    assert main(["models", "--cache-root", str(root), "info", key, "--json"]) == 0
+    info = json.loads(capsys.readouterr().out)
+    assert info["key"] == key
+    assert not root.exists()
+
+
+def test_cli_install_provider_success_envelopes(tmp_path, capsys, monkeypatch):
+    from dataclasses import dataclass
+    from pathlib import Path
+    from text_analysis_lab.models import ModelManager
+    from text_analysis_lab.linguistics.model_resources import (
+        ALLENNLP_SRL_BERT, project_model_paths,
+    )
+
+    @dataclass
+    class SpaCyFixture:
+        load_target: str
+        source: str
+
+    def fake_install(self, model_key, *, allow_download=False, **kwargs):
+        if model_key.startswith("spacy:"):
+            return SpaCyFixture("en_core_web_sm", "installed_package")
+        if model_key.startswith("huggingface:"):
+            return tmp_path / "hub" / "snapshots" / "abcdef"
+        if model_key.startswith("allennlp:"):
+            return project_model_paths(tmp_path / "teal", ALLENNLP_SRL_BERT)
+        raise AssertionError(model_key)
+
+    monkeypatch.setattr(ModelManager, "install", fake_install)
+    keys = [
+        "spacy:en_core_web_sm",
+        "huggingface:biu-nlp/f-coref",
+        f"allennlp:{ALLENNLP_SRL_BERT.model_id}",
+    ]
+    for key in keys:
+        assert main(["models", "--cache-root", str(tmp_path / "teal"),
+                     "install", key, "--json"]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["key"] == key
+        assert payload["provider"] == key.split(":", 1)[0]
+        assert isinstance(payload["location"], str) and payload["location"]
+        assert payload["details"]
+    assert not (tmp_path / "teal").exists()
+
+
+def test_verify_unknown_hf_is_not_claimed_ready_by_exit_zero(tmp_path, capsys):
+    root = tmp_path / "teal"
+    hub = tmp_path / "hub"
+    snap = hub / "models--biu-nlp--f-coref" / "snapshots" / ("a" * 40)
+    snap.mkdir(parents=True)
+    (snap / "config.json").write_text("{}", encoding="utf-8")
+    (snap / "model.safetensors").write_bytes(b"invalid-weights")
+    code = main(["models", "--cache-root", str(root),
+                 "--hf-cache-dir", str(hub),
+                 "verify", "huggingface:biu-nlp/f-coref", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    assert code == 0  # Command completed; runtime readiness remains unknown.
+    assert data["present"] is True
+    assert data["ready"] is None and data["verified"] is None
+    assert data["key"] == "huggingface:biu-nlp/f-coref"

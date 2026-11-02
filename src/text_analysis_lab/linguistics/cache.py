@@ -119,13 +119,19 @@ def active_hf_cache_path(
     teal_root: str | Path | None = None,
     cache_dir: str | Path | None = None,
 ) -> Path:
-    """Explicit override > complete legacy TeAL snapshot > standard native Hub.
+    """Explicit directory / native environment selection > complete legacy > native default.
 
     Returning the cache root never migrates or modifies any cached files.
     Explicit cache_dir is also what native Hub APIs already accept per call.
     """
     if cache_dir is not None:
         return Path(cache_dir).expanduser()
+    # A profile-level native Hub override is an explicit cache selection;
+    # it must not be overridden by an older, otherwise valid TeAL snapshot.
+    if any(os.environ.get(name) for name in (
+        "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_HOME",
+    )):
+        return standard_hf_cache_path()
     legacy = user_cache_paths(teal_root, create=False).huggingface_hub
     snapshots = legacy / ("models--" + repository.replace("/", "--")) / "snapshots"
     if snapshots.is_dir() and not snapshots.is_symlink():

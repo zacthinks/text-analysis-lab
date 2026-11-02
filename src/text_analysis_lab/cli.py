@@ -59,14 +59,21 @@ def _build_parser() -> argparse.ArgumentParser:
         if command == "install":
             action.add_argument(
                 "--allow-download", action="store_true",
-                help="Permit a network download of a checksum-pinned official model.",
+                help="Permit provider-native downloads (spaCy, HF, or SRL).",
             )
     return parser
 
 
 def _jsonable(value: Any) -> Any:
     if is_dataclass(value) and not isinstance(value, type):
-        return _jsonable(asdict(value))
+        data = asdict(value)
+        # A computed ResourceDescriptor.key is otherwise lost in asdict().
+        if hasattr(value, "descriptor") and hasattr(value.descriptor, "key"):
+            data["key"] = value.descriptor.key
+            data["descriptor"]["key"] = value.descriptor.key
+        elif hasattr(value, "provider") and hasattr(value, "model_id") and hasattr(value, "key"):
+            data["key"] = value.key
+        return _jsonable(data)
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, dict):
@@ -74,6 +81,22 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _installed_result(model_key: str, native_result: Any) -> dict[str, Any]:
+    """One CLI success contract; preserve provider-specific details internally."""
+    if hasattr(native_result, "load_target"):
+        location = native_result.load_target
+    elif hasattr(native_result, "runtime_dir"):
+        location = native_result.runtime_dir
+    else:
+        location = native_result
+    return {
+        "key": model_key,
+        "provider": model_key.partition(":")[0],
+        "location": str(location),
+        "details": native_result,
+    }
 
 
 def _show(value: Any, *, json_output: bool) -> None:
@@ -125,14 +148,17 @@ def _run_models(args: argparse.Namespace) -> int:
                                    digest=args.digest, revision=args.revision,
                                    confirm=args.confirm)
         elif action == "install":
-            value = manager.install(
-                args.model, allow_download=args.allow_download,
+            value = _installed_result(
+                args.model,
+                manager.install(args.model, allow_download=args.allow_download),
             )
         else:
             raise ValueError(f"Unknown models command: {action}")
     except (SpacyResourceError, KeyError, NotImplementedError, ValueError, OSError) as exc:
         print(f"teal models: {exc}", file=sys.stderr)
         return 2
+    # Exit 0 means this management command completed, not that ready=True:
+    # verify can report ready=None (untested model-runtime compatibility).
     _show(value, json_output=args.json)
     return 0
 

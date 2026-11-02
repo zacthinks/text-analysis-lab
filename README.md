@@ -386,11 +386,14 @@ tokens = SpacyTranslator(
 ).translate("An example sentence.")
 ```
 
-Set `TEAL_OFFLINE=1` to prevent automatic spaCy downloads for all normal
-translator calls in a process. `TEAL_CACHE_DIR` selects TeAL's shared resource
-cache; native Hugging Face caches follow their own settings. Explicit local
-spaCy paths continue to work. Frozen translators require the exact recorded
-model resource and never download or silently substitute another version.
+Set `TEAL_OFFLINE=1` to disable automatic spaCy and FastCoref downloads.
+`TEAL_CACHE_DIR` selects TeAL's shared resource cache. For a nondefault
+Hugging Face cache shared by Desktop and ordinary inference, configure
+`HF_HUB_CACHE` in the selected interpreter/profile before preparing and
+using the models. `ModelManager(hf_cache_dir=...)` selects that same cache
+explicitly for management only; it does not change interpreter settings.
+Explicit spaCy paths continue to work. Frozen spaCy operators require their
+exact recorded model identity; no silent download or substitution occurs.
 
 The standalone model manager works without creating a project:
 
@@ -401,12 +404,18 @@ teal models cache-path
 teal models install spacy:en_core_web_sm --allow-download
 ```
 
-Current management support is intentionally conservative: only approved
-official English spaCy models can be downloaded this way. Inventory also
-reports recognized existing Hugging Face and AllenNLP resources, but that
-does not imply every provider supports installation, verification, or removal
-through the manager yet. Model redistribution and usage remain subject to the
-upstream model's license.
+The manager also supports known Hugging Face snapshots and AllenNLP SRL
+resources through upstream/TeAL preparation functions, plus explicit
+preview/confirmation for applicable cache removal. Only TeAL-owned data is
+removed; it does not uninstall Python packages or externally managed
+WordNet lexicons. `teal models list --json` and `info --json` expose a
+canonical `key`. `install --json` returns `key`, `provider`,
+`location`, and provider-native `details`. `verify --json` reports
+`ready` as `true`, `false`, or `null` (not tested); command exit 0
+does not imply scientific-runtime readiness when `ready` is `null`.
+`--version` and `--digest` select a managed spaCy deletion;
+`--revision` selects an exact Hugging Face revision. Resource use and
+redistribution remain subject to upstream licenses.
 
 ## Project Center
 

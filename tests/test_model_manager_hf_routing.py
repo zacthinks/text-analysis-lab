@@ -16,17 +16,24 @@ def test_default_native_cache_and_environment_precedence(tmp_path, monkeypatch):
 
 
 def test_existing_legacy_hub_snapshot_is_reused_without_mutation(tmp_path, monkeypatch):
-    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "new"))
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising=False)
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    default_hub = tmp_path / "xdg" / "huggingface" / "hub"
     teal = tmp_path / "teal"
     legacy = teal / "huggingface" / "hub"
     snapshot = legacy / "models--biu-nlp--f-coref" / "snapshots" / "sha-old"
     snapshot.mkdir(parents=True)
     (snapshot / "config.json").write_text("{}", encoding="utf-8")
-    assert active_hf_cache_path("biu-nlp/f-coref", teal_root=teal) == tmp_path / "new"
+    assert active_hf_cache_path("biu-nlp/f-coref", teal_root=teal) == default_hub
     (snapshot / "model.safetensors").write_bytes(b"weights")
     assert active_hf_cache_path("biu-nlp/f-coref", teal_root=teal) == legacy
-    assert active_hf_cache_path("Babelscape/wsl-reader-deberta-v3-base", teal_root=teal) == tmp_path / "new"
-    assert active_hf_cache_path("biu-nlp/f-coref", revision="other", teal_root=teal) == tmp_path / "new"
+    assert active_hf_cache_path("Babelscape/wsl-reader-deberta-v3-base", teal_root=teal) == default_hub
+    assert active_hf_cache_path("biu-nlp/f-coref", revision="other", teal_root=teal) == default_hub
+    # An explicit profile selection must not silently fall back to legacy.
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "profile-hub"))
+    assert active_hf_cache_path("biu-nlp/f-coref", teal_root=teal) == tmp_path / "profile-hub"
 
 
 def test_explicit_hf_cache_override_used_by_manager_install(tmp_path, monkeypatch):
@@ -249,3 +256,41 @@ def test_fastcoref_first_use_falls_back_to_upstream_and_obeys_offline(
             cache_dir=cache, show_progress=False,
         )
     assert len(calls) == 1 and calls[0]["local_files_only"] is True
+
+
+def test_profile_hf_override_reaches_coreference_and_wsl_backends(tmp_path, monkeypatch):
+    """Desktop may select one profile cache with native HF_HUB_CACHE."""
+    from text_analysis_lab.models import ModelManager
+    import text_analysis_lab.translators.coreference_resolver as coref
+    import text_analysis_lab.translators.word_sense_disambiguator as wsd
+    import text_analysis_lab.linguistics.wsd.wsl_backend as backend
+
+    selected = tmp_path / "shared-hub"
+    monkeypatch.setenv("HF_HUB_CACHE", str(selected))
+    monkeypatch.setenv("TEAL_CACHE_DIR", str(tmp_path / "teal-user-cache"))
+    manager = ModelManager(hf_cache_dir=selected)
+    assert manager.cache_paths()["huggingface_hub"] == selected
+
+    runtime_args = {}
+    class CorefStub:
+        def __init__(self, *args, **kwargs):
+            runtime_args.update(kwargs)
+    monkeypatch.setattr(coref, "FastCorefRuntime", CorefStub)
+    coref._make_runtime(
+        model="fcoref", device="cpu", compile_model=False, show_progress=False,
+    )
+    assert runtime_args["cache_dir"] == selected
+
+    reader_args = {}
+    class WSLStub:
+        def __init__(self, *args, **kwargs):
+            reader_args.update(kwargs)
+    monkeypatch.setattr(backend, "BabelscapeWSLBackend", WSLStub)
+    wsd._make_backend(
+        model_name="Babelscape/wsl-reader-deberta-v3-base",
+        model_revision="809d05bd12f261d26b42e28dc2b31db430c1585c",
+        device="cpu", precision="32", local_files_only=True,
+    )
+    assert reader_args["cache_dir"] == selected
+    assert reader_args["local_files_only"] is True
+    assert not (tmp_path / "workspace").exists()
