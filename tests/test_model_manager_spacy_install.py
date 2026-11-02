@@ -104,3 +104,15 @@ def test_explicit_download_is_idempotent(tmp_path, monkeypatch):
     b = installer.install_official_spacy(root, "en_core_web_sm", allow_download=True)
     assert a == b
     assert calls == ["en_core_web_sm"]
+
+def test_standard_zip_directory_records_are_accepted(tmp_path):
+    wheel, _ = _wheel(tmp_path)
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("en_core_web_sm/", "")
+        archive.writestr("en_core_web_sm/en_core_web_sm-3.8.0/", "")
+    release = installer.OfficialSpacyRelease(
+        "en_core_web_sm", "3.8.0",
+        hashlib.sha256(wheel.read_bytes()).hexdigest(), 20 * 1024**2, 100 * 1024**2,
+    )
+    resolved = installer._publish_pinned_wheel(tmp_path / "cache", release, wheel)
+    assert resolved.source == "managed_cache"
