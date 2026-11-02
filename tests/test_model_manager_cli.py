@@ -84,7 +84,7 @@ def test_verify_hf_reports_missing_and_teal_cache_remove_is_preview(tmp_path, ca
     root = tmp_path / "teal"
     assert main(["models", "--cache-root", str(root), "verify",
                  "huggingface:biu-nlp/f-coref"]) == 2
-    assert "No complete" in capsys.readouterr().err
+    assert "No structurally complete" in capsys.readouterr().err
     assert main(["models", "--cache-root", str(root), "remove",
                  "teal-cache:wordnet-mwe-indices", "--json"]) == 0
     data = json.loads(capsys.readouterr().out)

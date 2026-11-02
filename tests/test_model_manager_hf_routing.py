@@ -76,6 +76,7 @@ def test_prefetched_coref_snapshot_is_used_without_second_materialized_copy(tmp_
     )
     assert model == snapshot
     assert len(seen) == 1 and seen[0]["cache_dir"] == str(cache)
+    assert seen[0]["local_files_only"] is True
     assert "local_dir" not in seen[0]
     assert not (tmp_path / "materialized").exists()
 
@@ -201,3 +202,50 @@ def test_native_hub_cache_offline_prefetch_reuse_and_revision_eviction(tmp_path,
     assert selected.is_dir()
     assert manager.install(key, allow_download=False) == selected
     assert manager.verify(key).ready is None
+
+
+
+def test_fastcoref_first_use_falls_back_to_upstream_and_obeys_offline(
+    tmp_path, monkeypatch,
+):
+    import sys
+    import types
+    import pytest
+    from huggingface_hub.utils import LocalEntryNotFoundError
+    from text_analysis_lab.linguistics.coreference import runtime
+
+    cache = tmp_path / "hub"
+    fake_snapshot = tmp_path / "model"
+    fake_snapshot.mkdir()
+    (fake_snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (fake_snapshot / "model.safetensors").write_bytes(b"fixture")
+
+    calls = []
+
+    def fake_download(**kwargs):
+        calls.append(kwargs.copy())
+        if kwargs.get("local_files_only"):
+            raise LocalEntryNotFoundError("No cached revision")
+        return str(fake_snapshot)
+
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub",
+        types.SimpleNamespace(snapshot_download=fake_download),
+    )
+    monkeypatch.delenv("TEAL_OFFLINE", raising=False)
+    assert runtime.prepare_fastcoref_model(
+        tmp_path / "workspace", model="fcoref",
+        cache_dir=cache, show_progress=False,
+    ) == fake_snapshot
+    assert len(calls) == 2
+    assert calls[0]["local_files_only"] is True
+    assert not calls[1].get("local_files_only", False)
+
+    calls.clear()
+    monkeypatch.setenv("TEAL_OFFLINE", "1")
+    with pytest.raises(RuntimeError, match="not fully available"):
+        runtime.prepare_fastcoref_model(
+            tmp_path / "workspace", model="fcoref",
+            cache_dir=cache, show_progress=False,
+        )
+    assert len(calls) == 1 and calls[0]["local_files_only"] is True

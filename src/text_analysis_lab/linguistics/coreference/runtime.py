@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import inspect
+import os
 import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
@@ -169,6 +170,26 @@ def _snapshot_download(
     if local_dir is not None:
         local_dir.mkdir(parents=True, exist_ok=True)
         kwargs["local_dir"] = str(local_dir)
+    # Reuse an already resolved Hub revision without contacting the network.
+    # In particular, manager.prefetch followed by FastCoref inference must not
+    # silently refresh "main" to another revision. Forced refresh is explicit.
+    if local_dir is None and not force_download:
+        from huggingface_hub.utils import LocalEntryNotFoundError
+
+        try:
+            existing = Path(snapshot_download(**kwargs, local_files_only=True))
+        except LocalEntryNotFoundError:
+            pass
+        else:
+            if _model_is_present(existing):
+                return existing
+
+    offline = os.environ.get("TEAL_OFFLINE", "").lower() in {"1", "true", "yes"}
+    if offline:
+        raise RuntimeError(
+            f"Model {repository!r} is not fully available in the shared cache "
+            f"{cache_dir}. Disable TEAL_OFFLINE to download it."
+        )
     return Path(snapshot_download(**kwargs))
 
 
