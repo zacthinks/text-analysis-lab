@@ -54,3 +54,26 @@ def test_models_reject_unknown_without_download(tmp_path, capsys):
     ]) == 2
     assert "No approved spaCy release" in capsys.readouterr().err
     assert not root.exists()
+
+def test_models_install_http_failure_is_reported_without_traceback(tmp_path, capsys, monkeypatch):
+    from urllib.error import URLError
+    import text_analysis_lab.models.spacy_install as installer
+    import text_analysis_lab.models.spacy as provider
+
+    monkeypatch.setattr(provider.importlib.metadata, "version",
+                        lambda name: (_ for _ in ()).throw(
+                            provider.importlib.metadata.PackageNotFoundError(name)
+                        ) if name == "en_core_web_sm" else __import__("importlib").metadata.version(name))
+
+    class FailedOpener:
+        def open(self, *args, **kwargs):
+            raise URLError("simulated HTTP failure")
+    monkeypatch.setattr(installer, "build_opener", lambda *args: FailedOpener())
+    result = main([
+        "models", "--cache-root", str(tmp_path / "cache"), "install",
+        "spacy:en_core_web_sm", "--allow-download",
+    ])
+    assert result == 2
+    error = capsys.readouterr().err
+    assert "Check your network connection" in error
+    assert "Traceback" not in error
