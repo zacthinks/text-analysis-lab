@@ -467,6 +467,7 @@ def generalized_difference(
     design: str | None = None,
     strata: BaseArtifact | str | None = None,
     inference: str = "finite",
+    known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
 ) -> GeneralizedDifferenceResult:
     """Correct a full-corpus surrogate using a probability audit.
 
@@ -486,6 +487,8 @@ def generalized_difference(
     Without verified provenance or an asserted design, the point estimate is
     returned with no estimated design standard error.
     """
+    if known is not None and inference != "finite":
+        raise ValueError("known= supports only finite-population inference.")
     if inference not in {"finite", "superpopulation"}:
         raise ValueError("inference must be 'finite' or 'superpopulation'.")
     from text_analysis_lab.analysis.gd_design_variance import check_design
@@ -532,6 +535,40 @@ def generalized_difference(
         missing = len(audit_keys - population_keys)
         raise ArtifactError(f"Surrogate is missing {missing} gold/audit key(s).")
 
+    from text_analysis_lab.analysis.gd_known import known_table
+    known_data, known_keys = known_table(
+        project, known, primary_key=keys, label_field=gold_field,
+    )
+    if known_keys & audit_keys:
+        raise ArtifactError("known= overlaps audited gold labels.")
+    if known is not None:
+        from text_analysis_lab.analysis.estimation import _recorded_frame
+        recorded = _recorded_frame(project, pi_artifact)
+        if recorded is not None:
+            if tuple(str(k) for k in recorded.primary_key) != keys:
+                raise ArtifactError("Recorded audit frame has different primary keys.")
+            recorded_frame = _key_only_frame(recorded)
+            _validate_unique(recorded_frame, keys, role="recorded audit frame")
+            remainder_keys = set(_key_tuples(recorded_frame, keys))
+            if known_keys & remainder_keys:
+                raise ArtifactError("known= overlaps the recorded audit sampling frame.")
+            if population_keys not in (remainder_keys, remainder_keys | known_keys):
+                raise ArtifactError(
+                    "Surrogate must cover the audit remainder U or U union known=."
+                )
+            variance_surrogate = recorded
+        else:
+            if not known_keys.issubset(population_keys):
+                raise ArtifactError(
+                    "External known= requires the surrogate to cover known keys."
+                )
+            remainder_keys = population_keys - known_keys
+            variance_surrogate = surrogate
+        if not remainder_keys or not audit_keys.issubset(remainder_keys):
+            raise ArtifactError("Audit keys must lie in the remaining frame U.")
+    else:
+        remainder_keys = population_keys
+        variance_surrogate = surrogate
     q_all = _numeric(
         population[surrogate_field], name=f"surrogate field {surrogate_field!r}"
     )
@@ -557,17 +594,26 @@ def generalized_difference(
         raise ArtifactError("pi values must satisfy 0 < pi <= 1.")
 
     residual = y - q_audit
-    N = len(population)
-    surrogate_total = float(q_all.sum())
+    N = len(remainder_keys) + len(known_keys)
+    if known is not None:
+        # The exactly known K labels replace, rather than augment, q on K.
+        is_remaining = np.asarray([
+            key in remainder_keys for key in _key_tuples(population, keys)
+        ], dtype=bool)
+        surrogate_total = float(q_all[is_remaining].sum())
+    else:
+        surrogate_total = float(q_all.sum())
     correction_total = float(np.sum(residual / inclusion))
+    if known is not None:
+        correction_total += float(known_data["__known_y__"].sum())
     estimated_total = surrogate_total + correction_total
 
     variance_total, design, variance_note = _design_variance_from_pi_provenance(
-        surrogate=surrogate,
+        surrogate=variance_surrogate,
         pi_artifact=pi_artifact,
         audit_frame=merged.loc[:, [*keys]].copy(),
         residual=residual,
-        population_keys=population_keys,
+        population_keys=remainder_keys,
         primary_key=keys,
         inclusion=inclusion,
         design=design,
