@@ -116,3 +116,40 @@ def test_standard_zip_directory_records_are_accepted(tmp_path):
     )
     resolved = installer._publish_pinned_wheel(tmp_path / "cache", release, wheel)
     assert resolved.source == "managed_cache"
+
+def test_official_download_transport_failure_has_actionable_message(tmp_path, monkeypatch):
+    from urllib.error import URLError
+
+    class BrokenOpener:
+        def open(self, *args, **kwargs):
+            raise URLError("simulated connection failure")
+
+    monkeypatch.setattr(installer, "build_opener", lambda *args: BrokenOpener())
+    release = installer.OFFICIAL_SPACY_RELEASES["en_core_web_sm"]
+    with pytest.raises(SpacyResourceError, match="Check your network connection") as caught:
+        installer._download_wheel(release, tmp_path / "failed.whl")
+    assert isinstance(caught.value.__cause__, URLError)
+    assert not (tmp_path / "failed.whl").exists()
+
+
+def test_official_download_stream_failure_has_actionable_message(tmp_path, monkeypatch):
+    from urllib.error import URLError
+
+    class BrokenResponse:
+        headers = {}
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self, n):
+            raise URLError("simulated interrupted transfer")
+
+    class BrokenOpener:
+        def open(self, *args, **kwargs):
+            return BrokenResponse()
+
+    monkeypatch.setattr(installer, "build_opener", lambda *args: BrokenOpener())
+    release = installer.OFFICIAL_SPACY_RELEASES["en_core_web_sm"]
+    with pytest.raises(SpacyResourceError, match="Check your network connection") as caught:
+        installer._download_wheel(release, tmp_path / "partial.whl")
+    assert isinstance(caught.value.__cause__, URLError)
