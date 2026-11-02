@@ -57,9 +57,59 @@ def left_weighted_quantile(values, weights, *, probability: float) -> float:
     return float(distinct[-1])
 
 
+def finite_srs_quantile_interval(
+    values, *, population_size: int, probability: float, level: float,
+) -> tuple[float, float]:
+    """Conservative exact design interval for the left finite-frame quantile.
+
+    Under uniform SRSWOR, let k=ceil(p*N), the target population order
+    statistic. The sample count of population values <= x_(k) stochastically
+    dominates Hypergeom(N,k,n), including ties; the count of values strictly
+    below x_(k) is dominated by Hypergeom(N,k-1,n). Choose the most
+    informative lower/upper sample ranks with each tail failure <= alpha/2.
+    Bonferroni gives >= 1-alpha coverage for every fixed finite population,
+    including arbitrary ties and mass points. Return infinite bounds when
+    no sampled order statistic can support that tail. No distribution/density
+    assumptions, interpolation or observed-support truncation are needed.
+    """
+    from scipy.stats import hypergeom
+    if not 0.0 < level < 1.0:
+        raise ValueError("level must satisfy 0 < level < 1.")
+    if not 0.0 < probability < 1.0:
+        raise ValueError("quantile probability must satisfy 0 < p < 1.")
+    ordered = np.sort(np.asarray(values, dtype=float))
+    n, N = len(ordered), population_size
+    if not (1 <= n <= N):
+        raise ValueError("SRS quantile interval requires 1 <= n <= N.")
+    if not np.all(np.isfinite(ordered)):
+        raise ValueError("Quantile interval measurements must be finite.")
+    if n == N:
+        return (
+            float(ordered[math.ceil(probability * N) - 1]),
+            float(ordered[math.ceil(probability * N) - 1]),
+        )
+    k = math.ceil(probability * N)
+    tail = (1.0 - level) / 2.0
+
+    # Lower failure: fewer than rank a observations <= true quantile.
+    lower_ranks = [
+        a for a in range(1, n + 1)
+        if hypergeom.cdf(a - 1, N, k, n) <= tail
+    ]
+    lower = float(ordered[max(lower_ranks) - 1]) if lower_ranks else -math.inf
+
+    # Upper failure: at least b observations strictly below true quantile.
+    upper_ranks = [
+        b for b in range(1, n + 1)
+        if hypergeom.sf(b - 1, N, k - 1, n) <= tail
+    ]
+    upper = float(ordered[min(upper_ranks) - 1]) if upper_ranks else math.inf
+    return lower, upper
+
+
 @dataclass(frozen=True)
 class QuantileEstimateResult:
-    """Quantile point estimate; median sampling uncertainty is not yet supported."""
+    """Finite quantile: exact SRS rank CI where supported, otherwise point only."""
 
     statistic: str
     estimate: float
@@ -73,6 +123,7 @@ class QuantileEstimateResult:
     variance_note: str
     standard_error: float | None = None
     _cdf: pd.DataFrame | None = None
+    _srs_order: tuple[float, ...] | None = None
 
     def cdf_frame(self) -> pd.DataFrame:
         """Return weighted CDF estimates and design ratio-linearization SEs.
@@ -95,6 +146,11 @@ class QuantileEstimateResult:
             raise ValueError("level must satisfy 0 < level < 1.")
         if self.standard_error == 0.0:
             return self.estimate, self.estimate
+        if self._srs_order is not None:
+            return finite_srs_quantile_interval(
+                self._srs_order, population_size=self.population_size,
+                probability=self.quantile_level, level=level,
+            )
         raise ValueError(
             "Quantile confidence intervals require a separately validated "
             "quantile procedure; mean-based SEs are not applicable."
