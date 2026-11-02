@@ -76,7 +76,7 @@ def test_repeated_design_quantile_ci_coverage_diagnostics(
     else:
         p = np.linspace(.2, .8, N)
     strata = np.r_[np.zeros(N//2, dtype=int), np.ones(N//2, dtype=int)]
-    true_median = sorted(y)[math.ceil(.5 * N) - 1]
+    true_median = float(sorted(y)[math.ceil(.5 * N) - 1])
     total, covered, both_finite, both_infinite = 0, 0, 0, 0
     finite_widths = []
     for _ in range(160):
@@ -96,7 +96,7 @@ def test_repeated_design_quantile_ci_coverage_diagnostics(
             continue
         lo, hi = ci
         total += 1
-        covered += lo <= true_median <= hi
+        covered += int(lo <= true_median <= hi)
         both_finite += math.isfinite(lo) and math.isfinite(hi)
         both_infinite += math.isinf(lo) and math.isinf(hi)
         if math.isfinite(lo) and math.isfinite(hi):
@@ -105,9 +105,9 @@ def test_repeated_design_quantile_ci_coverage_diagnostics(
     coverage = covered / total
     finite_fraction = both_finite / total
     unbounded_fraction = both_infinite / total
-    record_property("empirical_coverage", coverage)
-    record_property("both_finite_fraction", finite_fraction)
-    record_property("both_unbounded_fraction", unbounded_fraction)
+    record_property("empirical_coverage", float(coverage))
+    record_property("both_finite_fraction", float(finite_fraction))
+    record_property("both_unbounded_fraction", float(unbounded_fraction))
     record_property("median_finite_width", float(np.median(finite_widths))
                     if finite_widths else None)
     # This is a diagnostic, not a pass assertion of nominal coverage. A
