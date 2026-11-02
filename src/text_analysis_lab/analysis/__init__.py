@@ -18,6 +18,8 @@ from text_analysis_lab.analysis.dictionary_counts import dictionary_counts
 from text_analysis_lab.analysis.dictionary_matches import dictionary_matches
 from text_analysis_lab.analysis.distance import distance
 from text_analysis_lab.analysis.estimation import EstimateResult, estimate
+from text_analysis_lab.analysis.quantiles import QuantileEstimateResult
+from text_analysis_lab.analysis.gd_quantiles import GeneralizedDifferenceQuantileResult
 from text_analysis_lab.analysis.feature_summary import feature_summary
 from text_analysis_lab.analysis.generalized_difference import (
     GeneralizedDifferenceResult,
@@ -53,6 +55,8 @@ __all__ = [
     "ClassifierSearch",
     "FinalizedClassifier",
     "EstimateResult",
+    "QuantileEstimateResult",
+    "GeneralizedDifferenceQuantileResult",
     "GeneralizedDifferenceResult",
     "TextDiagnosticsResult",
     "KWICResult",
