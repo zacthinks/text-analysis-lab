@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from statistics import NormalDist
 
 import numpy as np
 import pandas as pd
@@ -69,20 +68,17 @@ class GeneralizedDifferenceQuantileResult:
         return self.estimate
 
     def cdf_frame(self, *, level: float | None = None) -> pd.DataFrame:
-        """Return raw/adjusted pointwise CDF and SE, optionally normal limits.
+        """Return raw and isotonic-projected CDF values and pointwise SEs.
 
-        The normal bounds are pointwise approximation diagnostics; they are
-        NOT a simultaneous confidence band or a quantile confidence interval.
-        They are intentionally not clipped to [0,1].
+        A normal confidence band is not a supported result. The old level=
+        argument is retained only to explain the withdrawn capability.
         """
-        frame = self._cdf.copy()
         if level is not None:
-            if not (0.0 < level < 1.0):
-                raise ValueError("level must satisfy 0 < level < 1.")
-            z = NormalDist().inv_cdf(0.5 + level / 2)
-            frame["pointwise_lower"] = frame["raw_cdf"] - z * frame["cdf_se"]
-            frame["pointwise_upper"] = frame["raw_cdf"] + z * frame["cdf_se"]
-        return frame
+            raise ValueError(
+                "Pointwise normal CDF confidence limits are unavailable; "
+                "cdf_frame() provides raw CDF and design SE diagnostics only."
+            )
+        return self._cdf.copy()
 
     def confidence_interval(self, *, level: float = 0.95) -> tuple[float, float]:
         if not (0.0 < level < 1.0):
@@ -227,7 +223,7 @@ def generalized_difference_median(
         "Exact finite-population quantile: all frame outcomes observed with pi=1."
         if census else
         "Bounded equal-knot isotonic projection of pointwise HT-corrected CDF; "
-        "Scalar quantile SE unavailable; noncensus CIs are approximate."
+        "Scalar quantile SE unavailable; noncensus GD quantile CIs are unsupported."
     )
     if note:
         message += f" CDF design/provenance: {note}"
