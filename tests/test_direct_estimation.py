@@ -365,8 +365,10 @@ def test_direct_weighted_median_unequal_pi_shuffled_and_no_fake_ci(tmp_path):
         assert med.estimate == pytest.approx(3.)
         assert med.total_weight == pytest.approx(7.25)
         assert med.standard_error is None
-        lo, hi = med.confidence_interval()
-        assert lo <= med.estimate <= hi
+        # Tiny unequal-probability audit does not identify finite bounds.
+        with pytest.raises(ValueError, match="unavailable"):
+            med.confidence_interval()
+        assert not med.cdf_frame().empty
         with pytest.raises(ValueError, match="known="):
             med2 = outcome.analysis.estimate(
                 statistic="median", pi=pi, population=population, known=outcome,
