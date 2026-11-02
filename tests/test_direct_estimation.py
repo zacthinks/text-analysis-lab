@@ -532,7 +532,6 @@ def test_exact_srs_rank_interval_requires_verified_internal_sample(tmp_path, mon
 
 
 def test_direct_quantile_design_validation_is_single_pass(tmp_path, monkeypatch):
-    from text_analysis_lab.analysis import generalized_difference as gd_function
     from text_analysis_lab.analysis import gd_quantile_design
     from text_analysis_lab.analysis import estimation as estimation_module
 
