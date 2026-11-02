@@ -25,7 +25,7 @@ def test_models_list_and_info_are_read_only(tmp_path, capsys):
     ]) == 0
     entry = json.loads(capsys.readouterr().out)
     assert entry["descriptor"]["provider"] == "spacy"
-    assert entry["ready"] is False
+    assert entry["ready"] is None  # Read-only inventory has not validated readiness.
     assert not root.exists()
 
 
