@@ -17,7 +17,6 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from statistics import NormalDist
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -53,6 +52,7 @@ class GeneralizedDifferenceResult:
     variance_audit: float | None = None
     variance_corpus: float | None = None
     variance_total: float | None = None
+    exact_census: bool = False
 
     @property
     def estimated_prevalence(self) -> float:
@@ -64,56 +64,39 @@ class GeneralizedDifferenceResult:
         return self.estimated_mean
 
     def confidence_interval(
-        self,
-        *,
-        level: float = 0.95,
-        scale: str = "mean",
+        self, *, level: float = 0.95, scale: str = "mean"
     ) -> tuple[float, float]:
-        """Return a normal-approximation design interval for mean or total.
-
-        The interval is intentionally not clipped to the support of the outcome;
-        generalized-difference estimators and their normal intervals need not be
-        bounded by 0 and 1 even when the gold variable is binary.
-        """
-        level = float(level)
-        if not (0.0 < level < 1.0):
+        """Only exact finite-census intervals; no automatic sampled Wald CI."""
+        if not 0.0 < float(level) < 1.0:
             raise ValueError("level must satisfy 0 < level < 1.")
         if scale == "mean":
-            estimate = self.estimated_mean
-            se = self.standard_error
+            value = self.estimated_mean
         elif scale == "total":
-            estimate = self.estimated_total
-            se = self.standard_error_total
+            value = self.estimated_total
         else:
             raise ValueError("scale must be 'mean' or 'total'.")
-        if se is None:
-            note = self.variance_note or "design variance is unavailable."
-            raise ValueError(f"Cannot form a confidence interval because {note}")
-        z = NormalDist().inv_cdf(0.5 + level / 2.0)
-        return (float(estimate - z * se), float(estimate + z * se))
+        if not self.exact_census or self.inference != "finite":
+            raise ValueError(
+                "Confidence interval unavailable for sampled or superpopulation "
+                "GD means/totals: automatic Wald intervals are not supported; "
+                "design standard errors remain available."
+            )
+        return float(value), float(value)
 
     def p_value(self, *, null: float = 0.0, scale: str = "mean") -> float:
-        """Return a two-sided normal-approximation design p-value.
-
-        In finite mode this uses design uncertainty conditional on the
-        realized corpus. In superpopulation mode it uses the combined corpus
-        and audit variance, assuming IID corpus generation and frozen predictions.
-        """
+        """Only deterministic finite-census equality is available."""
         if scale == "mean":
-            estimate = self.estimated_mean
-            se = self.standard_error
+            value = self.estimated_mean
         elif scale == "total":
-            estimate = self.estimated_total
-            se = self.standard_error_total
+            value = self.estimated_total
         else:
             raise ValueError("scale must be 'mean' or 'total'.")
-        if se is None:
-            note = self.variance_note or "design variance is unavailable."
-            raise ValueError(f"Cannot form a p-value because {note}")
-        if se == 0.0:
-            return 1.0 if float(estimate) == float(null) else 0.0
-        z = abs((float(estimate) - float(null)) / float(se))
-        return float(2.0 * (1.0 - NormalDist().cdf(z)))
+        if not self.exact_census or self.inference != "finite":
+            raise ValueError(
+                "P-value unavailable for sampled or superpopulation GD "
+                "means/totals: automatic normal/Wald tests are not supported."
+            )
+        return 1.0 if float(value) == float(null) else 0.0
 
     def to_frame(self) -> pd.DataFrame:
         """Return a tidy one-row summary suitable for notebook display."""
@@ -154,28 +137,25 @@ class GeneralizedDifferenceContrastResult:
     standard_error: float | None
     variance_design: str | None
     variance_note: str | None = None
+    exact_census: bool = False
 
     def confidence_interval(self, *, level: float = 0.95) -> tuple[float, float]:
-        level = float(level)
-        if not (0.0 < level < 1.0):
+        if not 0.0 < float(level) < 1.0:
             raise ValueError("level must satisfy 0 < level < 1.")
-        if self.standard_error is None:
-            note = self.variance_note or "design variance is unavailable."
-            raise ValueError(f"Cannot form a confidence interval because {note}")
-        z = NormalDist().inv_cdf(0.5 + level / 2.0)
-        return (
-            float(self.difference - z * self.standard_error),
-            float(self.difference + z * self.standard_error),
-        )
+        if not self.exact_census:
+            raise ValueError(
+                "Confidence interval unavailable for sampled GD group contrasts: "
+                "automatic Wald intervals are not supported."
+            )
+        return self.difference, self.difference
 
     def p_value(self, *, null: float = 0.0) -> float:
-        if self.standard_error is None:
-            note = self.variance_note or "design variance is unavailable."
-            raise ValueError(f"Cannot form a p-value because {note}")
-        if self.standard_error == 0.0:
-            return 1.0 if self.difference == float(null) else 0.0
-        z = abs((self.difference - float(null)) / self.standard_error)
-        return float(2.0 * (1.0 - NormalDist().cdf(z)))
+        if not self.exact_census:
+            raise ValueError(
+                "P-value unavailable for sampled GD group contrasts: "
+                "automatic normal/Wald tests are not supported."
+            )
+        return 1.0 if self.difference == float(null) else 0.0
 
     def to_frame(self) -> pd.DataFrame:
         return pd.DataFrame(
@@ -187,7 +167,7 @@ class GeneralizedDifferenceContrastResult:
                     "second_estimate": self.second_estimate,
                     "difference": self.difference,
                     "standard_error": self.standard_error,
-                    "p_value": None if self.standard_error is None else self.p_value(),
+                    "p_value": self.p_value() if self.exact_census else None,
                     "variance_design": self.variance_design,
                 }
             ]
@@ -245,6 +225,11 @@ class GeneralizedDifferenceGroupedResult:
             standard_error=se,
             variance_design=design,
             variance_note=note,
+            exact_census=(
+                len(self._contrast_inputs["audit_keys"]) ==
+                len(self._contrast_inputs["population_keys"]) and
+                bool(np.all(np.asarray(self._contrast_inputs["inclusion"]) == 1.0))
+            ),
         )
 
     def contrasts(self, reference: Any) -> pd.DataFrame:
@@ -775,6 +760,10 @@ def generalized_difference(
         variance_audit=variance_audit,
         variance_corpus=variance_corpus,
         variance_total=combined_variance,
+        exact_census=(
+            inference == "finite" and len(audit_keys) == len(remainder_keys)
+            and bool(np.all(inclusion == 1.0))
+        ),
     )
 
 
