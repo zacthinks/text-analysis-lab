@@ -136,9 +136,10 @@ def test_first_use_http_failure_reports_operator_error(tmp_path, monkeypatch):
     monkeypatch.setattr(installer, "build_opener", lambda *args: FailedOpener())
     # Avoid an installed model package masking the missing-resource path.
     import text_analysis_lab.models.spacy as provider
+    original_version = provider.importlib.metadata.version
     monkeypatch.setattr(provider.importlib.metadata, "version",
                         lambda name: (_ for _ in ()).throw(
                             provider.importlib.metadata.PackageNotFoundError(name)
-                        ) if name == "en_core_web_sm" else __import__("importlib").metadata.version(name))
+                        ) if name == "en_core_web_sm" else original_version(name))
     with pytest.raises(OperatorError, match="Check your network connection"):
         SpacyTranslator(model="en_core_web_sm").translate("Example sentence.")
