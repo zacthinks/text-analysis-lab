@@ -135,7 +135,7 @@ class SpacyTranslator(BaseTranslator):
     """
 
     operation_type = "translate"
-    frozen_runtime_fields = frozenset({"_resource_verified"})
+    frozen_runtime_fields = frozenset({"_resource_verified", "_verified_managed_source"})
 
     def __init__(
         self,
