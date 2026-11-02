@@ -622,8 +622,14 @@ def generalized_difference(
     else:
         remainder_keys = population_keys
         variance_surrogate = surrogate
-    q_all = _numeric(
-        population[surrogate_field], name=f"surrogate field {surrogate_field!r}"
+    # q is needed on U only. Predictive values on certainty-known K
+    # are irrelevant and may legitimately be unavailable or missing.
+    remainder_mask = np.asarray([
+        key in remainder_keys for key in _key_tuples(population, keys)
+    ], dtype=bool)
+    q_remaining = _numeric(
+        population.loc[remainder_mask, surrogate_field],
+        name=f"surrogate field {surrogate_field!r} on audit remainder",
     )
     merged = audit.merge(
         population.loc[:, [*keys, surrogate_field]],
@@ -648,14 +654,7 @@ def generalized_difference(
 
     residual = y - q_audit
     N = len(remainder_keys) + len(known_keys)
-    if known is not None:
-        # The exactly known K labels replace, rather than augment, q on K.
-        is_remaining = np.asarray([
-            key in remainder_keys for key in _key_tuples(population, keys)
-        ], dtype=bool)
-        surrogate_total = float(q_all[is_remaining].sum())
-    else:
-        surrogate_total = float(q_all.sum())
+    surrogate_total = float(q_remaining.sum())
     correction_total = float(np.sum(residual / inclusion))
     if known is not None:
         correction_total += float(known_data["__known_y__"].sum())
