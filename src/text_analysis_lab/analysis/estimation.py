@@ -182,14 +182,14 @@ def estimate(
     An external population= may describe U or the complete union.
     """
     if statistic not in {"mean", "median", "quantile"}:
-        raise ValueError("statistic must be 'mean' or 'median'.")
+        raise ValueError("statistic must be 'mean', 'median', or 'quantile'.")
     if statistic in {"median", "quantile"}:
         if statistic == "quantile" and not 0.0 < quantile < 1.0:
             raise ValueError("quantile must satisfy 0 < quantile < 1.")
         if known is not None:
-            raise ValueError("known= is not supported for median until a combined-CDF contract is defined.")
+            raise ValueError("known= is not supported for quantiles until a combined-CDF contract is defined.")
         if inference != "finite":
-            raise ValueError("Median superpopulation inference is not implemented.")
+            raise ValueError("Quantile superpopulation inference is not implemented.")
     if inference not in {"finite", "superpopulation"}:
         raise ValueError("inference must be 'finite' or 'superpopulation'.")
     if known is not None and inference != "finite":
@@ -344,23 +344,14 @@ def estimate(
     if np.any((inclusion <= 0) | (inclusion > 1)):
         raise ArtifactError("pi must satisfy 0 < pi <= 1.")
     N = len(full_keys) + len(known_keys)
-    # Validate the asserted or recorded sampling design for BOTH statistics.
-    # Median uses an unrelated weighted-CDF point estimator, so zero residuals
-    # are supplied only to exercise the existing design/provenance checks;
-    # the returned HT variance must never be presented as median variance.
-    audit_variance_total, actual_design, note = _design_variance_from_pi_provenance(
-        surrogate=recorded_frame_artifact or frame_artifact,
-        pi_artifact=pi_artifact,
-        audit_frame=merged.loc[:, list(keys)].copy(),
-        residual=y if statistic == "mean" else np.zeros_like(y),
-        population_keys=full_keys, primary_key=keys,
-        inclusion=inclusion, design=design, strata=strata_artifact,
-    )
     if statistic in {"median", "quantile"}:
         from text_analysis_lab.analysis.quantiles import (
             QuantileEstimateResult, left_weighted_quantile,
         )
-        median = left_weighted_quantile(y, 1.0 / inclusion, probability=(.5 if statistic == "median" else quantile))
+        median = left_weighted_quantile(
+            y, 1.0 / inclusion,
+            probability=(.5 if statistic == "median" else quantile),
+        )
         from text_analysis_lab.analysis.gd_quantile_design import prepare_threshold_design
         validated = prepare_threshold_design(
             surrogate=recorded_frame_artifact or frame_artifact,
@@ -369,6 +360,9 @@ def estimate(
             population_keys=full_keys, primary_key=keys,
             inclusion=inclusion, design=design, strata=strata_artifact,
         )
+        # A caller's design= assertion cannot override failed TeAL provenance:
+        # validated.design is None if the recorded sample could not be checked.
+        actual_design, note = validated.design, validated.note
         weights = 1.0 / inclusion
         weight_sum = float(np.sum(weights))
         observed = np.unique(y)
@@ -400,19 +394,29 @@ def estimate(
             total_weight=float(np.sum(1.0 / inclusion)),
             variance_design="census" if census else actual_design,
             variance_note=(
-                "Exact finite-population left median."
+                "Exact finite-population left quantile."
                 if census else
                 "Normalized inverse-probability weighted CDF (Hajek); "
-                "median scalar SE unavailable; exact SRS rank CI offered when valid."
+                "quantile scalar SE unavailable; exact SRS rank CI offered when valid."
             ) + (f" Design/provenance: {note}" if note else ""),
             standard_error=0.0 if census else None,
             _cdf=cdf_frame,
             _srs_order=(
                 tuple(float(v) for v in y)
-                if (actual_design == "srswor" or design == "srswor")
+                if actual_design == "srswor"
                 else None
             ),
         )
+    # Means retain the original HT variance dispatch. Quantiles instead
+    # reuse their own one-time validated threshold-design context above.
+    audit_variance_total, actual_design, note = _design_variance_from_pi_provenance(
+        surrogate=recorded_frame_artifact or frame_artifact,
+        pi_artifact=pi_artifact,
+        audit_frame=merged.loc[:, list(keys)].copy(),
+        residual=y,
+        population_keys=full_keys, primary_key=keys,
+        inclusion=inclusion, design=design, strata=strata_artifact,
+    )
     ht_total = float(np.sum(y / inclusion)) + float(known_data["__known_y__"].sum())
     variance_audit = (
         None if audit_variance_total is None
