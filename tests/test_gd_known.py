@@ -96,3 +96,42 @@ def test_known_with_recorded_remainder_and_forbidden_overlap(tmp_path):
             )
     finally:
         project.close()
+
+
+def test_external_remainder_only_surrogate_and_population_are_valid(tmp_path):
+    project = teal.Project.create(tmp_path / "external_u", name="external_u")
+    try:
+        # K and U are disjoint. User provides only U as the sampling frame.
+        u = register(project, [2, 3, 4, 5], "prediction", [1., 1., 1., 1.])
+        known1 = register(project, [0], "label", [5.])
+        known2 = register(project, [1], "label", [7.])
+        audit = register(project, [2, 4], "label", [3., 5.])
+        pi = register(project, [4, 2], "pi", [.5, .5])
+        result = u.analysis.generalized_difference(
+            gold=audit, pi=pi, known=[known1, known2], design="srswor",
+        )
+        # 12 exact + 4 U surrogate + (2+4)*2 HT residual = 28.
+        assert result.estimated_total == pytest.approx(28.)
+        assert result.population_size == 6
+        direct = audit.analysis.estimate(
+            pi=pi, population=u, known=[known1, known2], design="srswor",
+        )
+        assert direct.estimated_total == pytest.approx(12 + 2*(3+5))
+        # A group artifact must describe the full F, including K.
+        groups = register(
+            project, range(6), "group", ["A", "B", "A", "A", "B", "B"]
+        )
+        grouped = u.analysis.generalized_difference_by(
+            gold=audit, pi=pi, known=[known1, known2],
+            group=groups, group_field="group", design="srswor",
+        )
+        assert grouped.to_frame()["population_size"].sum() == 6
+        partial = register(
+            project, [0, 2, 3, 4, 5], "prediction", [1.] * 5
+        )
+        with pytest.raises(ArtifactError, match="either all known"):
+            partial.analysis.generalized_difference(
+                gold=audit, pi=pi, known=[known1, known2], design="srswor",
+            )
+    finally:
+        project.close()
