@@ -147,7 +147,7 @@ class QuantileEstimateResult:
         if self.standard_error == 0.0:
             return self.estimate, self.estimate
         from text_analysis_lab.analysis.quantile_intervals import (
-            cdf_quantile_interval, require_finite_quantile_interval,
+            require_finite_quantile_interval,
         )
         if self._srs_order is not None:
             bounds = finite_srs_quantile_interval(
@@ -157,20 +157,10 @@ class QuantileEstimateResult:
             return require_finite_quantile_interval(
                 bounds, design="srswor", method="exact finite-population SRS rank",
             )
-        if self._cdf is not None and self.variance_design in {"stratified_srswor", "bernoulli"}:
-            bounds = cdf_quantile_interval(
-                self._cdf["threshold"], self._cdf["weighted_cdf"],
-                self._cdf["cdf_se"], probability=self.quantile_level,
-                level=level, population_size=self.population_size,
-                point=self.estimate,
-            )
-            return require_finite_quantile_interval(
-                bounds, design=self.variance_design,
-                method="approximate design-weighted CDF inversion",
-            )
         raise ValueError(
-            "Quantile confidence intervals require a separately validated "
-            "quantile procedure; mean-based SEs are not applicable."
+            "Quantile confidence interval unavailable: only finite exact "
+            "census and eligible SRS rank intervals are supported; point "
+            "estimates and CDF design diagnostics remain available."
         )
 
     def p_value(self, *, null: float = 0.0) -> float:
