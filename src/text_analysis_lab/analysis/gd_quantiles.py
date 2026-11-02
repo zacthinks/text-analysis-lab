@@ -98,12 +98,12 @@ class GeneralizedDifferenceQuantileResult:
                 point=self.estimate,
             )
         raise ValueError(
-            "GD median confidence intervals are unavailable: pointwise CDF "
+            "GD quantile confidence intervals are unavailable: pointwise CDF "
             "uncertainty does not establish quantile interval coverage."
         )
 
     def p_value(self, *, null: float = 0.0) -> float:
-        raise ValueError("GD median hypothesis tests require separate quantile inference.")
+        raise ValueError("GD quantile hypothesis tests require separate inference.")
 
     def to_frame(self) -> pd.DataFrame:
         return pd.DataFrame([{
@@ -123,6 +123,7 @@ def generalized_difference_median(
     surrogate, *, gold, pi,
     surrogate_field: str, gold_field: str, pi_field: str,
     design: str | None, strata, quantile: float = 0.5,
+    statistic: str = "median",
 ) -> GeneralizedDifferenceQuantileResult:
     """Compute thresholdwise GD CDF followed by bounded isotonic inversion."""
     from text_analysis_lab.analysis.generalized_difference import (
@@ -230,10 +231,10 @@ def generalized_difference_median(
     census = len(audit_keys) == len(full_keys) and bool(np.all(inclusion == 1.0))
     note = next((x for x in notes if x), None)
     message = (
-        "Exact finite-population median: all frame outcomes observed with pi=1."
+        "Exact finite-population quantile: all frame outcomes observed with pi=1."
         if census else
         "Bounded equal-knot isotonic projection of pointwise HT-corrected CDF; "
-        "GD median SE/CI unavailable pending validated quantile inference."
+        "Scalar quantile SE unavailable; noncensus CIs are approximate."
     )
     if note:
         message += f" CDF design/provenance: {note}"
@@ -242,7 +243,7 @@ def generalized_difference_median(
         "admissible_cdf": projected, "cdf_se": se,
     })
     return GeneralizedDifferenceQuantileResult(
-        statistic="median" if quantile == .5 else "quantile", estimate=float(knots[median_index]),
+        statistic=statistic, estimate=float(knots[median_index]),
         quantile_level=quantile, population_size=N, audit_size=len(audit),
         inference="finite", variance_design="census" if census else actual_design,
         variance_note=message, projection_method="bounded_isotonic_equal_knots",
