@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
-from text_analysis_lab.linguistics.cache import user_cache_paths
+from text_analysis_lab.linguistics.cache import active_hf_cache_path, user_cache_paths
 
 DEFAULT_WSL_READER_MODEL = "Babelscape/wsl-reader-deberta-v3-base"
 DEFAULT_WSL_READER_REVISION = "809d05bd12f261d26b42e28dc2b31db430c1585c"
@@ -544,7 +544,7 @@ def _make_backend(*, model_name, model_revision, device, precision, local_files_
         revision=model_revision,
         device=device,
         precision=precision,
-        cache_dir=user_cache_paths().huggingface_hub,
+        cache_dir=active_hf_cache_path(model_name, revision=model_revision),
         local_files_only=local_files_only,
     )
 
