@@ -228,13 +228,23 @@ def estimate(
             med = left_weighted_quantile(
                 values, np.ones(len(values), dtype=float), probability=(.5 if statistic == "median" else quantile),
             )
+            # Retain the same CDF diagnostic schema as an explicit pi=1 census.
+            # Every frame outcome is recorded: pointwise conditional finite-frame
+            # uncertainty is zero, including for tied/discrete outcomes.
+            thresholds, counts = np.unique(values, return_counts=True)
+            masses = np.cumsum(counts, dtype=float) / float(len(values))
+            cdf_frame = pd.DataFrame({
+                "threshold": thresholds,
+                "weighted_cdf": masses,
+                "cdf_se": np.zeros(len(thresholds), dtype=float),
+            })
             return QuantileEstimateResult(
                 statistic=statistic, estimate=med, quantile_level=(.5 if statistic == "median" else quantile),
                 population_size=len(values), audit_size=0, inference="finite",
                 weighting="census", total_weight=float(len(values)),
                 variance_design="census",
-                variance_note="Exact left median of the recorded values.",
-                standard_error=0.0,
+                variance_note="Exact left quantile of the recorded values.",
+                standard_error=0.0, _cdf=cdf_frame,
             )
         total = float(np.sum(values))
         return EstimateResult(
