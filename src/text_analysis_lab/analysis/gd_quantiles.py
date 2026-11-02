@@ -118,7 +118,7 @@ def generalized_difference_median(
 ) -> GeneralizedDifferenceQuantileResult:
     """Compute thresholdwise GD CDF followed by bounded isotonic inversion."""
     from text_analysis_lab.analysis.generalized_difference import (
-        _design_variance_from_pi_provenance, _frame, _key_tuples,
+        _frame, _key_tuples,
         _numeric, _require_field, _validate_unique,
     )
     from text_analysis_lab.analysis.gd_design_variance import check_design
@@ -189,10 +189,18 @@ def generalized_difference_median(
     if not np.all(np.isfinite(inverse)):
         raise ArtifactError("Inverse inclusion probabilities must be finite.")
 
+    from text_analysis_lab.analysis.gd_quantile_design import prepare_threshold_design
+    validated = prepare_threshold_design(
+        surrogate=surrogate, pi_artifact=pi_artifact,
+        audit_frame=joined.loc[:, list(keys)].copy(),
+        population_keys=full_keys, primary_key=keys,
+        inclusion=inclusion, design=design, strata=strata_artifact,
+    )
+
     raw: list[float] = []
     se: list[float] = []
     notes: list[str | None] = []
-    actual_design: str | None = design
+    actual_design: str | None = validated.design
     q_sorted = np.sort(q_all)
     for threshold in knots:
         z = (y <= threshold).astype(float)
@@ -200,23 +208,8 @@ def generalized_difference_median(
         residual = z - q
         proxy_total = int(np.searchsorted(q_sorted, threshold, side="right"))
         corrected = (proxy_total + math.fsum(residual * inverse)) / N
-        var_total, recovered_design, note = _design_variance_from_pi_provenance(
-            surrogate=surrogate, pi_artifact=pi_artifact,
-            audit_frame=joined.loc[:, list(keys)].copy(),
-            residual=residual,
-            population_keys=full_keys, primary_key=keys,
-            inclusion=inclusion, design=design, strata=strata_artifact,
-        )
-        if recovered_design is not None:
-            actual_design = recovered_design
-        # An internally documented incompatible frame or audit selection
-        # is a point-estimation error, not merely an unavailable variance.
-        if note is not None and (
-            "not the sampled frame" in note
-            or "Audit keys disagree with the recorded sample" in note
-            or "Audit size contradicts" in note
-        ):
-            raise ArtifactError(note)
+        var_total = validated.variance_total(residual)
+        note = validated.note
         raw.append(float(corrected))
         se.append(
             float(math.sqrt(max(0.0, var_total)) / N)
