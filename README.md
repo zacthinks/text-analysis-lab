@@ -368,34 +368,44 @@ Browse analysis methods by task (methods may appear in multiple families):
 
 </details>
 
-### Quantile inference and confidence-interval availability
+### Estimation and supported confidence intervals
 
-`artifact.analysis.estimate(statistic="quantile", quantile=.25)` returns an exact
-left quantile for the recorded artifact, or a normalized inverse-probability
-weighted point estimate when `pi=` identifies a probability audit.
-`predictions.analysis.generalized_difference(gold=labels, pi=audit_pi,
-statistic="median")` estimates a finite-frame median from a frozen full-frame
-proxy and an independent probability audit. A `cdf_frame()` diagnostic exposes
-threshold-CDF estimates and pointwise design SEs; these are **not** simultaneous
-confidence bands or scalar quantile standard errors.
+`artifact.analysis.estimate()` computes exact descriptive statistics for its
+recorded finite frame. With probability-audit `pi=`, direct means/totals use
+Horvitz–Thompson estimation and provide design variance/standard-error
+diagnostics when the sampling design is verified or explicitly asserted.
+`predictions.analysis.generalized_difference(gold=labels, pi=audit_pi)`
+provides model-assisted corrected means and totals. The existing finite
+`known=` option also supports certainty-observed labels and grouped contrasts.
+Frozen surrogate predictions and an independent probability audit are required
+for the usual GD design inference. An external `design=` is the researcher's
+randomization assertion, not a statistical fact inferred from inclusion weights.
 
-`confidence_interval(level=.95)` returns a **finite pair** or raises
-`ValueError` explaining why a finite bound cannot be justified. In particular,
-a correct exact SRS rank interval may have open support bounds for a small audit;
-these are not replaced by observed minima/maxima. The SRS rank method is
-finite-design conservative, whereas sampled stratified/Bernoulli direct quantile
-and GD quantile CIs are **approximate** and sensitive to sample size, ties,
-weight concentration and proxy quality. A point estimate remains available even
-when its CI is not. Quantile `known=`, grouped quantile contrasts and
-superpopulation quantiles are not supported. External `design=` is a researcher
-assertion, never proof of randomization.
+**Confidence-interval support is deliberately narrower than point/SE support.**
+Exact finite censuses can return point intervals. Direct finite-SRSWOR
+quantiles support conservative hypergeometric rank confidence intervals
+when the design is validated and both rank bounds are finite, including tied
+and discrete data. An incomplete SRS rank bound is reported as an
+unavailable CI, not truncated to observed values.
 
-Mean/total `confidence_interval()` remains an ordinary **Wald normal
-approximation**, not an exact design interval: severe skew, rare influential
-outcomes or extreme weights can cause poor coverage despite correct HT/GD
-variance calculations. Examine sampling design, observed influence and
-weight concentration before relying on a normal CI. Frozen surrogate and
-independent audit assumptions are required for usual GD design inference.
+Direct stratified/Bernoulli sampled quantiles and all noncensus
+generalized-difference quantiles return point estimates and threshold-CDF
+diagnostics, but their `confidence_interval()` is unavailable. For sampled
+direct/GD means and totals, GD subgroup contrasts, and opt-in IID
+superpopulation means, design standard errors remain available, but automatic
+Wald `confidence_interval()` and normal `p_value()` calls raise
+`ValueError`. The conventional normal approximation has not met the
+project's reliability requirements across skewed and influential outcomes;
+this restriction does **not** invalidate the underlying point or variance
+formulas. Grouped contrast tables report no sampled-data p-values.
+
+`statistic="median"` and `statistic="quantile", quantile=.25` use left
+quantiles (no midpoint interpolation). Direct probability-sample quantiles
+use normalized inverse-probability weights; GD quantiles invert a projected
+threshold-corrected CDF. A scalar quantile standard error may be `None`
+even if the exact SRS interval exists. Noncensus GD quantile CDF pointwise
+SEs are diagnostics, not quantile CI guarantees. Quantile `known=`, grouped
+quantile contrasts and superpopulation quantiles are not supported.
 
 ## Project Center
 
