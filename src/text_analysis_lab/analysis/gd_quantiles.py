@@ -90,12 +90,18 @@ class GeneralizedDifferenceQuantileResult:
         if self.standard_error == 0.0:
             return self.estimate, self.estimate
         if self.variance_design in {"srswor", "stratified_srswor", "bernoulli"}:
-            from text_analysis_lab.analysis.quantile_intervals import cdf_quantile_interval
-            return cdf_quantile_interval(
+            from text_analysis_lab.analysis.quantile_intervals import (
+                cdf_quantile_interval, require_finite_quantile_interval,
+            )
+            bounds = cdf_quantile_interval(
                 self._cdf["threshold"], self._cdf["raw_cdf"],
                 self._cdf["cdf_se"], probability=self.quantile_level,
                 level=level, population_size=self.population_size,
                 point=self.estimate,
+            )
+            return require_finite_quantile_interval(
+                bounds, design=self.variance_design,
+                method="approximate GD threshold-CDF inversion",
             )
         raise ValueError(
             "GD quantile confidence intervals are unavailable: pointwise CDF "
