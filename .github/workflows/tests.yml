@@ -38,3 +38,9 @@ jobs:
         # Keep all test files selected; distribute independent files across workers.
         # CI-only xdist overlay leaves local pytest and the uv lockfile unchanged.
         run: uv run --with pytest-xdist==3.8.0 pytest -n 2 --dist=loadfile -q -rs --durations=30
+
+      - name: Real official spaCy model first-use acceptance (temporary verification)
+        if: github.ref == 'refs/heads/feature/user-level-model-manager'
+        env:
+          TEAL_RUN_REAL_SPACY_DOWNLOAD: "1"
+        run: uv run pytest -q tests/test_model_manager_real_spacy.py
