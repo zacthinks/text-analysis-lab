@@ -400,10 +400,15 @@ def estimate(
                 "Exact finite-population left median."
                 if census else
                 "Normalized inverse-probability weighted CDF (Hajek); "
-                "median sampling variance and confidence intervals unavailable."
+                "median scalar SE unavailable; exact SRS rank CI offered when valid."
             ) + (f" Design/provenance: {note}" if note else ""),
             standard_error=0.0 if census else None,
             _cdf=cdf_frame,
+            _srs_order=(
+                tuple(float(v) for v in y)
+                if (actual_design == "srswor" or design == "srswor")
+                else None
+            ),
         )
     ht_total = float(np.sum(y / inclusion)) + float(known_data["__known_y__"].sum())
     variance_audit = (
