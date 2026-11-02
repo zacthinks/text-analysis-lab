@@ -378,9 +378,9 @@ def generalized_difference_by(
                 )
             variance_surrogate = recorded
         else:
-            if not known_keys.issubset(population_keys):
+            if known_keys & population_keys and not known_keys.issubset(population_keys):
                 raise ArtifactError(
-                    "External known= requires surrogate coverage of known keys."
+                    "External surrogate must contain either all known= keys or none."
                 )
             remainder_keys = population_keys - known_keys
             variance_surrogate = surrogate
@@ -482,7 +482,10 @@ def generalized_difference_by(
                 "estimated_total": estimated_total,
                 "variance_design": variance_design,
                 "variance_note": note,
-                "gold_is_binary": bool(np.all(np.isin(y, [0.0, 1.0]))),
+                "gold_is_binary": bool(
+            np.all(np.isin(y, [0.0, 1.0])) and
+            np.all(np.isin(known_data["__known_y__"], [0.0, 1.0]))
+        ),
             }
         )
     estimates = pd.DataFrame(rows)
@@ -734,7 +737,10 @@ def generalized_difference(
         standard_error=se_mean,
         variance_design=design,
         variance_note=variance_note,
-        gold_is_binary=bool(np.all(np.isin(y, [0.0, 1.0]))),
+        gold_is_binary=bool(
+            np.all(np.isin(y, [0.0, 1.0])) and
+            np.all(np.isin(known_data["__known_y__"], [0.0, 1.0]))
+        ),
         inference=inference,
         variance_audit=variance_audit,
         variance_corpus=variance_corpus,
