@@ -378,5 +378,8 @@ def estimate(
         inference=inference, variance_design=actual_design,
         variance_note=note, variance_audit=variance_audit,
         variance_corpus=variance_corpus, variance_total=total_variance,
-        gold_is_binary=bool(np.all(np.isin(y, [0., 1.]))),
+        gold_is_binary=bool(
+            np.all(np.isin(y, [0., 1.])) and
+            np.all(np.isin(known_data["__known_y__"], [0., 1.]))
+        ),
     )
