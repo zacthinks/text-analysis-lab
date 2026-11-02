@@ -21,7 +21,7 @@ def test_finite_known_direct_and_gd_grouped_manual_covariance(tmp_path):
     try:
         # F={0,...,4}, K={0}, U={1,2,3,4}, A={1,3}.
         frame = register(project, range(5), "text", ["x"] * 5)
-        predictor = register(project, range(5), "prediction", [9., 1., 1., 1., 1.])
+        predictor = register(project, range(5), "prediction", [np.nan, 1., 1., 1., 1.])
         group = register(project, range(5), "group", ["A", "A", "A", "B", "B"])
         known = register(project, [0], "label", [5.])
         audit = register(project, [3, 1], "label", [4., 2.])
@@ -63,7 +63,7 @@ def test_known_with_recorded_remainder_and_forbidden_overlap(tmp_path):
     try:
         target = register(project, range(8), "text", ["x"] * 8)
         u = register(project, range(2, 8), "text", ["x"] * 6)
-        q = register(project, range(8), "prediction", [9., 9.] + [1.] * 6)
+        q = register(project, range(8), "prediction", [np.nan, np.nan] + [1.] * 6)
         known_a = register(project, [0], "label", [10.])
         known_b = register(project, [1], "label", [11.])
         sampled = project.probability_sample(u, n=3, random_state=3)
