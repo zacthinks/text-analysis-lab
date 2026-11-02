@@ -42,14 +42,19 @@ def _build_parser() -> argparse.ArgumentParser:
         ("verify", "Verify a spaCy model can be resolved in this interpreter."),
         ("install", "Resolve or explicitly download an approved spaCy model."),
         ("cache-path", "Show user-level cache paths without creating them."),
+        ("remove", "Preview or confirm deletion of an exact managed cache entry."),
     ):
         action = actions.add_parser(command, help=help_text)
         action.add_argument(
             "--json", action="store_true",
             help="Print machine-readable JSON output.",
         )
-        if command in {"info", "verify", "install"}:
+        if command in {"info", "verify", "install", "remove"}:
             action.add_argument("model", help="Model resource ID, e.g. spacy:en_core_web_sm.")
+        if command == "remove":
+            action.add_argument("--version", required=True, help="Exact cached model version.")
+            action.add_argument("--digest", required=True, help="Exact model tree SHA-256.")
+            action.add_argument("--confirm", action="store_true", help="Delete the selected cache entry.")
         if command == "install":
             action.add_argument(
                 "--allow-download", action="store_true",
@@ -119,6 +124,9 @@ def _run_models(args: argparse.Namespace) -> int:
                 manager.cache_paths()["models"], args.model.removeprefix("spacy:"),
                 allow_download=False,
             )
+        elif action == "remove":
+            value = manager.remove(args.model, version=args.version,
+                                   digest=args.digest, confirm=args.confirm)
         elif action == "install":
             value = manager.install(
                 args.model, allow_download=args.allow_download,
