@@ -89,6 +89,14 @@ class GeneralizedDifferenceQuantileResult:
             raise ValueError("level must satisfy 0 < level < 1.")
         if self.standard_error == 0.0:
             return self.estimate, self.estimate
+        if self.variance_design in {"srswor", "stratified_srswor", "bernoulli"}:
+            from text_analysis_lab.analysis.quantile_intervals import cdf_quantile_interval
+            return cdf_quantile_interval(
+                self._cdf["threshold"], self._cdf["raw_cdf"],
+                self._cdf["cdf_se"], probability=self.quantile_level,
+                level=level, population_size=self.population_size,
+                point=self.estimate,
+            )
         raise ValueError(
             "GD median confidence intervals are unavailable: pointwise CDF "
             "uncertainty does not establish quantile interval coverage."
