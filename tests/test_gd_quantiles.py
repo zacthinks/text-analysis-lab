@@ -44,8 +44,10 @@ def test_gd_median_thresholdwise_matches_manual_and_mean_gd(tmp_path):
                 for i in (0, 2)
             )
             assert raw == pytest.approx((proxy_total + correction) / 4)
-        lower, upper = result.confidence_interval()
-        assert lower <= result.estimate <= upper
+        # The small audit can support pointwise CDF diagnostics without
+        # establishing two finite quantile bounds.
+        with pytest.raises(ValueError, match="unavailable"):
+            result.confidence_interval()
         assert "pointwise_lower" in result.cdf_frame(level=.95)
     finally:
         project.close()
