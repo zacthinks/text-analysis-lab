@@ -96,3 +96,39 @@ def user_cache_paths(
         wordnet_mwe_indices=cache_root / "wordnet" / "mwe_indices",
     )
     return paths.ensure() if create else paths
+
+
+def standard_hf_cache_path(*, environ: dict[str, str] | None = None) -> Path:
+    """Find the normal Hugging Face Hub cache without importing it or creating files."""
+    env = os.environ if environ is None else environ
+    override = env.get("HF_HUB_CACHE") or env.get("HUGGINGFACE_HUB_CACHE")
+    if override:
+        return Path(override).expanduser()
+    if env.get("HF_HOME"):
+        home = Path(env["HF_HOME"]).expanduser()
+    else:
+        xdg = env.get("XDG_CACHE_HOME")
+        home = (Path(xdg).expanduser() if xdg else Path.home() / ".cache") / "huggingface"
+    return home / "hub"
+
+
+def active_hf_cache_path(
+    repository: str,
+    *,
+    revision: str | None = None,
+    teal_root: str | Path | None = None,
+) -> Path:
+    """Reuse a legacy TeAL snapshot when present; otherwise use the native Hub cache.
+
+    Existing TeAL downloads remain in place. New Hub downloads honor standard
+    Hugging Face settings; this decision neither copies files nor alters env vars.
+    """
+    legacy = user_cache_paths(teal_root, create=False).huggingface_hub
+    repo_snapshots = legacy / ("models--" + repository.replace("/", "--")) / "snapshots"
+    if revision is not None:
+        cached = repo_snapshots / revision
+        if cached.is_dir() and any(cached.iterdir()):
+            return legacy
+    elif repo_snapshots.is_dir() and any(p.is_dir() for p in repo_snapshots.iterdir()):
+        return legacy
+    return standard_hf_cache_path()
