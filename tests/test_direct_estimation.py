@@ -238,3 +238,45 @@ def test_outcome_field_named_pi_does_not_collide_with_inclusion_pi(tmp_path):
         assert same.estimate == pytest.approx(result.estimate)
     finally:
         project.close()
+
+
+
+def test_hand_calculated_disproportionate_stratified_ht(tmp_path):
+    """N_A=4, n_A=2; N_B=6, n_B=2. Hand-computed mean variance 1.04."""
+    project = teal.Project.create(tmp_path / "manual_strata", name="manual")
+    try:
+        frame = _register(project, range(10), "text", ["x"] * 10)
+        strata = _register(project, range(10), "stratum", ["A"] * 4 + ["B"] * 6)
+        # Sample means 2 and 4, sample variances 2 and 8.
+        gold = _register(project, [5, 0, 4, 1], "score", [6., 1., 2., 3.])
+        pi = _register(project, [1, 4, 0, 5], "pi", [.5, 1 / 3, .5, 1 / 3])
+        result = gold.analysis.estimate(
+            pi=pi, population=frame, design="stratified_srswor", strata=strata
+        )
+        # HT total: 4 * 2 + 6 * 4 = 32.
+        assert result.estimated_total == pytest.approx(32.)
+        assert result.estimate == pytest.approx(3.2)
+        # Variance(total): 4**2*(1-2/4)*2/2 + 6**2*(1-2/6)*8/2 = 104.
+        assert result.variance_audit == pytest.approx(104 / 100)
+        assert result.standard_error == pytest.approx(np.sqrt(1.04))
+    finally:
+        project.close()
+
+
+def test_hand_calculated_unequal_bernoulli_ht_shuffled_rows(tmp_path):
+    """The observed HT total and estimated independent-Poisson variance."""
+    project = teal.Project.create(tmp_path / "manual_bernoulli", name="manual")
+    try:
+        frame = _register(project, range(5), "text", ["x"] * 5)
+        gold = _register(project, [4, 0, 2], "score", [1., 2., 3.])
+        pi = _register(project, [2, 4, 0], "pi", [.25, .8, .5])
+        result = gold.analysis.estimate(pi=pi, population=frame, design="bernoulli")
+        # HT total: 2/.5 + 3/.25 + 1/.8 = 17.25.
+        assert result.estimated_total == pytest.approx(17.25)
+        assert result.estimate == pytest.approx(3.45)
+        # Variance(total): .5*(2/.5)**2 + .75*(3/.25)**2 +
+        #                  .2*(1/.8)**2 = 116.3125.
+        assert result.variance_audit == pytest.approx(116.3125 / 25)
+        assert result.standard_error == pytest.approx(np.sqrt(4.6525))
+    finally:
+        project.close()
