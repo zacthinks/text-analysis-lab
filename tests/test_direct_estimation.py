@@ -555,3 +555,32 @@ def test_direct_quantile_design_validation_is_single_pass(tmp_path, monkeypatch)
         assert calls == [1]
     finally:
         project.close()
+
+
+def test_sampled_mean_inference_withdrawn_without_changing_standard_errors(tmp_path):
+    project = teal.Project.create(tmp_path / "withdrawn_wald", name="wald")
+    try:
+        frame = _register(project, range(8), "text", ["x"] * 8)
+        gold = _register(project, [0, 2, 4, 6], "score", [1., 3., 2., 4.])
+        pi = _register(project, [6, 4, 2, 0], "pi", [.5] * 4)
+        result = gold.analysis.estimate(
+            pi=pi, population=frame, design="srswor",
+        )
+        assert result.standard_error is not None
+        assert result.estimated_total == pytest.approx(20.)
+        for scale in ("mean", "total"):
+            with pytest.raises(ValueError, match="unavailable"):
+                result.confidence_interval(scale=scale)
+            with pytest.raises(ValueError, match="unavailable"):
+                result.p_value(scale=scale)
+        full = _register(project, range(8), "score", [0., 1., 2., 3., 4., 5., 6., 7.])
+        census = full.analysis.estimate()
+        assert census.confidence_interval() == (3.5, 3.5)
+        assert census.p_value(null=3.5) == 1.
+        assert census.p_value(null=1.) == 0.
+        iid = full.analysis.estimate(inference="superpopulation")
+        assert iid.standard_error is not None
+        with pytest.raises(ValueError, match="unavailable"):
+            iid.confidence_interval()
+    finally:
+        project.close()
