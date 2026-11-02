@@ -440,7 +440,12 @@ def generalized_difference_by(
     rows: list[dict[str, Any]] = []
     audit_groups = merged[group_field].to_numpy(dtype=object)
     pop_groups = pop[group_field].to_numpy(dtype=object)
-    group_values = list(pd.unique(group_frame[group_field]))
+    # Preserve the historical order given by the surrogate's keyed frame.
+    # Known-only groups have no surrogate rows and follow in known-label order.
+    group_values = list(pd.unique(pop[group_field]))
+    for value in pd.unique(known_groups[group_field]):
+        if value not in group_values:
+            group_values.append(value)
     if group_frame[group_field].isna().any():
         raise ArtifactError("group_field may not contain missing values.")
     for value in group_values:
@@ -618,9 +623,9 @@ def generalized_difference(
                 )
             variance_surrogate = recorded
         else:
-            if not known_keys.issubset(population_keys):
+            if known_keys & population_keys and not known_keys.issubset(population_keys):
                 raise ArtifactError(
-                    "External known= requires the surrogate to cover known keys."
+                    "External surrogate must contain either all known= keys or none."
                 )
             remainder_keys = population_keys - known_keys
             variance_surrogate = surrogate
