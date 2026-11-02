@@ -94,7 +94,19 @@ def _download_wheel(release, destination, *, progress=None, cancelled=None, time
     opener = build_opener(_HTTPSOnlyRedirect())
     digest = hashlib.sha256()
     count = 0
-    with opener.open(Request(release.url, headers={"User-Agent": "TeAL-model-manager/1"}), timeout=timeout) as response:
+    message = (
+        f"Could not download official spaCy model {release.name!r}. "
+        "Check your network connection and retry, or prefetch the model in an "
+        "online environment before using TEAL_OFFLINE=1."
+    )
+    try:
+        response = opener.open(
+            Request(release.url, headers={"User-Agent": "TeAL-model-manager/1"}),
+            timeout=timeout,
+        )
+    except OSError as exc:  # Includes HTTPError, URLError, and socket timeouts.
+        raise SpacyResourceError(message) from exc
+    with response:
         header = response.headers.get("Content-Length")
         total = int(header) if header and header.isdecimal() else None
         if total is not None and total > release.max_wheel_bytes:
@@ -103,7 +115,10 @@ def _download_wheel(release, destination, *, progress=None, cancelled=None, time
             while True:
                 if cancelled is not None and cancelled():
                     raise SpacyResourceError("Download cancelled.")
-                chunk = response.read(1024 * 1024)
+                try:
+                    chunk = response.read(1024 * 1024)
+                except OSError as exc:
+                    raise SpacyResourceError(message) from exc
                 if not chunk:
                     break
                 count += len(chunk)
