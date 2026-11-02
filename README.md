@@ -368,6 +368,35 @@ Browse analysis methods by task (methods may appear in multiple families):
 
 </details>
 
+### Quantile inference and confidence-interval availability
+
+`artifact.analysis.estimate(statistic="quantile", quantile=.25)` returns an exact
+left quantile for the recorded artifact, or a normalized inverse-probability
+weighted point estimate when `pi=` identifies a probability audit.
+`predictions.analysis.generalized_difference(gold=labels, pi=audit_pi,
+statistic="median")` estimates a finite-frame median from a frozen full-frame
+proxy and an independent probability audit. A `cdf_frame()` diagnostic exposes
+threshold-CDF estimates and pointwise design SEs; these are **not** simultaneous
+confidence bands or scalar quantile standard errors.
+
+`confidence_interval(level=.95)` returns a **finite pair** or raises
+`ValueError` explaining why a finite bound cannot be justified. In particular,
+a correct exact SRS rank interval may have open support bounds for a small audit;
+these are not replaced by observed minima/maxima. The SRS rank method is
+finite-design conservative, whereas sampled stratified/Bernoulli direct quantile
+and GD quantile CIs are **approximate** and sensitive to sample size, ties,
+weight concentration and proxy quality. A point estimate remains available even
+when its CI is not. Quantile `known=`, grouped quantile contrasts and
+superpopulation quantiles are not supported. External `design=` is a researcher
+assertion, never proof of randomization.
+
+Mean/total `confidence_interval()` remains an ordinary **Wald normal
+approximation**, not an exact design interval: severe skew, rare influential
+outcomes or extreme weights can cause poor coverage despite correct HT/GD
+variance calculations. Examine sampling design, observed influence and
+weight concentration before relying on a normal CI. Frozen surrogate and
+independent audit assumptions are required for usual GD design inference.
+
 ## Project Center
 
 The Project Center provides a visual interface to the same TeAL project used from Python. It supports project graph inspection, lineage/provenance views, artifact previews, storage inspection, and versioned memos for projects, artifacts, operations, and operators.
