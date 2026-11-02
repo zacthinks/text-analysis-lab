@@ -139,9 +139,13 @@ def _extract_pipeline(wheel, destination, release):
     with zipfile.ZipFile(wheel) as archive:
         for info in archive.infolist():
             raw = info.filename
-            parts = PurePosixPath(raw).parts
-            if (not raw or raw.startswith("/") or "\\" in raw or ":" in raw
-                or "//" in raw or any(p in ("", ".", "..") for p in raw.split("/"))):
+            # A single trailing slash is valid for a ZIP directory record.
+            normalized = raw[:-1] if info.is_dir() and raw.endswith("/") else raw
+            parts = PurePosixPath(normalized).parts
+            if (not normalized or normalized.startswith("/")
+                or "\\" in normalized or ":" in normalized
+                or "//" in normalized
+                or any(p in ("", ".", "..") for p in normalized.split("/"))):
                 raise SpacyResourceError("Unsafe path in spaCy wheel.")
             mode = (info.external_attr >> 16) & 0xffff
             if mode and stat.S_IFMT(mode) not in (0, stat.S_IFREG, stat.S_IFDIR):
