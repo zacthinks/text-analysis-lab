@@ -144,3 +144,24 @@ def test_gd_cdf_design_validation_called_once_per_result(tmp_path, monkeypatch):
         assert count[0] == 1
     finally:
         project.close()
+
+
+def test_gd_quartile_reuses_corrected_cdf_and_preserves_median(tmp_path):
+    project = teal.Project.create(tmp_path / "quartile", name="quartile")
+    try:
+        q = reg(project, range(6), "prediction", [1., 2., 3., 4., 5., 6.])
+        gold = reg(project, range(6), "label", [1., 2., 3., 4., 5., 6.])
+        pi = reg(project, range(6), "pi", [1.] * 6)
+        first = q.analysis.generalized_difference(
+            gold=gold, pi=pi, statistic="quantile", quantile=.25,
+            design="bernoulli",
+        )
+        median = q.analysis.generalized_difference(
+            gold=gold, pi=pi, statistic="median", design="bernoulli",
+        )
+        assert first.estimate == 2.
+        assert median.estimate == 3.
+        assert first.confidence_interval() == (2., 2.)
+        assert first.quantile_level == .25
+    finally:
+        project.close()
