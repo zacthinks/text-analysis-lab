@@ -10,7 +10,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from text_analysis_lab.linguistics.cache import user_cache_paths
+from text_analysis_lab.linguistics.cache import standard_hf_cache_path, user_cache_paths
 from text_analysis_lab.linguistics.model_resources import (
     ALLENNLP_SRL_BERT,
     project_model_paths,
@@ -48,30 +48,11 @@ class ResourceStatus:
     descriptor: ResourceDescriptor
     candidate_path: Path | None
     present: bool
-    verified: bool = False
-    compatible: bool = False
-    ready: bool = False
+    verified: bool | None = None
+    compatible: bool | None = None
+    ready: bool | None = None
     locations: tuple[ResourceLocation, ...] = ()
     prepared: bool = False
-
-
-def standard_hf_cache_path(*, environ: dict[str, str] | None = None) -> Path:
-    """Compute Hub cache location without importing HF, changing env or writing.
-
-    Explicit cache_dir on a Hub call takes priority over these environment settings.
-    """
-    env = os.environ if environ is None else environ
-    if env.get("HF_HUB_CACHE"):
-        return Path(env["HF_HUB_CACHE"]).expanduser()
-    if env.get("HUGGINGFACE_HUB_CACHE"):
-        return Path(env["HUGGINGFACE_HUB_CACHE"]).expanduser()
-    if env.get("HF_HOME"):
-        home = Path(env["HF_HOME"]).expanduser()
-    else:
-        xdg = env.get("XDG_CACHE_HOME")
-        base = Path(xdg).expanduser() if xdg else Path.home() / ".cache"
-        home = base / "huggingface"
-    return home / "hub"
 
 
 # Small curated set of models already used by TeAL, plus official spaCy pipelines.
@@ -163,7 +144,7 @@ class ModelManager:
                         root, descriptor, source + "_materialized"
                     ))
             elif descriptor.provider == "allennlp":
-                resource_paths = project_model_paths(paths["models"], ALLENNLP_SRL_BERT)
+                resource_paths = project_model_paths(paths["teal"], ALLENNLP_SRL_BERT)
                 if resource_paths.archive_path.is_file():
                     locations.append(ResourceLocation("srl_archive", resource_paths.archive_path))
                 from text_analysis_lab.linguistics.srl.resources import _runtime_is_ready
@@ -216,17 +197,39 @@ class ModelManager:
 
         Non-spaCy model installation remains a future provider operation.
         """
-        prefix = "spacy:"
-        if not model_key.startswith(prefix):
-            raise NotImplementedError(
-                f"Model installation is not implemented for {model_key!r}."
+        if model_key.startswith("spacy:"):
+            from text_analysis_lab.models.spacy_install import install_official_spacy
+            return install_official_spacy(
+                self.cache_paths()["models"],
+                model_key.removeprefix("spacy:"),
+                allow_download=allow_download,
+                progress=progress,
+                cancelled=cancelled,
             )
-        from text_analysis_lab.models.spacy_install import install_official_spacy
-
-        return install_official_spacy(
-            self.cache_paths()["models"],
-            model_key[len(prefix):],
-            allow_download=allow_download,
-            progress=progress,
-            cancelled=cancelled,
-        )
+        if model_key == f"allennlp:{ALLENNLP_SRL_BERT.model_id}":
+            from text_analysis_lab.linguistics.srl.resources import prepare_project_srl_runtime
+            return prepare_project_srl_runtime(
+                self.cache_paths()["teal"],
+                cache_dir=self.cache_paths()["teal"],
+                download=allow_download,
+                show_progress=progress is not None,
+            )
+        if model_key.startswith("huggingface:"):
+            descriptor = next(
+                (x for x in _BUILTINS if x.key == model_key), None
+            )
+            if descriptor is None:
+                raise KeyError(f"Unknown TeAL model resource {model_key!r}.")
+            from huggingface_hub import snapshot_download
+            from text_analysis_lab.linguistics.cache import active_hf_cache_path
+            cache = active_hf_cache_path(
+                descriptor.model_id, revision=descriptor.revision,
+                teal_root=self.cache_paths()["teal"],
+            )
+            return Path(snapshot_download(
+                repo_id=descriptor.model_id,
+                revision=descriptor.revision,
+                cache_dir=str(cache),
+                local_files_only=not allow_download,
+            ))
+        raise KeyError(f"Unknown TeAL model resource {model_key!r}.")
