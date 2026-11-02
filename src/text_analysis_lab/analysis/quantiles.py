@@ -72,6 +72,17 @@ class QuantileEstimateResult:
     variance_design: str | None
     variance_note: str
     standard_error: float | None = None
+    _cdf: pd.DataFrame | None = None
+
+    def cdf_frame(self) -> pd.DataFrame:
+        """Return weighted CDF estimates and design ratio-linearization SEs.
+
+        These are pointwise CDF diagnostics, not a simultaneous band or a
+        validated confidence interval for the finite-population quantile.
+        """
+        if self._cdf is None:
+            raise ValueError("CDF diagnostics were not retained for this result.")
+        return self._cdf.copy()
 
     @property
     def estimated_median(self) -> float:
