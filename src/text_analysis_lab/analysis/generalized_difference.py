@@ -555,7 +555,7 @@ def generalized_difference(
     on the audit design over U, not F. Superpopulation known= is not supported.
     """
     if statistic not in {"mean", "median", "quantile"}:
-        raise ValueError("statistic must be 'mean' or 'median'.")
+        raise ValueError("statistic must be 'mean', 'median', or 'quantile'.")
     if statistic in {"median", "quantile"}:
         if statistic == "quantile" and not 0.0 < quantile < 1.0:
             raise ValueError("quantile must satisfy 0 < quantile < 1.")
