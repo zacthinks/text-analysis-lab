@@ -456,3 +456,41 @@ def test_direct_weighted_cdf_ratio_bernoulli_variance(tmp_path):
         assert result.standard_error is None
     finally:
         project.close()
+
+
+def test_finite_srs_median_rank_interval_handles_ties_and_unknown_support(tmp_path):
+    from itertools import combinations
+    from text_analysis_lab.analysis.quantiles import finite_srs_quantile_interval
+
+    # Enumerate every possible SRSWOR sample: conservative coverage must
+    # hold even with mass points, and with a median not observed in the audit.
+    for population in (
+        [0., 1., 2., 3., 4., 5., 6., 7.],
+        [0., 0., 0., 0., 8., 8., 8., 8.],
+        [0., 0., 0., 3., 3., 3., 3., 9.],
+    ):
+        target = sorted(population)[3]
+        covered = 0
+        designs = list(combinations(range(8), 4))
+        for indices in designs:
+            labels = [population[i] for i in indices]
+            lo, hi = finite_srs_quantile_interval(
+                labels, population_size=8, probability=.5, level=.9,
+            )
+            covered += lo <= target <= hi
+        assert covered / len(designs) >= .9
+
+    project = teal.Project.create(tmp_path / "srs_rank", name="rank")
+    try:
+        frame = _register(project, range(8), "text", ["x"] * 8)
+        gold = _register(project, [0, 2, 4, 6], "score", [0., 2., 4., 6.])
+        pi = _register(project, [6, 4, 0, 2], "pi", [.5] * 4)
+        result = gold.analysis.estimate(
+            pi=pi, population=frame, design="srswor", statistic="median",
+        )
+        assert result.confidence_interval(level=.9) == finite_srs_quantile_interval(
+            [0., 2., 4., 6.], population_size=8, probability=.5, level=.9,
+        )
+        assert result.standard_error is None
+    finally:
+        project.close()
