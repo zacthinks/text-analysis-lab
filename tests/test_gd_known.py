@@ -135,3 +135,73 @@ def test_external_remainder_only_surrogate_and_population_are_valid(tmp_path):
             )
     finally:
         project.close()
+
+
+def test_gd_joins_allow_identical_gold_proxy_pi_and_group_field_names(tmp_path):
+    """Shuffled keys and identical user field names must never imply row alignment."""
+    project = teal.Project.create(tmp_path / "same_name_gd", name="same_name")
+    try:
+        proxy = register(project, range(6), "label", [1.] * 6)
+        gold = register(project, [4, 0, 2], "label", [4., 2., 3.])
+        # Even the pi column and the grouping column may legitimately be "label".
+        pi = register(project, [2, 4, 0], "label", [.5] * 3)
+        group = register(project, [5, 1, 3, 0, 4, 2], "label", [1, 0, 1, 0, 1, 0])
+
+        direct = generalized_difference(
+            proxy, gold=gold, pi=pi, surrogate_field="label",
+            gold_field="label", pi_field="label", design="srswor",
+        )
+        # Proxy total 6, correction 2*((2-1)+(3-1)+(4-1)) = 12.
+        assert direct.estimated_total == pytest.approx(18.)
+        assert direct.estimated_mean == pytest.approx(3.)
+        assert direct.variance_design == "srswor"
+        assert direct.standard_error_total == pytest.approx(np.sqrt(6.))
+
+        grouped = generalized_difference_by(
+            proxy, gold=gold, pi=pi, group=group, group_field="label",
+            surrogate_field="label", gold_field="label", pi_field="label",
+            design="srswor",
+        )
+        by = grouped.to_frame().set_index("group")
+        assert by.loc[0, "estimated_total"] == pytest.approx(9.)
+        assert by.loc[1, "estimated_total"] == pytest.approx(9.)
+        assert by.loc[0, "estimated_mean"] == pytest.approx(3.)
+        assert by.loc[1, "estimated_mean"] == pytest.approx(3.)
+        assert grouped.contrast(0, 1).difference == pytest.approx(0.)
+        assert grouped.contrast(0, 1).standard_error is not None
+    finally:
+        project.close()
+
+
+def test_gd_same_named_fields_with_finite_known_labels(tmp_path):
+    project = teal.Project.create(tmp_path / "same_name_known", name="same_known")
+    try:
+        proxy = register(project, range(6), "label", [1.] * 6)
+        known = register(project, [5], "label", [8.])
+        gold = register(project, [2, 0], "label", [3., 2.])
+        pi = register(project, [0, 2], "label", [.4, .4])
+        group = register(project, range(6), "label", [0, 0, 0, 1, 1, 1])
+
+        result = generalized_difference(
+            proxy, gold=gold, pi=pi, known=known,
+            surrogate_field="label", gold_field="label", pi_field="label",
+            design="srswor",
+        )
+        # Remainder q total 5; known y=8; audited residuals (1+2)/.4=7.5.
+        assert result.population_size == 6
+        assert result.estimated_total == pytest.approx(20.5)
+        assert result.variance_design == "srswor"
+        assert result.standard_error_total == pytest.approx(np.sqrt(3.75))
+        grouped = generalized_difference_by(
+            proxy, gold=gold, pi=pi, known=known,
+            group=group, group_field="label",
+            surrogate_field="label", gold_field="label", pi_field="label",
+            design="srswor",
+        )
+        by = grouped.to_frame().set_index("group")
+        assert by.loc[0, "estimated_total"] == pytest.approx(10.5)
+        assert by.loc[1, "estimated_total"] == pytest.approx(10.)
+        assert by["estimated_total"].sum() == pytest.approx(result.estimated_total)
+        assert grouped.contrast(0, 1).standard_error is not None
+    finally:
+        project.close()
