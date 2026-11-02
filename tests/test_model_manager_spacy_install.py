@@ -54,7 +54,7 @@ def test_pinned_wheel_only_extracts_data_and_publishes_exactly_once(tmp_path):
     assert first == second
     assert first.source == "managed_cache"
     assert not list(Path(first.load_target).rglob("*.py"))
-    assert [s.text for s in spacy.load(first.load_target)("A. B.").sents] == ["A.", "B."]
+    assert [s.text for s in spacy.load(first.load_target)("First sentence. Second sentence.").sents] == ["First sentence.", "Second sentence."]
     assert verify_managed_spacy(root, "en_core_web_sm", "3.8.0", first.digest) == first
 
 
