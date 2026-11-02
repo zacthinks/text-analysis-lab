@@ -63,30 +63,3 @@ def known_table(project, known, *, primary_key, label_field):
     ), all_keys
 
 
-def split_target_frame(frame_keys, known_keys, recorded_keys=None):
-    """Return eligible audit keys U and target keys F=U union K.
-
-    An original TeAL frame (when present) is authoritative: a known key
-    must never have been eligible for the recorded random audit. Otherwise,
-    an explicitly supplied frame may be U or F; in either case observed known
-    keys are excluded from the audit eligibility set. External selection
-    still requires a truthful design= assertion.
-    """
-    observed = set(frame_keys)
-    known = set(known_keys)
-    if recorded_keys is not None:
-        audit_eligible = set(recorded_keys)
-        if known & audit_eligible:
-            raise ArtifactError(
-                "known= keys overlap the recorded probability-sampling frame; "
-                "the original audit design included these units."
-            )
-        if observed - known != audit_eligible:
-            raise ArtifactError(
-                "The population/surrogate frame disagrees with the recorded "
-                "probability-audit remainder after excluding known=."
-            )
-        if not known.issubset(observed | known):
-            raise ArtifactError("Invalid known= frame.")
-        return audit_eligible, observed | known
-    return observed - known, observed | known
