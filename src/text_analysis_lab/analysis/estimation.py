@@ -212,8 +212,12 @@ def estimate(
             gold_is_binary=bool(np.all(np.isin(values, [0., 1.]))),
         )
     pi_artifact = project.get_artifact(pi)
+    # Resolve recorded provenance even when an explicit population is supplied.
+    # Otherwise a different denominator can silently corrupt the HT mean
+    # while the design-variance helper merely suppresses its SE.
+    recorded_frame_artifact = _recorded_frame(project, pi_artifact)
     frame_artifact = (
-        _recorded_frame(project, pi_artifact)
+        recorded_frame_artifact
         if population is None else project.get_artifact(population)
     )
     if frame_artifact is None:
@@ -231,6 +235,20 @@ def estimate(
         if tuple(str(x) for x in art.primary_key) != keys:
             raise ArtifactError(f"{role} and input primary-key columns differ.")
     frame = _key_only_frame(frame_artifact)
+    if population is not None and recorded_frame_artifact is not None:
+        if tuple(str(k) for k in recorded_frame_artifact.primary_key) != keys:
+            raise ArtifactError(
+                "Explicit population= has different primary keys from the "
+                "recorded sampling frame."
+            )
+        recorded_frame = _key_only_frame(recorded_frame_artifact)
+        _validate_unique(recorded_frame, keys, role="recorded sampling frame")
+        _validate_unique(frame, keys, role="explicit population")
+        if set(_key_tuples(frame, keys)) != set(_key_tuples(recorded_frame, keys)):
+            raise ArtifactError(
+                "Explicit population= contradicts the recorded sampling frame; "
+                "a full-frame estimate requires identical population keys."
+            )
     audit = _frame(artifact, field)
     probabilities = _frame(pi_artifact, pi_field)
     for role, table in (
@@ -248,11 +266,19 @@ def estimate(
         raise ArtifactError("Gold and pi must have identical audit key sets.")
     if not gold_keys.issubset(full_keys):
         raise ArtifactError("Gold contains keys outside the population frame.")
+    # The measurement field can legitimately be named "pi". Keep
+    # inclusion probabilities in a distinct internal column through the merge.
+    inclusion_column = "__teal_estimation_inclusion__"
+    while inclusion_column in audit.columns or inclusion_column in probabilities.columns:
+        inclusion_column += "_"
     merged = audit.merge(
-        probabilities, on=list(keys), validate="one_to_one", sort=False
+        probabilities.rename(columns={pi_field: inclusion_column}),
+        on=list(keys), validate="one_to_one", sort=False,
     )
     y = _numeric(merged[field], name=f"field {field!r}")
-    inclusion = _numeric(merged[pi_field], name=f"pi field {pi_field!r}")
+    inclusion = _numeric(
+        merged[inclusion_column], name=f"pi field {pi_field!r}"
+    )
     if np.any((inclusion <= 0) | (inclusion > 1)):
         raise ArtifactError("pi must satisfy 0 < pi <= 1.")
     N = len(frame)
