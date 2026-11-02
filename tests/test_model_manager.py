@@ -101,3 +101,18 @@ def test_unknown_model_is_explicit(tmp_path: Path) -> None:
     manager = ModelManager(cache_root=tmp_path, hf_cache_dir=tmp_path / "hub")
     with pytest.raises(KeyError, match="Unknown TeAL model"):
         manager.inspect("spacy:unapproved_model")
+
+
+def test_lexical_auxiliary_caches_are_discovered_without_creating_them(tmp_path: Path) -> None:
+    manager = ModelManager(cache_root=tmp_path / "teal", hf_cache_dir=tmp_path / "hub")
+    assert not manager.inspect("teal-cache:wordnet").present
+    assert not manager.inspect("teal-cache:wordnet-mwe-indices").present
+    assert not manager.inspect("teal-cache:wsd-gloss-text").present
+    assert not (tmp_path / "teal").exists()
+    auxiliary = tmp_path / "teal" / "wsd" / "gloss_text"
+    auxiliary.mkdir(parents=True)
+    (auxiliary / "cache.json").write_text("{}", encoding="utf-8")
+    status = manager.inspect("teal-cache:wsd-gloss-text")
+    assert status.present
+    assert status.candidate_path == auxiliary
+    assert status.ready is None and status.verified is None
