@@ -165,11 +165,16 @@ def test_gd_quartile_reuses_corrected_cdf_and_preserves_median(tmp_path):
         assert median.estimate == 3.
         assert first.confidence_interval() == (2., 2.)
         assert first.quantile_level == .25
+        with pytest.raises(ValueError, match="median results"):
+            _ = first.estimated_median
+        assert median.estimated_median == pytest.approx(3.)
         explicit_median = q.analysis.generalized_difference(
             gold=gold, pi=pi, statistic="quantile", quantile=.5,
             design="bernoulli",
         )
         assert explicit_median.statistic == "quantile"
+        with pytest.raises(ValueError, match="median results"):
+            _ = explicit_median.estimated_median
         assert median.statistic == "median"
     finally:
         project.close()
