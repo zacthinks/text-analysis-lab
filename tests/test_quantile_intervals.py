@@ -2,7 +2,9 @@
 import math
 import numpy as np
 import pytest
-from text_analysis_lab.analysis.quantile_intervals import cdf_quantile_interval
+from text_analysis_lab.analysis.quantile_intervals import (
+    cdf_quantile_interval, require_finite_quantile_interval,
+)
 
 
 def test_cdf_interval_does_not_confuse_mass_point_with_cdf_equality():
@@ -52,3 +54,17 @@ def test_quantile_interval_can_report_finite_limits_with_strong_information():
     )
     assert lo == 1.
     assert hi == 2.
+
+
+@pytest.mark.parametrize("bounds,missing", [
+    ((-math.inf, math.inf), "lower and upper"),
+    ((-math.inf, 2.), "lower"),
+    ((1., math.inf), "upper"),
+])
+def test_public_quantile_ci_rejects_open_support(bounds, missing):
+    with pytest.raises(ValueError, match="unavailable") as exc:
+        require_finite_quantile_interval(bounds, design="srswor", method="rank")
+    assert missing in str(exc.value)
+    assert require_finite_quantile_interval(
+        (1., 2.), design="bernoulli", method="CDF",
+    ) == (1., 2.)
