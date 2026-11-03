@@ -49,7 +49,7 @@ def bounded_isotonic_cdf(raw: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True)
 class GeneralizedDifferenceQuantileResult:
-    """Corrected-CDF median with transparent pointwise diagnostics."""
+    """Corrected-CDF left quantile with transparent pointwise diagnostics."""
 
     statistic: str
     estimate: float
