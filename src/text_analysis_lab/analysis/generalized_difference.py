@@ -25,6 +25,7 @@ import pandas as pd
 from text_analysis_lab.core.errors import ArtifactError
 
 if TYPE_CHECKING:
+    from text_analysis_lab.analysis.gd_quantiles import GeneralizedDifferenceQuantileResult
     from text_analysis_lab.core.artifact_base import BaseArtifact
 
 
@@ -525,8 +526,12 @@ def generalized_difference(
     known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
     statistic: str = "mean",
     quantile: float = 0.5,
-) -> GeneralizedDifferenceResult:
+) -> GeneralizedDifferenceResult | GeneralizedDifferenceQuantileResult:
     """Correct a full-corpus surrogate using a probability audit.
+
+    statistic="mean" returns GeneralizedDifferenceResult. statistic="median"
+    or "quantile" returns GeneralizedDifferenceQuantileResult with corrected
+    CDF diagnostics and a left-quantile point estimate.
 
     For finite population ``F`` and probability audit ``A``, this computes
 
