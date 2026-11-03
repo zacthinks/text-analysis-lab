@@ -14,8 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      HF_HUB_CACHE: ${{ runner.temp }}/teal-shared-hf
-      TEAL_CACHE_DIR: ${{ runner.temp }}/teal-shared-cache
+      HF_HUB_CACHE: ${{ github.workspace }}/teal-shared-hf
+      TEAL_CACHE_DIR: ${{ github.workspace }}/teal-shared-cache
       OPENBLAS_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       OMP_NUM_THREADS: "1"
@@ -54,8 +54,8 @@ jobs:
       - name: Install a second compatible interpreter profile
         if: inputs.cross_profile
         run: |
-          uv venv --python 3.11 "${{ runner.temp }}/teal-profile-b"
-          uv pip install --python "${{ runner.temp }}/teal-profile-b/bin/python" -e ".[all]"
+          uv venv --python 3.11 "${{ github.workspace }}/teal-profile-b"
+          uv pip install --python "${{ github.workspace }}/teal-profile-b/bin/python" -e ".[all]"
       - name: Repeat real offline provider inference in profile B
         if: inputs.cross_profile
         env:
@@ -63,4 +63,4 @@ jobs:
           HF_HUB_OFFLINE: "1"
           TRANSFORMERS_OFFLINE: "1"
           TEAL_OFFLINE: "1"
-        run: "${{ runner.temp }}/teal-profile-b/bin/python scripts/check_model_manager_real_providers.py"
+        run: "${{ github.workspace }}/teal-profile-b/bin/python scripts/check_model_manager_real_providers.py"
