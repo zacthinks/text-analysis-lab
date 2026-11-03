@@ -89,7 +89,7 @@ def _installed_result(model_key: str, native_result: Any) -> dict[str, Any]:
     if hasattr(native_result, "load_target"):
         location = native_result.load_target
         source = native_result.source
-        location_type = "import_name" if source == "installed_package" else "directory"
+        location_type = "import_name" if source == "package" else "directory"
     elif hasattr(native_result, "runtime_dir"):
         location = native_result.runtime_dir
         source = "converted_runtime"
