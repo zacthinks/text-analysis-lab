@@ -615,13 +615,21 @@ def test_public_estimator_return_type_annotations_cover_quantiles():
     )
     from text_analysis_lab.analysis.gd_quantiles import GeneralizedDifferenceQuantileResult
 
-    assert get_type_hints(estimate)["return"] == (EstimateResult | QuantileEstimateResult)
-    assert get_type_hints(ArtifactAnalysis.estimate)["return"] == (
-        EstimateResult | QuantileEstimateResult
-    )
-    assert get_type_hints(generalized_difference)["return"] == (
-        GeneralizedDifferenceResult | GeneralizedDifferenceQuantileResult
-    )
-    assert get_type_hints(ArtifactAnalysis.generalized_difference)["return"] == (
-        GeneralizedDifferenceResult | GeneralizedDifferenceQuantileResult
-    )
+    from text_analysis_lab.analysis import accessor, estimation
+    import importlib
+    gd_module = importlib.import_module("text_analysis_lab.analysis.generalized_difference")
+    names = {
+        "EstimateResult": EstimateResult,
+        "QuantileEstimateResult": QuantileEstimateResult,
+        "GeneralizedDifferenceResult": GeneralizedDifferenceResult,
+        "GeneralizedDifferenceQuantileResult": GeneralizedDifferenceQuantileResult,
+    }
+    for method, module, expected in (
+        (estimate, estimation, EstimateResult | QuantileEstimateResult),
+        (ArtifactAnalysis.estimate, accessor, EstimateResult | QuantileEstimateResult),
+        (generalized_difference, gd_module,
+         GeneralizedDifferenceResult | GeneralizedDifferenceQuantileResult),
+        (ArtifactAnalysis.generalized_difference, accessor,
+         GeneralizedDifferenceResult | GeneralizedDifferenceQuantileResult),
+    ):
+        assert get_type_hints(method, globalns={**vars(module), **names})["return"] == expected
