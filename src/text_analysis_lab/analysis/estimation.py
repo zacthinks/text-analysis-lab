@@ -23,6 +23,7 @@ from text_analysis_lab.analysis.generalized_difference import (
 from text_analysis_lab.core.errors import ArtifactError
 
 if TYPE_CHECKING:
+    from text_analysis_lab.analysis.quantiles import QuantileEstimateResult
     from text_analysis_lab.core.artifact_base import BaseArtifact
 
 
@@ -173,8 +174,11 @@ def estimate(
     design: str | None = None,
     strata: BaseArtifact | str | None = None,
     inference: str = "finite",
-) -> EstimateResult:
-    """Mean/proportion of a complete artifact or an HT probability sample.
+) -> EstimateResult | QuantileEstimateResult:
+    """Estimate a descriptive or probability-audited mean or left quantile.
+
+    statistic="mean" returns EstimateResult; statistic="median" or
+    statistic="quantile" returns QuantileEstimateResult.
 
     With no pi, compute the exact descriptive mean of recorded numeric values.
     This has no finite-population sampling uncertainty for those recorded values
