@@ -16,7 +16,6 @@ from text_analysis_lab.linguistics.model_resources import ALLENNLP_SRL_BERT
 from text_analysis_lab.linguistics.coreference.runtime import FastCorefRuntime
 from text_analysis_lab.linguistics.srl.runtime import AllenNlpSrlRuntime
 from text_analysis_lab.linguistics.wsd.wsl_reader import (
-    DEFAULT_DEBERTA_V3_BASE_CONFIG_REVISION,
     DEFAULT_WSL_READER_MODEL,
     LocalWSLReaderRuntime,
 )
@@ -35,16 +34,9 @@ def main() -> None:
     assert manager.cache_paths()["huggingface_hub"] == hf_cache
 
     if phase == "prefetch":
-        from transformers import AutoConfig
-
         manager.install(coref_key, allow_download=True)
+        # This also prefetches the WSL reader's pinned DeBERTa base config.
         manager.install(wsl_key, allow_download=True)
-        # WSL loads a separate pinned DeBERTa base config.
-        AutoConfig.from_pretrained(
-            "microsoft/deberta-v3-base",
-            revision=DEFAULT_DEBERTA_V3_BASE_CONFIG_REVISION,
-            cache_dir=str(hf_cache),
-        )
         manager.install(srl_key, allow_download=True)
         print("Prefetched real FastCoref, pinned WSL and converted SRL.")
         return

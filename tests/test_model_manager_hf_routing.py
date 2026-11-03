@@ -58,6 +58,74 @@ def test_explicit_hf_cache_override_used_by_manager_install(tmp_path, monkeypatc
     assert not root.exists()
 
 
+
+def test_wsl_manager_install_prefetches_base_config_into_selected_hub(tmp_path, monkeypatch):
+    """WSL's reader and pinned DeBERTa base config are one offline resource."""
+    import sys
+    import types
+    import pytest
+    from text_analysis_lab.models import ModelManager
+    from text_analysis_lab.linguistics.wsd.wsl_reader import (
+        DEFAULT_DEBERTA_V3_BASE_CONFIG_REVISION,
+        DEFAULT_WSL_READER_MODEL,
+        DEFAULT_WSL_READER_REVISION,
+    )
+
+    cache = tmp_path / "shared-hub"
+    snapshot = cache / "models--Babelscape--wsl-reader-deberta-v3-base" / "snapshots" / DEFAULT_WSL_READER_REVISION
+    calls = []
+
+    def fake_snapshot_download(**kwargs):
+        calls.append(("reader", kwargs))
+        return str(snapshot)
+
+    def fake_hf_hub_download(**kwargs):
+        calls.append(("base_config", kwargs))
+        return str(cache / "base-config.json")
+
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub",
+        types.SimpleNamespace(
+            snapshot_download=fake_snapshot_download,
+            hf_hub_download=fake_hf_hub_download,
+        ),
+    )
+    manager = ModelManager(cache_root=tmp_path / "teal", hf_cache_dir=cache)
+    key = "huggingface:" + DEFAULT_WSL_READER_MODEL
+    for allow_download in (False, True):
+        calls.clear()
+        assert manager.install(key, allow_download=allow_download) == snapshot
+        assert calls == [
+            ("reader", {
+                "repo_id": DEFAULT_WSL_READER_MODEL,
+                "revision": DEFAULT_WSL_READER_REVISION,
+                "cache_dir": str(cache),
+                "local_files_only": not allow_download,
+            }),
+            ("base_config", {
+                "repo_id": "microsoft/deberta-v3-base",
+                "filename": "config.json",
+                "revision": DEFAULT_DEBERTA_V3_BASE_CONFIG_REVISION,
+                "cache_dir": str(cache),
+                "local_files_only": not allow_download,
+            }),
+        ]
+
+    def unavailable_base_config(**kwargs):
+        raise FileNotFoundError("Pinned DeBERTa base config missing")
+
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub",
+        types.SimpleNamespace(
+            snapshot_download=fake_snapshot_download,
+            hf_hub_download=unavailable_base_config,
+        ),
+    )
+    with pytest.raises(FileNotFoundError, match="base config missing"):
+        manager.install(key, allow_download=False)
+    assert not (tmp_path / "teal").exists()
+
+
 def test_prefetched_coref_snapshot_is_used_without_second_materialized_copy(tmp_path, monkeypatch):
     from text_analysis_lab.linguistics.coreference import runtime
     import sys

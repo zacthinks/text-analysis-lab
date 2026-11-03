@@ -242,12 +242,27 @@ class ModelManager:
                 teal_root=self.cache_paths()["teal"],
                 cache_dir=self._hf_cache_dir,
             )
-            return Path(snapshot_download(
+            snapshot = Path(snapshot_download(
                 repo_id=descriptor.model_id,
                 revision=descriptor.revision,
                 cache_dir=str(cache),
                 local_files_only=not allow_download,
             ))
+            if descriptor.model_id == "Babelscape/wsl-reader-deberta-v3-base":
+                # The reader also loads a pinned DeBERTa base configuration.
+                # Prefetch that native Hub file into the same shared cache.
+                from huggingface_hub import hf_hub_download
+                from text_analysis_lab.linguistics.wsd.wsl_reader import (
+                    DEFAULT_DEBERTA_V3_BASE_CONFIG_REVISION,
+                )
+                hf_hub_download(
+                    repo_id="microsoft/deberta-v3-base",
+                    filename="config.json",
+                    revision=DEFAULT_DEBERTA_V3_BASE_CONFIG_REVISION,
+                    cache_dir=str(cache),
+                    local_files_only=not allow_download,
+                )
+            return snapshot
         raise KeyError(f"Unknown TeAL model resource {model_key!r}.")
 
 
