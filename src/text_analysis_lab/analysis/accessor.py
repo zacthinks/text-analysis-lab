@@ -9,6 +9,9 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from text_analysis_lab.analysis.classification import ClassificationEvaluation
+    from text_analysis_lab.analysis.estimation import EstimateResult
+    from text_analysis_lab.analysis.quantiles import QuantileEstimateResult
+    from text_analysis_lab.analysis.gd_quantiles import GeneralizedDifferenceQuantileResult
     from text_analysis_lab.analysis.generalized_difference import (
         GeneralizedDifferenceGroupedResult,
         GeneralizedDifferenceResult,
@@ -293,8 +296,12 @@ class ArtifactAnalysis:
         design: str | None = None,
         strata: BaseArtifact | str | None = None,
         inference: str = "finite",
-    ):
-        """Estimate a descriptive mean or a probability-audited mean."""
+    ) -> EstimateResult | QuantileEstimateResult:
+        """Estimate a descriptive or probability-audited mean/left quantile.
+
+        Returns EstimateResult for statistic="mean" or QuantileEstimateResult
+        for statistic="median"/"quantile". Quantile results support cdf_frame().
+        """
         from text_analysis_lab.analysis.estimation import estimate
         return estimate(
             self._artifact, pi=pi, population=population,
@@ -317,7 +324,12 @@ class ArtifactAnalysis:
         known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
         statistic: str = "mean",
         quantile: float = 0.5,
-    ) -> GeneralizedDifferenceResult:
+    ) -> GeneralizedDifferenceResult | GeneralizedDifferenceQuantileResult:
+        """Return GD mean/total or corrected-CDF left-quantile results.
+
+        statistic="mean" returns GeneralizedDifferenceResult; "median" and
+        "quantile" return GeneralizedDifferenceQuantileResult with cdf_frame().
+        """
         from text_analysis_lab.analysis.generalized_difference import (
             generalized_difference,
         )
