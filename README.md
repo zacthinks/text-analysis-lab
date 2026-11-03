@@ -407,6 +407,84 @@ even if the exact SRS interval exists. Noncensus GD quantile CDF pointwise
 SEs are diagnostics, not quantile CI guarantees. Quantile `known=`, grouped
 quantile contrasts and superpopulation quantiles are not supported.
 
+## Shared model cache
+
+TeAL stores reusable model data in a user-level cache rather than copying it into
+each research project. For supported official spaCy models such as
+`en_core_web_sm`, ordinary first use looks for a verified compatible cached
+pipeline, then an installed compatible spaCy package, and finally downloads
+official model data into the shared cache if needed. No Python package is
+installed or upgraded by this process.
+
+```python
+from text_analysis_lab.translators import SpacyTranslator
+
+tokens = SpacyTranslator(model="en_core_web_sm").translate("An example sentence.")
+# For offline or controlled environments:
+tokens = SpacyTranslator(
+    model="en_core_web_sm", download_model=False
+).translate("An example sentence.")
+```
+
+Set `TEAL_OFFLINE=1` to disable automatic spaCy and FastCoref downloads.
+`TEAL_CACHE_DIR` selects TeAL's shared resource cache. For a nondefault
+Hugging Face cache shared by Desktop and ordinary inference, configure
+`HF_HUB_CACHE` in the selected interpreter/profile before preparing and
+using the models. `ModelManager(hf_cache_dir=...)` selects that same cache
+explicitly for management only; it does not change interpreter settings.
+Explicit spaCy paths continue to work. Frozen spaCy operators require their
+exact recorded model identity; no silent download or substitution occurs.
+
+The standalone model manager works without creating a project:
+
+```bash
+teal models list
+teal models info spacy:en_core_web_sm --json
+teal models cache-path
+teal models install spacy:en_core_web_sm --allow-download
+```
+
+The manager also supports known Hugging Face snapshots and AllenNLP SRL
+resources through upstream/TeAL preparation functions, plus explicit
+preview/confirmation for applicable cache removal. Only TeAL-owned data is
+removed; it does not uninstall Python packages or externally managed
+WordNet lexicons. `teal models list --json` and `info --json` expose a
+canonical `key`. `install --json` returns `key`, `provider`,
+`location`, `location_type` (a filesystem `directory` versus an `import_name`),
+`source`, and provider-native `details`. JSON errors return exit code 2
+and `{"ok": false, "key": "...", "error": {"category": "...",
+"message": "..."}}` on stdout, with stable categories such as
+`not_ready`, `missing_resource`, `unknown_resource`,
+`invalid_request`, and `unsupported_operation`. Non-JSON errors remain
+concise stderr text. `verify --json` reports
+`ready` as `true`, `false`, or `null` (not tested); command exit 0
+does not imply scientific-runtime readiness when `ready` is `null`. SRL
+`prepared=true` means converted files and metadata are present, not that
+the model weights were loaded successfully.
+`--version` and `--digest` select a managed spaCy deletion;
+`--revision` selects an exact Hugging Face revision; TeAL-owned auxiliary
+cache deletion requires only the exact resource key and `--confirm`.
+Python `ModelManager.install(progress=..., cancelled=...)` supports
+callbacks for spaCy only; other providers reject callbacks explicitly rather
+than silently ignoring them. Installing a missing HF/SRL resource requires
+the optional provider dependencies and an allowed download; offline failures
+are reported without installing Python packages or modifying projects.
+Resource use and redistribution remain subject to upstream licenses.
+
+### Optional real-provider acceptance
+
+Real FastCoref, WSL reader, and AllenNLP SRL loading requires substantial
+downloads and CPU/RAM time, so it is **not part of regular pytest or push/PR CI**.
+Run the separate GitHub Actions workflow **Model Manager real-provider acceptance
+(manual)** with *Run workflow* on the model-manager branch when needed.
+Select `cross_profile` only if the second compatible environment is required.
+
+This workflow first downloads real model data via `ModelManager`, then uses the
+same shared cache with network access disabled to exercise inference and the
+existing real TeAL translator integration test. The optional second profile
+repeats provider inference without redownloading the models. A passing ordinary
+test suite alone is not evidence that these expensive provider checks passed.
+
 ## Project Center
 
 The Project Center provides a visual interface to the same TeAL project used from Python. It supports project graph inspection, lineage/provenance views, artifact previews, storage inspection, and versioned memos for projects, artifacts, operations, and operators.

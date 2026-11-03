@@ -96,3 +96,57 @@ def user_cache_paths(
         wordnet_mwe_indices=cache_root / "wordnet" / "mwe_indices",
     )
     return paths.ensure() if create else paths
+
+
+def standard_hf_cache_path(*, environ: dict[str, str] | None = None) -> Path:
+    """Find the normal Hugging Face Hub cache without importing it or creating files."""
+    env = os.environ if environ is None else environ
+    override = env.get("HF_HUB_CACHE") or env.get("HUGGINGFACE_HUB_CACHE")
+    if override:
+        return Path(override).expanduser()
+    if env.get("HF_HOME"):
+        home = Path(env["HF_HOME"]).expanduser()
+    else:
+        xdg = env.get("XDG_CACHE_HOME")
+        home = (Path(xdg).expanduser() if xdg else Path.home() / ".cache") / "huggingface"
+    return home / "hub"
+
+
+def active_hf_cache_path(
+    repository: str,
+    *,
+    revision: str | None = None,
+    teal_root: str | Path | None = None,
+    cache_dir: str | Path | None = None,
+) -> Path:
+    """Explicit directory / native environment selection > complete legacy > native default.
+
+    Returning the cache root never migrates or modifies any cached files.
+    Explicit cache_dir is also what native Hub APIs already accept per call.
+    """
+    if cache_dir is not None:
+        return Path(cache_dir).expanduser()
+    # A profile-level native Hub override is an explicit cache selection;
+    # it must not be overridden by an older, otherwise valid TeAL snapshot.
+    if any(os.environ.get(name) for name in (
+        "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_HOME",
+    )):
+        return standard_hf_cache_path()
+    legacy = user_cache_paths(teal_root, create=False).huggingface_hub
+    snapshots = legacy / ("models--" + repository.replace("/", "--")) / "snapshots"
+    if snapshots.is_dir() and not snapshots.is_symlink():
+        candidates = (snapshots / revision,) if revision else tuple(snapshots.iterdir())
+        for candidate in candidates:
+            if not candidate.is_dir() or candidate.is_symlink():
+                continue
+            # A nonempty snapshot isn't necessarily usable; avoid shadowing the
+            # native cache with an interrupted legacy download.
+            if not (candidate / "config.json").is_file():
+                continue
+            weights = (
+                "model.safetensors", "model.safetensors.index.json",
+                "pytorch_model.bin", "pytorch_model.bin.index.json",
+            )
+            if any((candidate / name).is_file() for name in weights):
+                return legacy
+    return standard_hf_cache_path()
