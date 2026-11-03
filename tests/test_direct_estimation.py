@@ -618,7 +618,9 @@ def test_public_estimator_return_type_annotations_cover_quantiles():
     from text_analysis_lab.analysis import accessor, estimation
     import importlib
     gd_module = importlib.import_module("text_analysis_lab.analysis.generalized_difference")
+    from text_analysis_lab.core.artifact_base import BaseArtifact
     names = {
+        "BaseArtifact": BaseArtifact,
         "EstimateResult": EstimateResult,
         "QuantileEstimateResult": QuantileEstimateResult,
         "GeneralizedDifferenceResult": GeneralizedDifferenceResult,
