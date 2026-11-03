@@ -431,6 +431,20 @@ the optional provider dependencies and an allowed download; offline failures
 are reported without installing Python packages or modifying projects.
 Resource use and redistribution remain subject to upstream licenses.
 
+### Optional real-provider acceptance
+
+Real FastCoref, WSL reader, and AllenNLP SRL loading requires substantial
+downloads and CPU/RAM time, so it is **not part of regular pytest or push/PR CI**.
+Run the separate GitHub Actions workflow **Model Manager real-provider acceptance
+(manual)** with *Run workflow* on the model-manager branch when needed.
+Select `cross_profile` only if the second compatible environment is required.
+
+This workflow first downloads real model data via `ModelManager`, then uses the
+same shared cache with network access disabled to exercise inference and the
+existing real TeAL translator integration test. The optional second profile
+repeats provider inference without redownloading the models. A passing ordinary
+test suite alone is not evidence that these expensive provider checks passed.
+
 ## Project Center
 
 The Project Center provides a visual interface to the same TeAL project used from Python. It supports project graph inspection, lineage/provenance views, artifact previews, storage inspection, and versioned memos for projects, artifacts, operations, and operators.
