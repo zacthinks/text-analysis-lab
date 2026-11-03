@@ -1,0 +1,66 @@
+name: Model Manager real-provider acceptance (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      cross_profile:
+        description: "Also validate reuse in a second compatible Python environment"
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  real-providers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HF_HUB_CACHE: ${{ github.workspace }}/teal-shared-hf
+      TEAL_CACHE_DIR: ${{ github.workspace }}/teal-shared-cache
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      TOKENIZERS_PARALLELISM: "false"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      - name: Install Python and optional NLP dependencies
+        run: |
+          uv python install 3.11
+          uv sync --python 3.11 --all-extras
+      - name: Prefetch real model data through ModelManager
+        env:
+          TEAL_REAL_PROVIDER_PHASE: prefetch
+        run: uv run python scripts/check_model_manager_real_providers.py
+      - name: Verify actual provider inference without network
+        env:
+          TEAL_REAL_PROVIDER_PHASE: offline
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+          TEAL_OFFLINE: "1"
+        run: uv run python scripts/check_model_manager_real_providers.py
+      - name: Prepare WordNet for the existing TeAL real integration test
+        run: uv run python -c "import wn; wn.download('oewn:2025+')"
+      - name: Run real TeAL translator integration (opt-in test only)
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+          TEAL_OFFLINE: "1"
+          TEAL_RUN_LINGUISTICS_EXTERNAL: "1"
+        run: >
+          uv run pytest -q
+          tests/test_unit10_linguistics_external.py::test_real_unit10_models_on_one_sentence
+      - name: Install a second compatible interpreter profile
+        if: inputs.cross_profile
+        run: |
+          uv venv --python 3.11 "${{ github.workspace }}/teal-profile-b"
+          uv pip install --python "${{ github.workspace }}/teal-profile-b/bin/python" -e ".[all]"
+      - name: Repeat real offline provider inference in profile B
+        if: inputs.cross_profile
+        env:
+          TEAL_REAL_PROVIDER_PHASE: offline
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+          TEAL_OFFLINE: "1"
+        run: "${{ github.workspace }}/teal-profile-b/bin/python scripts/check_model_manager_real_providers.py"
