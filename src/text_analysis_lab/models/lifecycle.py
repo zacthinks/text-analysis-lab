@@ -35,10 +35,13 @@ def verify_resource(manager, key):
         paths = project_model_paths(manager.cache_paths()["teal"], ALLENNLP_SRL_BERT)
         prepared = _runtime_is_ready(paths)
         return replace(
-            status, prepared=prepared, verified=prepared,
-            compatible=prepared, ready=prepared,
-            detail=("Converted SRL data matches the runtime format." if prepared
-                    else "SRL runtime files absent or format-incompatible; prepare first."),
+            status, prepared=prepared, verified=None, compatible=None,
+            ready=None if prepared else False,
+            detail=("Converted SRL files and format metadata are present, "
+                    "but weights, dependencies and actual runtime loading "
+                    "have not been validated." if prepared
+                    else "SRL converted files are missing or have an incompatible "
+                    "format; prepare the resource before use."),
         )
     if desc.provider == "huggingface":
         from text_analysis_lab.linguistics.cache import active_hf_cache_path

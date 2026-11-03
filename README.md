@@ -410,12 +410,26 @@ preview/confirmation for applicable cache removal. Only TeAL-owned data is
 removed; it does not uninstall Python packages or externally managed
 WordNet lexicons. `teal models list --json` and `info --json` expose a
 canonical `key`. `install --json` returns `key`, `provider`,
-`location`, and provider-native `details`. `verify --json` reports
+`location`, `location_type` (a filesystem `directory` versus an `import_name`),
+`source`, and provider-native `details`. JSON errors return exit code 2
+and `{"ok": false, "key": "...", "error": {"category": "...",
+"message": "..."}}` on stdout, with stable categories such as
+`not_ready`, `missing_resource`, `unknown_resource`,
+`invalid_request`, and `unsupported_operation`. Non-JSON errors remain
+concise stderr text. `verify --json` reports
 `ready` as `true`, `false`, or `null` (not tested); command exit 0
-does not imply scientific-runtime readiness when `ready` is `null`.
+does not imply scientific-runtime readiness when `ready` is `null`. SRL
+`prepared=true` means converted files and metadata are present, not that
+the model weights were loaded successfully.
 `--version` and `--digest` select a managed spaCy deletion;
-`--revision` selects an exact Hugging Face revision. Resource use and
-redistribution remain subject to upstream licenses.
+`--revision` selects an exact Hugging Face revision; TeAL-owned auxiliary
+cache deletion requires only the exact resource key and `--confirm`.
+Python `ModelManager.install(progress=..., cancelled=...)` supports
+callbacks for spaCy only; other providers reject callbacks explicitly rather
+than silently ignoring them. Installing a missing HF/SRL resource requires
+the optional provider dependencies and an allowed download; offline failures
+are reported without installing Python packages or modifying projects.
+Resource use and redistribution remain subject to upstream licenses.
 
 ## Project Center
 

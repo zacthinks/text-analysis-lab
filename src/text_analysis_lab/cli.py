@@ -85,16 +85,25 @@ def _jsonable(value: Any) -> Any:
 
 def _installed_result(model_key: str, native_result: Any) -> dict[str, Any]:
     """One CLI success contract; preserve provider-specific details internally."""
+    provider = model_key.partition(":")[0]
     if hasattr(native_result, "load_target"):
         location = native_result.load_target
+        source = native_result.source
+        location_type = "import_name" if source == "installed_package" else "directory"
     elif hasattr(native_result, "runtime_dir"):
         location = native_result.runtime_dir
+        source = "converted_runtime"
+        location_type = "directory"
     else:
         location = native_result
+        source = "hub_snapshot"
+        location_type = "directory"
     return {
         "key": model_key,
-        "provider": model_key.partition(":")[0],
+        "provider": provider,
         "location": str(location),
+        "location_type": location_type,
+        "source": source,
         "details": native_result,
     }
 
@@ -126,6 +135,19 @@ def _show(value: Any, *, json_output: bool) -> None:
     print(normalized)
 
 
+def _model_error(args: argparse.Namespace, category: str, message: str) -> int:
+    """Stable JSON failure for Desktop, concise stderr for terminal use."""
+    if args.json:
+        print(json.dumps({
+            "ok": False,
+            "key": getattr(args, "model", None),
+            "error": {"category": category, "message": message},
+        }, ensure_ascii=False, sort_keys=True))
+    else:
+        print(f"teal models: {message}", file=sys.stderr)
+    return 2
+
+
 def _run_models(args: argparse.Namespace) -> int:
     from text_analysis_lab.models import ModelManager
     from text_analysis_lab.models.spacy import SpacyResourceError
@@ -142,7 +164,10 @@ def _run_models(args: argparse.Namespace) -> int:
         elif action == "verify":
             value = manager.verify(args.model)
             if value.ready is False:
-                raise ValueError(value.detail or "Model data missing or incompatible.")
+                return _model_error(
+                    args, "not_ready",
+                    value.detail or "Model data missing or incompatible.",
+                )
         elif action == "remove":
             value = manager.remove(args.model, version=args.version,
                                    digest=args.digest, revision=args.revision,
@@ -154,9 +179,24 @@ def _run_models(args: argparse.Namespace) -> int:
             )
         else:
             raise ValueError(f"Unknown models command: {action}")
-    except (SpacyResourceError, KeyError, NotImplementedError, ValueError, OSError) as exc:
-        print(f"teal models: {exc}", file=sys.stderr)
-        return 2
+    except (SpacyResourceError, KeyError, NotImplementedError, ValueError,
+            OSError, ImportError, RuntimeError) as exc:
+        if isinstance(exc, KeyError):
+            category = "unknown_resource"
+            message = str(exc.args[0]) if exc.args else str(exc)
+        elif isinstance(exc, NotImplementedError):
+            category, message = "unsupported_operation", str(exc)
+        elif isinstance(exc, FileNotFoundError):
+            category, message = "missing_resource", str(exc)
+        elif isinstance(exc, ImportError):
+            category, message = "missing_dependency", str(exc)
+        elif isinstance(exc, SpacyResourceError):
+            category, message = "resource_unavailable", str(exc)
+        elif isinstance(exc, ValueError):
+            category, message = "invalid_request", str(exc)
+        else:
+            category, message = "provider_error", str(exc)
+        return _model_error(args, category, message)
     # Exit 0 means this management command completed, not that ready=True:
     # verify can report ready=None (untested model-runtime compatibility).
     _show(value, json_output=args.json)

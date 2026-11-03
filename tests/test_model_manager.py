@@ -80,6 +80,12 @@ def test_srl_archive_and_converted_runtime_are_distinct(tmp_path: Path) -> None:
     assert srl.prepared
     assert [loc.source for loc in srl.locations] == ["srl_archive", "srl_runtime"]
     assert srl.verified is None and srl.ready is None
+    verified = manager.verify(f"allennlp:{ALLENNLP_SRL_BERT.model_id}")
+    assert verified.prepared is True
+    assert verified.verified is None
+    assert verified.compatible is None
+    assert verified.ready is None
+    assert "not been validated" in verified.detail
 
 
 def test_spacy_package_presence_does_not_imply_ready(tmp_path: Path, monkeypatch) -> None:

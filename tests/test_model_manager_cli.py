@@ -141,6 +141,13 @@ def test_cli_install_provider_success_envelopes(tmp_path, capsys, monkeypatch):
         assert payload["key"] == key
         assert payload["provider"] == key.split(":", 1)[0]
         assert isinstance(payload["location"], str) and payload["location"]
+        assert payload["location_type"] in {"directory", "import_name"}
+        assert payload["source"]
+        if key.startswith("spacy:"):
+            assert payload["location_type"] == "import_name"
+            assert payload["source"] == "installed_package"
+        else:
+            assert payload["location_type"] == "directory"
         assert payload["details"]
     assert not (tmp_path / "teal").exists()
 
@@ -160,3 +167,53 @@ def test_verify_unknown_hf_is_not_claimed_ready_by_exit_zero(tmp_path, capsys):
     assert data["present"] is True
     assert data["ready"] is None and data["verified"] is None
     assert data["key"] == "huggingface:biu-nlp/f-coref"
+
+
+
+def test_models_json_failures_are_structured_for_desktop(tmp_path, capsys, monkeypatch):
+    from text_analysis_lab.models import ModelManager
+    root = tmp_path / "teal"
+    hub = tmp_path / "hub"
+
+    cases = (
+        (["info", "spacy:unknown", "--json"], "unknown_resource"),
+        (["remove", "huggingface:biu-nlp/f-coref", "--confirm", "--json"],
+         "invalid_request"),
+        (["remove", "teal-cache:wordnet", "--json"], "unsupported_operation"),
+        (["verify", "huggingface:biu-nlp/f-coref", "--json"], "not_ready"),
+    )
+    for command, category in cases:
+        result = main([
+            "models", "--cache-root", str(root), "--hf-cache-dir", str(hub),
+            *command,
+        ])
+        out = capsys.readouterr()
+        assert result == 2
+        assert out.err == ""
+        payload = json.loads(out.out)
+        assert payload["ok"] is False
+        assert payload["error"]["category"] == category
+        assert isinstance(payload["error"]["message"], str)
+        assert payload["error"]["message"]
+        assert "Traceback" not in out.out
+    assert not root.exists()
+    assert not hub.exists()
+
+
+def test_models_json_offline_provider_error_is_machine_readable(tmp_path, capsys, monkeypatch):
+    from text_analysis_lab.models import ModelManager
+
+    def fail_install(self, model_key, *, allow_download=False, **kwargs):
+        raise FileNotFoundError("Prefetch is unavailable in offline mode")
+
+    monkeypatch.setattr(ModelManager, "install", fail_install)
+    result = main([
+        "models", "--cache-root", str(tmp_path / "teal"),
+        "install", "huggingface:biu-nlp/f-coref", "--json",
+    ])
+    out = capsys.readouterr()
+    assert result == 2 and out.err == ""
+    value = json.loads(out.out)
+    assert value["key"] == "huggingface:biu-nlp/f-coref"
+    assert value["error"]["category"] == "missing_resource"
+    assert "offline" in value["error"]["message"]
