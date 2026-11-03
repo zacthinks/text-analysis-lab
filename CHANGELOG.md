@@ -16,6 +16,33 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
+## [0.11.0] - 2026-11-03
+
+### Added
+
+- `Project.probability_sample()` infers and records simple random, stratified and Bernoulli sampling designs with keyed samples, remainders and inclusion probabilities (PR #60).
+- Design-based generalized-difference inference for supported probability audits, subgroup contrasts and opt-in IID superpopulation variance diagnostics (PR #61).
+- Direct estimation, finite certainty-known labels, median/left-quantile estimates, corrected GD quantiles and conservative direct SRSWOR quantile rank intervals (PR #62).
+- Project-independent user-level model manager for supported spaCy pipelines, Hugging Face FastCoref/LingMess/WSL, AllenNLP SRL and TeAL-owned auxiliary resources, with Python and `teal models` CLI/JSON operations (PR #63).
+- Automatic first-use acquisition of supported official spaCy pipeline data in a reusable shared cache without installing Python packages; frozen operators retain strict resource identity (PR #63).
+
+### Changed
+
+- Expanded probability-audit design validation and explicitly separated supported point estimates and variance diagnostics from inference intervals (PRs #61–#62).
+- Automatic sampled-data Wald confidence intervals and normal p-values for means, totals and grouped contrasts are unavailable because their coverage was not sufficiently reliable in the tested settings, including opt-in superpopulation means. Point estimates and design standard errors remain available (PR #62).
+- Hugging Face model prefetch and ordinary TeAL inference share native/provider-aware model caches; WSL preparation includes its pinned DeBERTa base configuration (PR #63).
+
+### Fixed
+
+- Consistency checks for externally asserted probability designs and keyed sample/probability alignment; conservative handling of unsupported confidence intervals (PRs #60–#62).
+- Native Hugging Face revision-specific removal and shared-cache reuse, honest model readiness semantics and spaCy model-manager CLI package classification (PR #63).
+
+### Notes
+
+- Noncensus generalized-difference quantile confidence intervals and sampled stratified/Bernoulli direct quantile confidence intervals are intentionally unavailable (PR #62).
+- Expensive real-provider inference and cross-profile cache acceptance run only through an opt-in manual workflow, not regular push/PR CI (PR #63).
+- Deleting a shared model resource may disrupt projects that still need it; external Python packages and WordNet lexicons are not removed by the manager.
+
 ## [0.10.0] - 2026-10-30
 
 ### Added
