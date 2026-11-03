@@ -602,3 +602,26 @@ def test_sampled_mean_inference_withdrawn_without_changing_standard_errors(tmp_p
             iid.confidence_interval()
     finally:
         project.close()
+
+
+def test_public_estimator_return_type_annotations_cover_quantiles():
+    """Public callables advertise both mean and quantile result classes."""
+    from typing import get_type_hints
+    from text_analysis_lab.analysis.accessor import ArtifactAnalysis
+    from text_analysis_lab.analysis.estimation import EstimateResult, estimate
+    from text_analysis_lab.analysis.quantiles import QuantileEstimateResult
+    from text_analysis_lab.analysis.generalized_difference import (
+        GeneralizedDifferenceResult, generalized_difference,
+    )
+    from text_analysis_lab.analysis.gd_quantiles import GeneralizedDifferenceQuantileResult
+
+    assert get_type_hints(estimate)["return"] == (EstimateResult | QuantileEstimateResult)
+    assert get_type_hints(ArtifactAnalysis.estimate)["return"] == (
+        EstimateResult | QuantileEstimateResult
+    )
+    assert get_type_hints(generalized_difference)["return"] == (
+        GeneralizedDifferenceResult | GeneralizedDifferenceQuantileResult
+    )
+    assert get_type_hints(ArtifactAnalysis.generalized_difference)["return"] == (
+        GeneralizedDifferenceResult | GeneralizedDifferenceQuantileResult
+    )
