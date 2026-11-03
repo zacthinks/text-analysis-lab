@@ -17,7 +17,6 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from statistics import NormalDist
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -26,6 +25,7 @@ import pandas as pd
 from text_analysis_lab.core.errors import ArtifactError
 
 if TYPE_CHECKING:
+    from text_analysis_lab.analysis.gd_quantiles import GeneralizedDifferenceQuantileResult
     from text_analysis_lab.core.artifact_base import BaseArtifact
 
 
@@ -53,6 +53,7 @@ class GeneralizedDifferenceResult:
     variance_audit: float | None = None
     variance_corpus: float | None = None
     variance_total: float | None = None
+    exact_census: bool = False
 
     @property
     def estimated_prevalence(self) -> float:
@@ -64,56 +65,39 @@ class GeneralizedDifferenceResult:
         return self.estimated_mean
 
     def confidence_interval(
-        self,
-        *,
-        level: float = 0.95,
-        scale: str = "mean",
+        self, *, level: float = 0.95, scale: str = "mean"
     ) -> tuple[float, float]:
-        """Return a normal-approximation design interval for mean or total.
-
-        The interval is intentionally not clipped to the support of the outcome;
-        generalized-difference estimators and their normal intervals need not be
-        bounded by 0 and 1 even when the gold variable is binary.
-        """
-        level = float(level)
-        if not (0.0 < level < 1.0):
+        """Only exact finite-census intervals; no automatic sampled Wald CI."""
+        if not 0.0 < float(level) < 1.0:
             raise ValueError("level must satisfy 0 < level < 1.")
         if scale == "mean":
-            estimate = self.estimated_mean
-            se = self.standard_error
+            value = self.estimated_mean
         elif scale == "total":
-            estimate = self.estimated_total
-            se = self.standard_error_total
+            value = self.estimated_total
         else:
             raise ValueError("scale must be 'mean' or 'total'.")
-        if se is None:
-            note = self.variance_note or "design variance is unavailable."
-            raise ValueError(f"Cannot form a confidence interval because {note}")
-        z = NormalDist().inv_cdf(0.5 + level / 2.0)
-        return (float(estimate - z * se), float(estimate + z * se))
+        if not self.exact_census or self.inference != "finite":
+            raise ValueError(
+                "Confidence interval unavailable for sampled or superpopulation "
+                "GD means/totals: automatic Wald intervals are not supported; "
+                "design standard errors remain available."
+            )
+        return float(value), float(value)
 
     def p_value(self, *, null: float = 0.0, scale: str = "mean") -> float:
-        """Return a two-sided normal-approximation design p-value.
-
-        In finite mode this uses design uncertainty conditional on the
-        realized corpus. In superpopulation mode it uses the combined corpus
-        and audit variance, assuming IID corpus generation and frozen predictions.
-        """
+        """Only deterministic finite-census equality is available."""
         if scale == "mean":
-            estimate = self.estimated_mean
-            se = self.standard_error
+            value = self.estimated_mean
         elif scale == "total":
-            estimate = self.estimated_total
-            se = self.standard_error_total
+            value = self.estimated_total
         else:
             raise ValueError("scale must be 'mean' or 'total'.")
-        if se is None:
-            note = self.variance_note or "design variance is unavailable."
-            raise ValueError(f"Cannot form a p-value because {note}")
-        if se == 0.0:
-            return 1.0 if float(estimate) == float(null) else 0.0
-        z = abs((float(estimate) - float(null)) / float(se))
-        return float(2.0 * (1.0 - NormalDist().cdf(z)))
+        if not self.exact_census or self.inference != "finite":
+            raise ValueError(
+                "P-value unavailable for sampled or superpopulation GD "
+                "means/totals: automatic normal/Wald tests are not supported."
+            )
+        return 1.0 if float(value) == float(null) else 0.0
 
     def to_frame(self) -> pd.DataFrame:
         """Return a tidy one-row summary suitable for notebook display."""
@@ -154,28 +138,25 @@ class GeneralizedDifferenceContrastResult:
     standard_error: float | None
     variance_design: str | None
     variance_note: str | None = None
+    exact_census: bool = False
 
     def confidence_interval(self, *, level: float = 0.95) -> tuple[float, float]:
-        level = float(level)
-        if not (0.0 < level < 1.0):
+        if not 0.0 < float(level) < 1.0:
             raise ValueError("level must satisfy 0 < level < 1.")
-        if self.standard_error is None:
-            note = self.variance_note or "design variance is unavailable."
-            raise ValueError(f"Cannot form a confidence interval because {note}")
-        z = NormalDist().inv_cdf(0.5 + level / 2.0)
-        return (
-            float(self.difference - z * self.standard_error),
-            float(self.difference + z * self.standard_error),
-        )
+        if not self.exact_census:
+            raise ValueError(
+                "Confidence interval unavailable for sampled GD group contrasts: "
+                "automatic Wald intervals are not supported."
+            )
+        return self.difference, self.difference
 
     def p_value(self, *, null: float = 0.0) -> float:
-        if self.standard_error is None:
-            note = self.variance_note or "design variance is unavailable."
-            raise ValueError(f"Cannot form a p-value because {note}")
-        if self.standard_error == 0.0:
-            return 1.0 if self.difference == float(null) else 0.0
-        z = abs((self.difference - float(null)) / self.standard_error)
-        return float(2.0 * (1.0 - NormalDist().cdf(z)))
+        if not self.exact_census:
+            raise ValueError(
+                "P-value unavailable for sampled GD group contrasts: "
+                "automatic normal/Wald tests are not supported."
+            )
+        return 1.0 if self.difference == float(null) else 0.0
 
     def to_frame(self) -> pd.DataFrame:
         return pd.DataFrame(
@@ -187,7 +168,7 @@ class GeneralizedDifferenceContrastResult:
                     "second_estimate": self.second_estimate,
                     "difference": self.difference,
                     "standard_error": self.standard_error,
-                    "p_value": None if self.standard_error is None else self.p_value(),
+                    "p_value": self.p_value() if self.exact_census else None,
                     "variance_design": self.variance_design,
                 }
             ]
@@ -245,6 +226,11 @@ class GeneralizedDifferenceGroupedResult:
             standard_error=se,
             variance_design=design,
             variance_note=note,
+            exact_census=(
+                len(self._contrast_inputs["audit_keys"]) ==
+                len(self._contrast_inputs["population_keys"]) and
+                bool(np.all(np.asarray(self._contrast_inputs["inclusion"]) == 1.0))
+            ),
         )
 
     def contrasts(self, reference: Any) -> pd.DataFrame:
@@ -309,6 +295,7 @@ def generalized_difference_by(
     design: str | None = None,
     strata: BaseArtifact | str | None = None,
     inference: str = "finite",
+    known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
 ) -> GeneralizedDifferenceGroupedResult:
     """Estimate corrected finite-corpus means/prevalences within known groups.
 
@@ -316,7 +303,11 @@ def generalized_difference_by(
     resolved from the surrogate artifact; pass ``group=`` when the grouping
     variable lives on another same-key artifact. ``result.contrast(a, b)``
     returns the corrected difference in group means with its design-based SE.
+    With finite-only known=, group labels must cover the full target including
+    exact known units K, while design covariance uses only the audited U frame.
     """
+    if known is not None and inference != "finite":
+        raise ValueError("known= supports only finite-population inference.")
     if inference != "finite":
         raise ValueError("Grouped superpopulation inference is not supported; use inference='finite'.")
     from text_analysis_lab.analysis.gd_design_variance import check_design
@@ -354,64 +345,126 @@ def generalized_difference_by(
     ):
         _validate_unique(frame, keys, role=role)
     population_keys = set(_key_tuples(population, keys))
-    if set(_key_tuples(group_frame, keys)) != population_keys:
+    from text_analysis_lab.analysis.gd_known import known_table
+    known_data, known_keys = known_table(
+        project, known, primary_key=keys, label_field=gold_field,
+    )
+    if known is not None:
+        from text_analysis_lab.analysis.estimation import _recorded_frame
+        recorded = _recorded_frame(project, pi_artifact)
+        if recorded is not None:
+            if tuple(str(k) for k in recorded.primary_key) != keys:
+                raise ArtifactError("Recorded audit frame has different primary keys.")
+            recorded_table = _key_only_frame(recorded)
+            _validate_unique(recorded_table, keys, role="recorded audit frame")
+            remainder_keys = set(_key_tuples(recorded_table, keys))
+            if known_keys & remainder_keys:
+                raise ArtifactError("known= overlaps the recorded audit sampling frame.")
+            if population_keys not in (remainder_keys, remainder_keys | known_keys):
+                raise ArtifactError(
+                    "Surrogate must cover the audit remainder U or U union known=."
+                )
+            variance_surrogate = recorded
+        else:
+            if known_keys & population_keys and not known_keys.issubset(population_keys):
+                raise ArtifactError(
+                    "External surrogate must contain either all known= keys or none."
+                )
+            remainder_keys = population_keys - known_keys
+            variance_surrogate = surrogate
+        if not remainder_keys:
+            raise ArtifactError("No remaining probability-audit frame U.")
+    else:
+        remainder_keys = population_keys
+        variance_surrogate = surrogate
+    target_keys = remainder_keys | known_keys
+    if set(_key_tuples(group_frame, keys)) != target_keys:
         raise ArtifactError(
-            "group key set must exactly equal the surrogate population key set."
+            "group= must describe exactly the full target F, including known= keys."
         )
     audit_keys = set(_key_tuples(audit, keys))
     if set(_key_tuples(pi_frame, keys)) != audit_keys:
         raise ArtifactError("pi key set must exactly equal the gold/audit key set.")
-    if not audit_keys.issubset(population_keys):
+    if audit_keys & known_keys:
+        raise ArtifactError("known= overlaps audited gold labels.")
+    if not audit_keys.issubset(remainder_keys):
         raise ArtifactError(
-            "gold/audit contains keys outside the surrogate population."
+            "gold/audit contains keys outside the probability-audit remainder."
         )
 
+    population = population.loc[
+        [k in remainder_keys for k in _key_tuples(population, keys)]
+    ].copy()
+    # Distinct internal value columns prevent pandas suffixes when any input
+    # artifacts use the same user-facing field name (including the group).
+    reserved = set(keys) | {surrogate_field, gold_field, pi_field, group_field}
+    gold_col = _unique_join_column(reserved, "__teal_gd_gold__")
+    proxy_col = _unique_join_column(reserved, "__teal_gd_proxy__")
+    pi_col = _unique_join_column(reserved, "__teal_gd_pi__")
+    group_col = _unique_join_column(reserved, "__teal_gd_group__")
+    named_group = group_frame.rename(columns={group_field: group_col})
     pop = population.merge(
-        group_frame, on=list(keys), validate="one_to_one", sort=False
+        named_group, on=list(keys), validate="one_to_one", sort=False
+    )
+    known_groups = known_data.merge(
+        named_group, on=list(keys), validate="one_to_one", sort=False,
     )
     merged = (
-        audit.merge(
-            population.loc[:, [*keys, surrogate_field]],
-            on=list(keys),
-            validate="one_to_one",
-            sort=False,
+        audit.rename(columns={gold_field: gold_col})
+        .merge(
+            population.loc[:, [*keys, surrogate_field]].rename(
+                columns={surrogate_field: proxy_col}
+            ),
+            on=list(keys), validate="one_to_one", sort=False,
         )
-        .merge(pi_frame, on=list(keys), validate="one_to_one", sort=False)
-        .merge(group_frame, on=list(keys), validate="one_to_one", sort=False)
+        .merge(
+            pi_frame.rename(columns={pi_field: pi_col}),
+            on=list(keys), validate="one_to_one", sort=False,
+        )
+        .merge(named_group, on=list(keys), validate="one_to_one", sort=False)
     )
     q_all = _numeric(pop[surrogate_field], name=f"surrogate field {surrogate_field!r}")
-    y = _numeric(merged[gold_field], name=f"gold field {gold_field!r}")
-    q_audit = _numeric(
-        merged[surrogate_field], name=f"surrogate field {surrogate_field!r}"
-    )
-    inclusion = _numeric(merged[pi_field], name=f"pi field {pi_field!r}")
+    y = _numeric(merged[gold_col], name=f"gold field {gold_field!r}")
+    q_audit = _numeric(merged[proxy_col], name=f"surrogate field {surrogate_field!r}")
+    inclusion = _numeric(merged[pi_col], name=f"pi field {pi_field!r}")
     if np.any(inclusion <= 0.0) or np.any(inclusion > 1.0):
         raise ArtifactError("pi values must satisfy 0 < pi <= 1.")
     residual = y - q_audit
-    if pop[group_field].isna().any() or merged[group_field].isna().any():
+    if pop[group_col].isna().any() or merged[group_col].isna().any():
         raise ArtifactError("group_field may not contain missing values.")
 
     rows: list[dict[str, Any]] = []
-    audit_groups = merged[group_field].to_numpy(dtype=object)
-    pop_groups = pop[group_field].to_numpy(dtype=object)
-    group_values = list(pd.unique(pop[group_field]))
+    audit_groups = merged[group_col].to_numpy(dtype=object)
+    pop_groups = pop[group_col].to_numpy(dtype=object)
+    # Preserve the historical order given by the surrogate's keyed frame.
+    # Known-only groups have no surrogate rows and follow in known-label order.
+    group_values = list(pd.unique(pop[group_col]))
+    for value in pd.unique(known_groups[group_col]):
+        if value not in group_values:
+            group_values.append(value)
+    if group_frame[group_field].isna().any():
+        raise ArtifactError("group_field may not contain missing values.")
     for value in group_values:
         pop_mask = pop_groups == value
         audit_mask = audit_groups == value
-        N_g = int(np.sum(pop_mask))
+        N_g = int(np.sum((group_frame[group_field] == value).to_numpy()))
         n_g = int(np.sum(audit_mask))
         surrogate_total = float(np.sum(q_all[pop_mask]))
         correction_total = float(
             np.sum((residual * audit_mask.astype(float)) / inclusion)
         )
+        if known is not None:
+            correction_total += float(known_groups.loc[
+                known_groups[group_col] == value, "__known_y__"
+            ].sum())
         estimated_total = surrogate_total + correction_total
         transformed = residual * audit_mask.astype(float) / float(N_g)
         variance_mean, variance_design, note = _design_variance_from_pi_provenance(
-            surrogate=surrogate,
+            surrogate=variance_surrogate,
             pi_artifact=pi_artifact,
             audit_frame=merged.loc[:, list(keys)].copy(),
             residual=transformed,
-            population_keys=population_keys,
+            population_keys=remainder_keys,
             primary_key=keys,
             inclusion=inclusion,
             design=design,
@@ -432,7 +485,10 @@ def generalized_difference_by(
                 "estimated_total": estimated_total,
                 "variance_design": variance_design,
                 "variance_note": note,
-                "gold_is_binary": bool(np.all(np.isin(y, [0.0, 1.0]))),
+                "gold_is_binary": bool(
+            np.all(np.isin(y, [0.0, 1.0])) and
+            np.all(np.isin(known_data["__known_y__"], [0.0, 1.0]))
+        ),
             }
         )
     estimates = pd.DataFrame(rows)
@@ -444,10 +500,10 @@ def generalized_difference_by(
         _contrast_inputs={
             "residual": residual,
             "audit_groups": audit_groups,
-            "surrogate": surrogate,
+            "surrogate": variance_surrogate,
             "pi_artifact": pi_artifact,
             "audit_keys": merged.loc[:, list(keys)].copy(),
-            "population_keys": population_keys,
+            "population_keys": remainder_keys,
             "primary_key": keys,
             "inclusion": inclusion,
             "design": design,
@@ -467,8 +523,15 @@ def generalized_difference(
     design: str | None = None,
     strata: BaseArtifact | str | None = None,
     inference: str = "finite",
-) -> GeneralizedDifferenceResult:
+    known: BaseArtifact | str | Sequence[BaseArtifact | str] | None = None,
+    statistic: str = "mean",
+    quantile: float = 0.5,
+) -> GeneralizedDifferenceResult | GeneralizedDifferenceQuantileResult:
     """Correct a full-corpus surrogate using a probability audit.
+
+    statistic="mean" returns GeneralizedDifferenceResult. statistic="median"
+    or "quantile" returns GeneralizedDifferenceQuantileResult with corrected
+    CDF diagnostics and a left-quantile point estimate.
 
     For finite population ``F`` and probability audit ``A``, this computes
 
@@ -485,7 +548,31 @@ def generalized_difference(
     and frozen surrogate predictions remain the researcher's assumptions.
     Without verified provenance or an asserted design, the point estimate is
     returned with no estimated design standard error.
+
+    Optional finite-only known= accepts disjoint certainty-known outcome labels
+    K; an independent probability audit is drawn from U=F minus K. The total
+    is sum_K(y) + sum_U(q) + sum_A((y-q)/pi), and its variance is conditional
+    on the audit design over U, not F. Superpopulation known= is not supported.
     """
+    if statistic not in {"mean", "median", "quantile"}:
+        raise ValueError("statistic must be 'mean', 'median', or 'quantile'.")
+    if statistic in {"median", "quantile"}:
+        if statistic == "quantile" and not 0.0 < quantile < 1.0:
+            raise ValueError("quantile must satisfy 0 < quantile < 1.")
+        if known is not None:
+            raise ValueError("GD median known= requires a separate combined-CDF contract.")
+        if inference != "finite":
+            raise ValueError("GD median supports only finite-population inference.")
+        from text_analysis_lab.analysis.gd_quantiles import generalized_difference_median
+        return generalized_difference_median(
+            surrogate, gold=gold, pi=pi,
+            surrogate_field=surrogate_field, gold_field=gold_field,
+            pi_field=pi_field, design=design, strata=strata,
+            quantile=(.5 if statistic == "median" else quantile),
+            statistic=statistic,
+        )
+    if known is not None and inference != "finite":
+        raise ValueError("known= supports only finite-population inference.")
     if inference not in {"finite", "superpopulation"}:
         raise ValueError("inference must be 'finite' or 'superpopulation'.")
     from text_analysis_lab.analysis.gd_design_variance import check_design
@@ -532,42 +619,82 @@ def generalized_difference(
         missing = len(audit_keys - population_keys)
         raise ArtifactError(f"Surrogate is missing {missing} gold/audit key(s).")
 
-    q_all = _numeric(
-        population[surrogate_field], name=f"surrogate field {surrogate_field!r}"
+    from text_analysis_lab.analysis.gd_known import known_table
+    known_data, known_keys = known_table(
+        project, known, primary_key=keys, label_field=gold_field,
     )
-    merged = audit.merge(
-        population.loc[:, [*keys, surrogate_field]],
-        on=list(keys),
-        how="left",
-        validate="one_to_one",
-        sort=False,
+    if known_keys & audit_keys:
+        raise ArtifactError("known= overlaps audited gold labels.")
+    if known is not None:
+        from text_analysis_lab.analysis.estimation import _recorded_frame
+        recorded = _recorded_frame(project, pi_artifact)
+        if recorded is not None:
+            if tuple(str(k) for k in recorded.primary_key) != keys:
+                raise ArtifactError("Recorded audit frame has different primary keys.")
+            recorded_frame = _key_only_frame(recorded)
+            _validate_unique(recorded_frame, keys, role="recorded audit frame")
+            remainder_keys = set(_key_tuples(recorded_frame, keys))
+            if known_keys & remainder_keys:
+                raise ArtifactError("known= overlaps the recorded audit sampling frame.")
+            if population_keys not in (remainder_keys, remainder_keys | known_keys):
+                raise ArtifactError(
+                    "Surrogate must cover the audit remainder U or U union known=."
+                )
+            variance_surrogate = recorded
+        else:
+            if known_keys & population_keys and not known_keys.issubset(population_keys):
+                raise ArtifactError(
+                    "External surrogate must contain either all known= keys or none."
+                )
+            remainder_keys = population_keys - known_keys
+            variance_surrogate = surrogate
+        if not remainder_keys or not audit_keys.issubset(remainder_keys):
+            raise ArtifactError("Audit keys must lie in the remaining frame U.")
+    else:
+        remainder_keys = population_keys
+        variance_surrogate = surrogate
+    # q is needed on U only. Predictive values on certainty-known K
+    # are irrelevant and may legitimately be unavailable or missing.
+    remainder_mask = np.asarray([
+        key in remainder_keys for key in _key_tuples(population, keys)
+    ], dtype=bool)
+    q_remaining = _numeric(
+        population.loc[remainder_mask, surrogate_field],
+        name=f"surrogate field {surrogate_field!r} on audit remainder",
+    )
+    reserved = set(keys) | {surrogate_field, gold_field, pi_field}
+    gold_col = _unique_join_column(reserved, "__teal_gd_gold__")
+    proxy_col = _unique_join_column(reserved, "__teal_gd_proxy__")
+    pi_col = _unique_join_column(reserved, "__teal_gd_pi__")
+    merged = audit.rename(columns={gold_field: gold_col}).merge(
+        population.loc[:, [*keys, surrogate_field]].rename(
+            columns={surrogate_field: proxy_col}
+        ),
+        on=list(keys), how="left", validate="one_to_one", sort=False,
     ).merge(
-        pi_frame,
-        on=list(keys),
-        how="left",
-        validate="one_to_one",
-        sort=False,
+        pi_frame.rename(columns={pi_field: pi_col}),
+        on=list(keys), how="left", validate="one_to_one", sort=False,
     )
-    y = _numeric(merged[gold_field], name=f"gold field {gold_field!r}")
-    q_audit = _numeric(
-        merged[surrogate_field], name=f"surrogate field {surrogate_field!r}"
-    )
-    inclusion = _numeric(merged[pi_field], name=f"pi field {pi_field!r}")
+    y = _numeric(merged[gold_col], name=f"gold field {gold_field!r}")
+    q_audit = _numeric(merged[proxy_col], name=f"surrogate field {surrogate_field!r}")
+    inclusion = _numeric(merged[pi_col], name=f"pi field {pi_field!r}")
     if np.any(inclusion <= 0.0) or np.any(inclusion > 1.0):
         raise ArtifactError("pi values must satisfy 0 < pi <= 1.")
 
     residual = y - q_audit
-    N = len(population)
-    surrogate_total = float(q_all.sum())
+    N = len(remainder_keys) + len(known_keys)
+    surrogate_total = float(q_remaining.sum())
     correction_total = float(np.sum(residual / inclusion))
+    if known is not None:
+        correction_total += float(known_data["__known_y__"].sum())
     estimated_total = surrogate_total + correction_total
 
     variance_total, design, variance_note = _design_variance_from_pi_provenance(
-        surrogate=surrogate,
+        surrogate=variance_surrogate,
         pi_artifact=pi_artifact,
         audit_frame=merged.loc[:, [*keys]].copy(),
         residual=residual,
-        population_keys=population_keys,
+        population_keys=remainder_keys,
         primary_key=keys,
         inclusion=inclusion,
         design=design,
@@ -638,11 +765,18 @@ def generalized_difference(
         standard_error=se_mean,
         variance_design=design,
         variance_note=variance_note,
-        gold_is_binary=bool(np.all(np.isin(y, [0.0, 1.0]))),
+        gold_is_binary=bool(
+            np.all(np.isin(y, [0.0, 1.0])) and
+            np.all(np.isin(known_data["__known_y__"], [0.0, 1.0]))
+        ),
         inference=inference,
         variance_audit=variance_audit,
         variance_corpus=variance_corpus,
         variance_total=combined_variance,
+        exact_census=(
+            inference == "finite" and len(audit_keys) == len(remainder_keys)
+            and bool(np.all(inclusion == 1.0))
+        ),
     )
 
 
@@ -732,6 +866,14 @@ def _stratified_srswor_variance(
 
 def _variance_unavailable(note: str) -> tuple[None, None, str]:
     return None, None, str(note)
+
+
+def _unique_join_column(reserved: set[str], candidate: str) -> str:
+    """Choose a private join column distinct from user fields and other joins."""
+    while candidate in reserved:
+        candidate += "_"
+    reserved.add(candidate)
+    return candidate
 
 
 def _frame(artifact: BaseArtifact, field: str) -> pd.DataFrame:

@@ -154,7 +154,7 @@ def test_generalized_difference_point_estimate_aligns_by_key() -> None:
     assert result.standard_error is None
     assert result.variance_design is None
     assert "first-order inclusion probabilities alone" in (result.variance_note or "")
-    with pytest.raises(ValueError, match="Cannot form a confidence interval"):
+    with pytest.raises(ValueError, match="unavailable"):
         result.confidence_interval()
 
 
@@ -200,8 +200,11 @@ def test_generalized_difference_recovers_srswor_standard_error_from_provenance()
     assert result.variance_design == "srswor"
     assert result.standard_error_total == pytest.approx(math.sqrt(2.0))
     assert result.standard_error == pytest.approx(math.sqrt(2.0) / 4.0)
-    low, high = result.confidence_interval()
-    assert low < result.estimated_mean < high
+    # A valid design SE does not license a sampled-data normal CI.
+    with pytest.raises(ValueError, match="unavailable"):
+        result.confidence_interval()
+    with pytest.raises(ValueError, match="unavailable"):
+        result.confidence_interval(scale="total")
 
 
 def test_generalized_difference_recovers_stratified_srswor_standard_error() -> None:
@@ -434,22 +437,25 @@ def test_generalized_difference_grouped_estimates_and_contrast_with_srswor_se() 
     contrast = result.contrast("D", "R")
     assert contrast.difference == pytest.approx(1.0)
     assert contrast.standard_error is not None
-    assert 0.0 <= contrast.p_value() <= 1.0
-    low, high = contrast.confidence_interval()
-    assert low < contrast.difference < high
+    with pytest.raises(ValueError, match="unavailable"):
+        contrast.p_value()
+    with pytest.raises(ValueError, match="unavailable"):
+        contrast.confidence_interval()
 
     versus_d = result.contrasts(reference="D")
     assert versus_d[["first", "second"]].to_dict("records") == [
         {"first": "R", "second": "D"}
     ]
     assert versus_d.loc[0, "difference"] == pytest.approx(-1.0)
+    assert pd.isna(versus_d.loc[0, "p_value"])
 
     pairwise = result.pairwise_contrasts()
     assert len(pairwise) == 1
     assert pairwise.loc[0, "difference"] == pytest.approx(1.0)
+    assert pd.isna(pairwise.loc[0, "p_value"])
 
 
-def test_generalized_difference_result_p_value_uses_design_se() -> None:
+def test_generalized_difference_result_p_value_unavailable_despite_design_se() -> None:
     project = _FakeProject()
     documents = _artifact(
         project, "documents_p", pd.DataFrame({"row_id": [0, 1, 2, 3]}), []
@@ -481,7 +487,10 @@ def test_generalized_difference_result_p_value_uses_design_se() -> None:
     )
     result = generalized_difference(population, gold=gold, pi=pi)
     assert result.standard_error is not None
-    assert 0.0 <= result.p_value(null=0.0) <= 1.0
+    with pytest.raises(ValueError, match="unavailable"):
+        result.p_value(null=0.0)
+    with pytest.raises(ValueError, match="unavailable"):
+        result.p_value(null=0.0, scale="total")
 
 
 
