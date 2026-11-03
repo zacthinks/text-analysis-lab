@@ -107,21 +107,15 @@ def test_models_list_json_keys_can_roundtrip_into_info(tmp_path, capsys):
 
 
 def test_cli_install_provider_success_envelopes(tmp_path, capsys, monkeypatch):
-    from dataclasses import dataclass
-    from pathlib import Path
     from text_analysis_lab.models import ModelManager
+    from text_analysis_lab.models.spacy import SpacyResolution
     from text_analysis_lab.linguistics.model_resources import (
         ALLENNLP_SRL_BERT, project_model_paths,
     )
 
-    @dataclass
-    class SpaCyFixture:
-        load_target: str
-        source: str
-
     def fake_install(self, model_key, *, allow_download=False, **kwargs):
         if model_key.startswith("spacy:"):
-            return SpaCyFixture("en_core_web_sm", "installed_package")
+            return SpacyResolution("en_core_web_sm", "3.8.0", "package", "en_core_web_sm")
         if model_key.startswith("huggingface:"):
             return tmp_path / "hub" / "snapshots" / "abcdef"
         if model_key.startswith("allennlp:"):
@@ -145,7 +139,7 @@ def test_cli_install_provider_success_envelopes(tmp_path, capsys, monkeypatch):
         assert payload["source"]
         if key.startswith("spacy:"):
             assert payload["location_type"] == "import_name"
-            assert payload["source"] == "installed_package"
+            assert payload["source"] == "package"
         else:
             assert payload["location_type"] == "directory"
         assert payload["details"]
