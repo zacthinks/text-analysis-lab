@@ -16,6 +16,12 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
+## [0.11.1] - 2026-11-05
+
+### Fixed
+
+- `SentenceTransformerEncoder(truncation="truncate")` no longer emits redundant warnings when explicitly truncating overlength inputs; per-document token-count and truncation metadata remain available (PR #65).
+
 ## [0.11.0] - 2026-11-03
 
 ### Added
