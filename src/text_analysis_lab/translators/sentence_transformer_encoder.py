@@ -264,14 +264,6 @@ class SentenceTransformerEncoder(BaseTranslator):
                 f"context limit of {context_limit} model tokens "
                 f"(including any model prompt and special tokens).{suffix}"
             )
-        if too_long:
-            warnings.warn(
-                "SentenceTransformerEncoder is explicitly allowing truncation for "
-                f"{len(too_long)} of {len(values_in)} row(s) to {context_limit} model tokens.",
-                UserWarning,
-                stacklevel=2,
-            )
-
         values = self._encode(
             model=model,
             texts=values_in,

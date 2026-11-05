@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import warnings
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -455,6 +456,31 @@ def test_legacy_sentence_transformer_task_state_replays_with_deprecation_warning
     else:
         assert kwargs["prompt_name"] == expected_prompt
     assert encoder.to_json_state()["task"] == task
+
+
+def test_sentence_transformer_explicit_truncation_is_silent_and_auditable(
+    monkeypatch,
+):
+    _install_fake_sentence_transformers(monkeypatch)
+    encoder = SentenceTransformerEncoder(
+        "example/sbert", revision=_COMMIT, truncation="truncate"
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = encoder.translate_batch(
+            {"source": _packet(["one two three four five", "one two"])},
+            mode="translate",
+            request=_request(),
+        )
+
+    assert caught == []
+    payload = result.outputs["output"]
+    assert payload["keys"]["doc_id"].tolist() == [0, 1]
+    assert payload["metadata"]["token_count"].tolist() == [7, 4]
+    assert payload["metadata"]["embedded_token_count"].tolist() == [6, 4]
+    assert payload["metadata"]["truncated"].tolist() == [True, False]
+    assert payload["data"]["values"].shape == (2, 3)
 
 
 def test_sentence_transformer_context_guard_includes_model_prompt(monkeypatch):
