@@ -519,6 +519,21 @@ geco = project.geco.create(
 geco.launch()
 ```
 
+You can also launch an existing linked workspace directly from the command line:
+
+```bash
+uv run teal geco path/to/teal-project
+```
+
+When the TeAL project contains more than one linked GeCo workspace, select one by name:
+
+```bash
+uv run teal geco path/to/teal-project coding
+```
+
+The command automatically starts the appropriate GeCo interface, including Focus Coding
+for linked focus-coder workspaces. It does not create a workspace.
+
 Selected human codes and fitted classifiers can be exported back into TeAL:
 
 ```python
