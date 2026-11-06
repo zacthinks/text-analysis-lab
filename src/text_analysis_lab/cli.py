@@ -26,6 +26,13 @@ def _build_parser() -> argparse.ArgumentParser:
     gui = commands.add_parser("gui", help="Launch the local TeAL Project Center.")
     gui.add_argument("path", type=Path, help="Path to a TeAL project.")
 
+    geco = commands.add_parser("geco", help="Launch a linked GeCo workspace.")
+    geco.add_argument("path", type=Path, help="Path to a TeAL project.")
+    geco.add_argument(
+        "name", nargs="?",
+        help="Linked workspace name (required when more than one exists).",
+    )
+
     models = commands.add_parser("models", help="Manage user-level model resources.")
     models.add_argument(
         "--cache-root", type=Path, default=None,
@@ -210,6 +217,47 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "models":
         return _run_models(args)
+
+    if args.command == "geco":
+        project_path = args.path.expanduser().resolve()
+        if not project_path.is_dir():
+            parser.error(f"Project directory does not exist: {project_path}")
+
+        project = Project.open(project_path)
+        try:
+            names = sorted(row["name"] for row in project.geco.list())
+            if not names:
+                parser.error(f"No linked GeCo workspaces found in {project_path}.")
+            if args.name is None:
+                if len(names) != 1:
+                    parser.error(
+                        "Multiple linked GeCo workspaces found. "
+                        f"Specify a name: {', '.join(names)}"
+                    )
+                name = names[0]
+            elif args.name not in names:
+                parser.error(
+                    f"Unknown linked GeCo workspace {args.name!r}. "
+                    f"Available: {', '.join(names)}"
+                )
+            else:
+                name = args.name
+
+            workspace = project.geco.open(name)
+            server = (
+                workspace.launch_focus()
+                if workspace.is_focus_coder
+                else workspace.launch()
+            )
+            try:
+                server.wait()
+            except KeyboardInterrupt:
+                pass
+            finally:
+                server.close()
+        finally:
+            project.close()
+        return 0
 
     if args.command == "gui":
         project_path = args.path.expanduser().resolve()
