@@ -393,6 +393,68 @@ def _frame(artifact, fields=False):
     )
 
 
+def test_linked_geco_starts_without_geometry_and_keeps_distinct_display_text(
+    tmp_path: Path, monkeypatch,
+):
+    import text_analysis_lab.integrations.geco as bridge
+
+    _FakeGeometricCoder._registry.clear()
+    monkeypatch.setattr(bridge, "_load_geometric_coder", lambda: _FakeGeometricCoder)
+    monkeypatch.setattr(bridge, "_installed_geco_version", lambda: "0.next-test")
+    with teal.Project.create(tmp_path / "geom_free", name="geom_free") as project:
+        docs = _seed_table(project)
+        displayed = _seed_display_table(project)
+        linked = project.geco.create(
+            "initial", documents=docs, text=docs, display_text=displayed,
+            text_field="text", metadata_fields=["year"],
+        )
+        assert linked.name == "initial"
+        assert linked.coder._geometries == {}
+        assert linked.coder.data["text"].tolist() == [
+            f"display document {i}" for i in range(10)
+        ]
+        assert linked.manifest["text_artifact_id"] == docs.artifact_id
+        assert linked.manifest["display_text_artifact_id"] == displayed.artifact_id
+        linked.close()
+        reopened = project.geco.open("initial")
+        assert reopened.coder._geometries == {}
+        assert reopened.launch() == "launched"
+        reopened.close()
+
+
+def test_linked_geco_rejects_projection_without_geometry(tmp_path: Path, monkeypatch):
+    import text_analysis_lab.integrations.geco as bridge
+
+    monkeypatch.setattr(bridge, "_load_geometric_coder", lambda: _FakeGeometricCoder)
+    with teal.Project.create(tmp_path / "no_projection", name="no_projection") as project:
+        docs = _seed_table(project)
+        with pytest.raises(GeCoIntegrationError, match="requires a geometry"):
+            project.geco.create(
+                "initial", documents=docs, text_field="text",
+                projections={"map": docs},
+            )
+
+
+
+@pytest.mark.acceptance
+def test_real_geco_browser_can_initialize_before_first_geometry(tmp_path: Path):
+    pytest.importorskip("geometric_coder")
+    from geometric_coder.ui.app import create_app
+
+    with teal.Project.create(tmp_path / "real_geometry_free", name="study") as project:
+        docs = _seed_table(project)
+        linked = project.geco.create(
+            "coding", documents=docs, text_field="text",
+            metadata_fields=["year"],
+        )
+        try:
+            assert linked.coder.geometries(public_only=True) == []
+            app = create_app(linked.coder)
+            assert app.layout is not None
+        finally:
+            linked.close()
+
+
 def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch):
     import text_analysis_lab.integrations.geco as bridge
 
