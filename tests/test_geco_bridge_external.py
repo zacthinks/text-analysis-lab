@@ -435,6 +435,26 @@ def test_linked_geco_rejects_projection_without_geometry(tmp_path: Path, monkeyp
             )
 
 
+
+@pytest.mark.acceptance
+def test_real_geco_browser_can_initialize_before_first_geometry(tmp_path: Path):
+    pytest.importorskip("geometric_coder")
+    from geometric_coder.ui.app import create_app
+
+    with teal.Project.create(tmp_path / "real_geometry_free", name="study") as project:
+        docs = _seed_table(project)
+        linked = project.geco.create(
+            "coding", documents=docs, text_field="text",
+            metadata_fields=["year"],
+        )
+        try:
+            assert linked.coder.geometries(public_only=True) == []
+            app = create_app(linked.coder)
+            assert app.layout is not None
+        finally:
+            linked.close()
+
+
 def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch):
     import text_analysis_lab.integrations.geco as bridge
 
