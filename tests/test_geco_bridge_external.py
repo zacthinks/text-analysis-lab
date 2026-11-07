@@ -319,11 +319,11 @@ def _seed_table(project: teal.Project):
     return project.get_artifact("art_docs")
 
 
-def _seed_display_table(project: teal.Project):
+def _seed_display_table(project: teal.Project, *, field: str = "text"):
     rows = pd.DataFrame(
         {
             "row_id": list(range(10)),
-            "text": [f"display document {i}" for i in range(10)],
+            field: [f"display document {i}" for i in range(10)],
         }
     )
     writer = create_artifact_writer(
@@ -337,7 +337,7 @@ def _seed_display_table(project: teal.Project):
     writer.write(
         {
             "keys": rows[["row_id"]],
-            "data": rows[["text"]],
+            "data": rows[[field]],
         }
     )
     writer.finalize()
@@ -403,10 +403,11 @@ def test_linked_geco_starts_without_geometry_and_keeps_distinct_display_text(
     monkeypatch.setattr(bridge, "_installed_geco_version", lambda: "0.next-test")
     with teal.Project.create(tmp_path / "geom_free", name="geom_free") as project:
         docs = _seed_table(project)
-        displayed = _seed_display_table(project)
+        displayed = _seed_display_table(project, field="visible")
         linked = project.geco.create(
             "initial", documents=docs, text=docs, display_text=displayed,
-            text_field="text", metadata_fields=["year"],
+            text_field="text", display_text_field="visible",
+            metadata_fields=["year"],
         )
         assert linked.name == "initial"
         assert linked.coder._geometries == {}
@@ -415,6 +416,7 @@ def test_linked_geco_starts_without_geometry_and_keeps_distinct_display_text(
         ]
         assert linked.manifest["text_artifact_id"] == docs.artifact_id
         assert linked.manifest["display_text_artifact_id"] == displayed.artifact_id
+        assert linked.manifest["display_text_field"] == "visible"
         linked.close()
         reopened = project.geco.open("initial")
         assert reopened.coder._geometries == {}
