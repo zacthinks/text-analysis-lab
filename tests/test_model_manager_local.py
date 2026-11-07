@@ -53,3 +53,19 @@ def test_registration_rejects_invalid_paths_and_names(tmp_path):
     for name in ("", "../invalid", "folder/name", "C:invalid"):
         with pytest.raises(ValueError):
             manager.register_local(name, file)
+
+
+def test_discovers_unlisted_huggingface_snapshot_in_existing_cache(tmp_path):
+    cache = tmp_path / "hub"
+    snapshot = (
+        cache / "models--sentence-transformers--all-MiniLM-L6-v2"
+        / "snapshots" / "revision123"
+    )
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    manager = ModelManager(cache_root=tmp_path / "teal", hf_cache_dir=cache)
+    status = manager.inspect("huggingface:sentence-transformers/all-MiniLM-L6-v2")
+    assert status.present
+    assert status.ready is None
+    assert status.locations[0].revision == "revision123"
+    assert manager.verify(status.descriptor.key).verified is None
