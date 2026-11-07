@@ -97,8 +97,9 @@ linguistics = [
 
 [tool.uv]
 
-[tool.uv.sources]
-geometric-coder = { git = "https://github.com/zacthinks/GeCo.git", branch = "main" }
+# The Desktop acceptance source intentionally resolves geometric-coder
+# from the consuming project's immutable release pin, not TeAL's main-branch
+# development override. This is a temporary integration-only commit.
 
 [dependency-groups]
 dev = [
