@@ -929,6 +929,7 @@ class GeCoManager:
         geometry: BaseArtifact | str | None = None,
         text: BaseArtifact | str | None = None,
         display_text: BaseArtifact | str | None = None,
+        display_text_field: str | None = None,
         projections: Mapping[str, BaseArtifact | str] | None = None,
         topic_models: Mapping[str, Mapping[str, Any]] | None = None,
         metadata_fields: Sequence[str] | None = None,
@@ -938,6 +939,9 @@ class GeCoManager:
         """Create a fixed-universe GeCo workspace linked to TeAL numerical artifacts."""
         workspace_name = _validate_workspace_name(name)
         text_field = _validate_field_name(text_field, kind="text_field")
+        display_field = _validate_field_name(
+            display_text_field or text_field, kind="display_text_field"
+        )
         metadata = _normalize_metadata_fields(metadata_fields)
         documents_artifact = self.project.get_artifact(documents)
         if not documents_artifact.primary_key:
@@ -1010,6 +1014,7 @@ class GeCoManager:
             documents_artifact,
             display_artifact,
             text_field=text_field,
+            display_text_field=display_field,
             metadata_fields=metadata,
         )
         ordered_keys = _key_records(document_frame, documents_artifact.primary_key)
@@ -1109,6 +1114,7 @@ class GeCoManager:
                 "documents_artifact_id": documents_artifact.artifact_id,
                 "text_artifact_id": text_artifact.artifact_id,
                 "display_text_artifact_id": display_artifact.artifact_id,
+                "display_text_field": display_field,
                 "text_field": text_field,
                 "metadata_fields": list(metadata),
                 "created_with_geco_version": _installed_geco_version(),
@@ -1417,6 +1423,7 @@ class GeCoManager:
         source: BaseArtifact,
         *,
         text_field: str,
+        display_text_field: str,
         metadata_fields: Sequence[str],
     ) -> pd.DataFrame:
         """Resolve display text onto the fixed GeCo document/metadata universe."""
@@ -1456,7 +1463,7 @@ class GeCoManager:
         try:
             source_frame = source.query(
                 key_columns=True,
-                data_columns=[text_field],
+                data_columns=[display_text_field],
                 metadata_columns=False,
                 metadata_mode="none",
                 order_by="_position",
@@ -1465,10 +1472,10 @@ class GeCoManager:
             )
         except Exception as exc:
             raise GeCoIntegrationError(
-                f"Could not resolve text_field={text_field!r} from display_text "
+                f"Could not resolve text_field={display_text_field!r} from display_text "
                 f"artifact {source.artifact_id!r}."
             ) from exc
-        expected_source_columns = [*key_columns, text_field]
+        expected_source_columns = [*key_columns, display_text_field]
         missing_source_columns = [
             column for column in expected_source_columns if column not in source_frame.columns
         ]
@@ -1481,8 +1488,11 @@ class GeCoManager:
             raise GeCoIntegrationError(
                 "GeCo display_text source contains duplicate stable keys."
             )
+        display_source = source_frame.loc[:, expected_source_columns].rename(
+            columns={display_text_field: text_field}
+        )
         merged = target.merge(
-            source_frame.loc[:, expected_source_columns],
+            display_source,
             on=key_columns,
             how="left",
             validate="one_to_one",
