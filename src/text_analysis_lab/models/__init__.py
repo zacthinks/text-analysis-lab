@@ -242,6 +242,39 @@ class ModelManager:
                 locations=tuple(locations),
                 prepared=prepared,
             ))
+        # Existing standard and legacy Hugging Face snapshots are user assets,
+        # even when they are not one of TeAL's curated built-in models.
+        known = {item.descriptor.key for item in results}
+        discovered: dict[str, list[ResourceLocation]] = {}
+        for source, root in (
+            ("huggingface_hub", paths["huggingface_hub"]),
+            ("legacy_teal_hf", paths["legacy_teal_hf"]),
+        ):
+            if not root.is_dir():
+                continue
+            for repository in root.glob("models--*"):
+                if not repository.is_dir():
+                    continue
+                identifier = repository.name.removeprefix("models--").replace("--", "/")
+                if not identifier or f"huggingface:{identifier}" in known:
+                    continue
+                descriptor = ResourceDescriptor(
+                    "huggingface", identifier, "hf_snapshot", "user-supplied"
+                )
+                discovered.setdefault(identifier, []).extend(
+                    _hub_locations(root, descriptor, source)
+                )
+        for identifier, locations in sorted(discovered.items()):
+            if not locations:
+                continue
+            results.append(ResourceStatus(
+                descriptor=ResourceDescriptor(
+                    "huggingface", identifier, "hf_snapshot", "user-supplied"
+                ),
+                candidate_path=locations[0].path,
+                present=True,
+                locations=tuple(locations),
+            ))
         for name, path in self._local_entries().items():
             source = Path(path)
             present = source.exists() and (source.is_file() or source.is_dir())
@@ -268,6 +301,7 @@ class ModelManager:
         model_key: str,
         *,
         allow_download: bool = False,
+        revision: str | None = None,
         progress=None,
         cancelled=None,
     ):
@@ -299,7 +333,20 @@ class ModelManager:
                 (x for x in _BUILTINS if x.key == model_key), None
             )
             if descriptor is None:
-                raise KeyError(f"Unknown TeAL model resource {model_key!r}.")
+                # User-selected Hub resources are downloaded as data only.
+                # No model code is executed or treated as a supported translator.
+                model_id = model_key.removeprefix("huggingface:")
+                from huggingface_hub.utils import validate_repo_id
+
+                validate_repo_id(model_id)
+                descriptor = ResourceDescriptor(
+                    "huggingface", model_id, "hf_snapshot", "user-supplied",
+                    revision=revision,
+                )
+            elif revision is not None:
+                raise ValueError(
+                    "Known TeAL model revisions cannot be overridden by the model manager."
+                )
             from huggingface_hub import snapshot_download
             from text_analysis_lab.linguistics.cache import active_hf_cache_path
             cache = active_hf_cache_path(
@@ -334,6 +381,12 @@ class ModelManager:
     def verify(self, model_key: str) -> ResourceStatus:
         """Run offline provider checks; local references are never called runnable."""
         if model_key.startswith("local:"):
+            return self.inspect(model_key)
+        if (
+            model_key.startswith("huggingface:")
+            and not any(item.key == model_key for item in _BUILTINS)
+        ):
+            # Unknown Hub files may exist but are not scientifically verified.
             return self.inspect(model_key)
         from text_analysis_lab.models.lifecycle import verify_resource
         return verify_resource(self, model_key)
