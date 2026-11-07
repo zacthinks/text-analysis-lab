@@ -152,7 +152,7 @@ class ModelManager:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 json.dump(data, stream, indent=2, sort_keys=True)
-                stream.write("\\n")
+                stream.write("\n")
             os.replace(staged, target)
         finally:
             if os.path.exists(staged):
