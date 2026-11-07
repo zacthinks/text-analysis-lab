@@ -926,7 +926,7 @@ class GeCoManager:
         *,
         documents: BaseArtifact | str,
         text_field: str,
-        geometry: BaseArtifact | str,
+        geometry: BaseArtifact | str | None = None,
         text: BaseArtifact | str | None = None,
         display_text: BaseArtifact | str | None = None,
         projections: Mapping[str, BaseArtifact | str] | None = None,
@@ -964,11 +964,23 @@ class GeCoManager:
                     f"documents primary key {documents_artifact.primary_key!r}."
                 )
 
-        geometry_artifact = self._validate_numerical_resource(
-            geometry, documents_artifact, purpose="geometry"
+        # Geometry construction can happen later in the GeCo research interface.
+        # Preserve the existing fully validated numerical path when supplied.
+        if geometry is None and (projections or geometry_name):
+            raise GeCoIntegrationError(
+                "A named geometry or projection requires a geometry artifact."
+            )
+        geometry_artifact = (
+            self._validate_numerical_resource(
+                geometry, documents_artifact, purpose="geometry"
+            )
+            if geometry is not None else None
         )
-        external_geometry_name = _validate_resource_name(
-            geometry_name or _default_resource_name(geometry_artifact), kind="geometry"
+        external_geometry_name = (
+            _validate_resource_name(
+                geometry_name or _default_resource_name(geometry_artifact), kind="geometry"
+            )
+            if geometry_artifact is not None else None
         )
         projection_artifacts: dict[str, BaseArtifact] = {}
         for raw_name, ref in dict(projections or {}).items():
@@ -1001,32 +1013,25 @@ class GeCoManager:
             metadata_fields=metadata,
         )
         ordered_keys = _key_records(document_frame, documents_artifact.primary_key)
-        try:
-            self.project.pipeline(
-                start=text_artifact,
-                end=geometry_artifact,
-            )
-        except PipelineError as exc:
-            raise GeCoIntegrationError(
-                f"TeAL geometry {geometry_artifact.artifact_id!r} is not replayable "
-                f"from declared text "
-                f"{text_artifact.artifact_id!r}."
-            ) from exc
-        text_replay = True
-        resolved_supports_query = True
         provider = TeALGeCoProvider(self.project)
-
-        # Preflight the exact stable-key order before creating any mutable GeCo state.
-        matrix = provider.geometry_matrix(
-            _external_ref(
-                geometry_artifact,
-                text=text_artifact,
-            ),
-            ordered_keys
-        )
-        _validate_matrix_rows(
-            matrix, expected_rows=len(document_frame), purpose="geometry"
-        )
+        if geometry_artifact is not None:
+            try:
+                self.project.pipeline(
+                    start=text_artifact,
+                    end=geometry_artifact,
+                )
+            except PipelineError as exc:
+                raise GeCoIntegrationError(
+                    f"TeAL geometry {geometry_artifact.artifact_id!r} is not replayable "
+                    f"from declared text {text_artifact.artifact_id!r}."
+                ) from exc
+            # Preflight the exact stable-key order before creating mutable GeCo state.
+            matrix = provider.geometry_matrix(
+                _external_ref(geometry_artifact, text=text_artifact), ordered_keys
+            )
+            _validate_matrix_rows(
+                matrix, expected_rows=len(document_frame), purpose="geometry"
+            )
         for view_name, view in projection_artifacts.items():
             coordinates = provider.view_coordinates(_external_ref(view), ordered_keys)
             _validate_matrix_rows(
@@ -1047,16 +1052,16 @@ class GeCoManager:
                 external_provider=provider,
                 overwrite=False,
             )
-            geometry_id = int(
-                coder.register_external_geometry(
+            geometry_id = (
+                int(coder.register_external_geometry(
                     name=external_geometry_name,
                     external_ref=_external_ref(
-                        geometry_artifact,
-                        text=text_artifact,
+                        geometry_artifact, text=text_artifact,
                     ),
-                    supports_query=resolved_supports_query,
-                    supports_text_transform=text_replay,
-                )
+                    supports_query=True,
+                    supports_text_transform=True,
+                ))
+                if geometry_artifact is not None else None
             )
             for view_name, view in projection_artifacts.items():
                 coder.register_external_view(
