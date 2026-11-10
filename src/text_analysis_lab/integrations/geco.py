@@ -140,82 +140,100 @@ class TeALGeCoProvider:
         artifact_id: str,
         ordered_user_keys: list[dict[str, Any]] | None,
     ) -> Any:
-        """Read any registered topic matrix/table by compatible stable keys.
+        """Read one topic artifact through a callback-local TeAL session."""
+        return self.read_artifacts([(artifact_id, ordered_user_keys)])[0]
 
-        Sparse/dense membership matrices and keyed ArgMax tables retain only
-        matched requested keys. A subset primary key broadcasts ancestor rows
-        to compatible finer-grained GeCo observations without fake assignments.
-        Geometry and projection reads keep their existing strict contract.
+    def read_artifacts(
+        self,
+        requests: list[tuple[str, list[dict[str, Any]] | None]],
+    ) -> list[Any]:
+        """Read related topic artifacts in one TeAL project/query session.
+
+        Batch-scoped sessions retain thread isolation while eliminating repeated
+        DuckDB connection creation for membership, ArgMax and description reads.
+        Results are detached before the project session closes.
         """
-        # GeCo is an optional dependency and imported only on linked use.
-        from geometric_coder.topic_artifacts import ArtifactRows
+        if not requests:
+            return []
+        with self._project_session() as project:
+            return [
+                self._read_artifact_in_session(project, artifact_id, keys)
+                for artifact_id, keys in requests
+            ]
 
+    def _read_artifact_in_session(
+        self,
+        project: Project,
+        artifact_id: str,
+        ordered_user_keys: list[dict[str, Any]] | None,
+    ) -> Any:
+        # GeCo remains an optional dependency.
+        from geometric_coder.topic_artifacts import ArtifactRows
         if not isinstance(artifact_id, str) or not artifact_id.strip():
             raise GeCoIntegrationError("Topic artifact ID must be a nonempty string.")
-        with self._project_session() as project:
-            try:
-                artifact = project.get_artifact(artifact_id)
-            except ArtifactNotFoundError as exc:
-                raise GeCoIntegrationError(
-                    f"Topic artifact {artifact_id!r} is not available."
-                ) from exc
-            if artifact.artifact_type not in {*_MATRIX_TYPES, ArtifactType.TABLE}:
-                raise GeCoIntegrationError(
-                    f"Topic artifact {artifact_id!r} must be a matrix or table."
-                )
-            columns = list(artifact.get_data_columns())
-            if ordered_user_keys is None:
-                if artifact.artifact_type not in _MATRIX_TYPES:
-                    raise GeCoIntegrationError(
-                        "Independent topic descriptions must be matrices."
-                    )
-                key_rows = artifact.query(
-                    key_columns=True, data_columns=False,
-                    metadata_columns=False, order_by="_position", form="table"
-                )
-                row_ids = (
-                    key_rows[str(artifact.primary_key[0])].tolist()
-                    if len(artifact.primary_key) == 1 else None
-                )
-                return ArtifactRows(
-                    kind="matrix", values=artifact.get_matrix().copy(),
-                    columns=columns, row_ids=row_ids,
-                )
-
-            if not artifact.primary_key:
-                raise GeCoIntegrationError(
-                    f"Topic artifact {artifact_id!r} has no primary key."
-                )
-            keys = _normalize_ordered_keys(
-                ordered_user_keys, artifact.primary_key
+        try:
+            artifact = project.get_artifact(artifact_id)
+        except ArtifactNotFoundError as exc:
+            raise GeCoIntegrationError(
+                f"Topic artifact {artifact_id!r} is not available."
+            ) from exc
+        if artifact.artifact_type not in {*_MATRIX_TYPES, ArtifactType.TABLE}:
+            raise GeCoIntegrationError(
+                f"Topic artifact {artifact_id!r} must be a matrix or table."
             )
-            # This batched left-key query reports missing keys as nulls.
-            # Public positions_by_keys is strict and rejects partial coverage.
-            records = project.query._fetch_by_keys(
-                artifact, keys, select_exprs=["k._position AS _position"]
-            )
-            matched = [
-                (i, int(rec["_position"]))
-                for i, rec in enumerate(records)
-                if rec.get("_position") is not None
-            ]
-            matched_positions = [i for i, _ in matched]
-            positions = [p for _, p in matched]
-            if artifact.artifact_type in _MATRIX_TYPES:
-                return ArtifactRows(
-                    kind="matrix",
-                    values=artifact.get_matrix(positions=positions).copy(),
-                    columns=columns, positions=matched_positions,
+        columns = list(artifact.get_data_columns())
+        if ordered_user_keys is None:
+            if artifact.artifact_type not in _MATRIX_TYPES:
+                raise GeCoIntegrationError(
+                    "Independent topic descriptions must be matrices."
                 )
-            frame = artifact.query(
-                key_columns=False, data_columns=True,
-                metadata_columns=False, positions=positions, form="table",
+            key_rows = artifact.query(
+                key_columns=True, data_columns=False,
+                metadata_columns=False, order_by="_position", form="table"
+            )
+            row_ids = (
+                key_rows[str(artifact.primary_key[0])].tolist()
+                if len(artifact.primary_key) == 1 else None
             )
             return ArtifactRows(
-                kind="table",
-                values=frame.loc[:, columns].reset_index(drop=True).copy(),
+                kind="matrix", values=artifact.get_matrix().copy(),
+                columns=columns, row_ids=row_ids,
+            )
+
+        if not artifact.primary_key:
+            raise GeCoIntegrationError(
+                f"Topic artifact {artifact_id!r} has no primary key."
+            )
+        keys = _normalize_ordered_keys(
+            ordered_user_keys, artifact.primary_key
+        )
+        # This batched left-key query reports missing keys as nulls.
+        # Public positions_by_keys is strict and rejects partial coverage.
+        records = project.query._fetch_by_keys(
+            artifact, keys, select_exprs=["k._position AS _position"]
+        )
+        matched = [
+            (i, int(rec["_position"]))
+            for i, rec in enumerate(records)
+            if rec.get("_position") is not None
+        ]
+        matched_positions = [i for i, _ in matched]
+        positions = [p for _, p in matched]
+        if artifact.artifact_type in _MATRIX_TYPES:
+            return ArtifactRows(
+                kind="matrix",
+                values=artifact.get_matrix(positions=positions).copy(),
                 columns=columns, positions=matched_positions,
             )
+        frame = artifact.query(
+            key_columns=False, data_columns=True,
+            metadata_columns=False, positions=positions, form="table",
+        )
+        return ArtifactRows(
+            kind="table",
+            values=frame.loc[:, columns].reset_index(drop=True).copy(),
+            columns=columns, positions=matched_positions,
+        )
 
     def _matrix_artifact(
         self,
