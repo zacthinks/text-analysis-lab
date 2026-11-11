@@ -241,3 +241,138 @@ def test_artifact_count_vectorizer_fit_translate_resume_freezes_vocabulary(
         assert frozen.vocabulary_
     finally:
         project.close()
+
+
+def test_frozen_spacy_dtm_with_metadata_filters_and_native_replay(
+    tmp_path: Path,
+) -> None:
+    """Token-only DTM with filtered zero groups; no target artifact."""
+    _external_modules()
+    model_dir = _saved_sentencizer_model(tmp_path)
+    source_rows = pd.DataFrame({
+        "document_id": [1, 2, 3],
+        "text": ["alpha the beta", "and the", "beta beta"],
+    })
+    path = tmp_path / "token_only"
+    project = teal.Project.create(path, name="token_only_count")
+    try:
+        source = _seed_documents(project, source_rows)
+        tokens = project.translate(
+            SpacyTranslator(model=str(model_dir), save_model=True),
+            source, workers=1, batch_size=2,
+        )["tokens"]
+        vectorizer = ArtifactCountVectorizer(
+            field="text", group_by=("document_id",),
+            metadata_filters={"is_alpha": True, "is_stop": False},
+            min_df=1,
+        )
+        matrix = project.translate(
+            vectorizer, tokens, workers=1,
+            batch_by="document_id", batch_size=2,
+        )["output"]
+        assert matrix.primary_key == ["document_id"]
+        assert matrix.n_rows == 3
+        assert matrix.descriptor["lineage"]["lineage_mode"] == "reduced_key"
+        assert matrix.get_data_columns() == ["alpha", "beta"]
+        assert matrix.get_matrix().toarray().tolist() == [
+            [1, 1], [0, 0], [0, 2],
+        ]
+        pipeline = project.pipeline(start=source, end=matrix)
+        values = pipeline.translate(["alpha the", "beta beta"])["output"]["values"]
+        assert values.toarray().tolist() == [[1, 0], [0, 2]]
+        artifact_id = matrix.artifact_id
+        source_id = source.artifact_id
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(path)
+    try:
+        recovered = reopened.pipeline(start=source_id, end=artifact_id)
+        values = recovered.translate(["beta", "alpha"])["output"]["values"]
+        assert values.toarray().tolist() == [[0, 1], [1, 0]]
+    finally:
+        reopened.close()
+
+
+def test_custom_spacy_sentence_key_preserves_frozen_bigram_boundaries(
+    tmp_path: Path,
+) -> None:
+    """A known bigram must never arise only by joining two sentence edges."""
+    _external_modules()
+    model_dir = _saved_sentencizer_model(tmp_path)
+    project = teal.Project.create(tmp_path / "custom_sentences", name="custom_sentences")
+    try:
+        source = _seed_documents(project, pd.DataFrame({
+            "document_id": [1, 2],
+            "text": ["alpha beta. gamma delta.", "beta gamma."],
+        }))
+        tokens = project.translate(
+            SpacyTranslator(
+                model=str(model_dir), save_model=True, sentence_key="segment_id",
+            ), source, workers=1,
+        )["tokens"]
+        assert tokens.primary_key == ["document_id", "segment_id", "token_id"]
+        output = project.translate(
+            ArtifactCountVectorizer(
+                field="text", group_by=("document_id",),
+                metadata_filters={"is_alpha": True, "is_stop": False},
+                ngram_range=(2, 2),
+            ), tokens, workers=1, batch_by="document_id", batch_size=2,
+        )["output"]
+        columns = output.get_data_columns()
+        assert "beta_gamma" in columns
+        original = output.get_matrix().toarray()
+        beta_gamma = columns.index("beta_gamma")
+        assert original[0, beta_gamma] == 0
+        assert original[1, beta_gamma] == 1
+        replay = project.pipeline(start=source, end=output).translate(
+            ["alpha beta. gamma delta."]
+        )["output"]["values"].toarray()
+        assert replay.shape == (1, len(columns))
+        np.testing.assert_array_equal(replay[0], original[0])
+    finally:
+        project.close()
+
+
+def test_spacy_dummy_token_is_learned_as_vocab_feature_and_can_be_filtered(
+    tmp_path: Path,
+) -> None:
+    from text_analysis_lab.translators.spacy_translator import EMPTY_TOKEN_TEXT
+
+    _external_modules()
+    model_dir = _saved_sentencizer_model(tmp_path)
+    project = teal.Project.create(tmp_path / "dummy_vocab", name="dummy_vocab")
+    try:
+        documents = _seed_documents(project, pd.DataFrame({
+            "document_id": [1, 2, 3],
+            "text": ["apple", "", "banana"],
+        }))
+        tokens = project.translate(
+            SpacyTranslator(
+                model=str(model_dir), save_model=True, empty_doc="dummy",
+            ),
+            documents, workers=1,
+        )["tokens"]
+        assert tokens.n_rows == 3
+        matrix = project.translate(
+            ArtifactCountVectorizer(
+                field="text", group_by=("document_id",),
+            ),
+            tokens, workers=1,
+        )["output"]
+        assert matrix.n_rows == 3
+        columns = matrix.get_data_columns()
+        assert EMPTY_TOKEN_TEXT in columns
+        assert matrix.get_matrix().toarray()[1, columns.index(EMPTY_TOKEN_TEXT)] == 1
+
+        filtered = project.translate(
+            ArtifactCountVectorizer(
+                field="text", group_by=("document_id",),
+                metadata_filters={"is_placeholder": False},
+            ), tokens, workers=1,
+        )["output"]
+        assert filtered.n_rows == 3
+        assert EMPTY_TOKEN_TEXT not in filtered.get_data_columns()
+        assert filtered.get_matrix()[1].nnz == 0
+    finally:
+        project.close()

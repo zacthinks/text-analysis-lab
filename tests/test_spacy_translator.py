@@ -533,3 +533,67 @@ def test_spacy_pipeline_cache_reuses_loaded_pipeline_within_process(
     second = module._load_spacy_pipeline(str(model_dir), ())
     assert first is second
     assert module._load_spacy_pipeline.cache_info().hits >= 1
+
+
+def test_spacy_empty_document_defaults_to_error_and_can_emit_countable_dummy(
+    monkeypatch,
+) -> None:
+    import spacy
+    import text_analysis_lab.translators.spacy_translator as module
+    from text_analysis_lab.translators.spacy_translator import EMPTY_TOKEN_TEXT
+
+    nlp = spacy.blank("en")
+    nlp.add_pipe("sentencizer")
+    monkeypatch.setattr(module, "_load_spacy_pipeline", lambda model, disable: nlp)
+    frame = pd.DataFrame({
+        "collection_id": [1, 1],
+        "document_id": [10, 11],
+        "text": ["apple", ""],
+    })
+    with pytest.raises(ArtifactError, match="source_position 1"):
+        SpacyTranslator(model="fake").translate_batch(
+            {"source": _packet(frame)}, mode="translate",
+            request=TranslationRequest(),
+        )
+    operator = SpacyTranslator(model="fake", empty_doc="dummy")
+    outputs = operator.translate_batch(
+        {"source": _packet(frame)}, mode="translate",
+        request=TranslationRequest(),
+    ).outputs
+    token_rows = pd.concat(
+        [outputs[TOKENS_LABEL]["keys"], outputs[TOKENS_LABEL]["data"]],
+        axis=1,
+    )
+    assert token_rows["document_id"].tolist() == [10, 11]
+    assert token_rows["is_placeholder"].tolist() == [False, True]
+    assert token_rows["text"].tolist() == ["apple", EMPTY_TOKEN_TEXT]
+    assert token_rows["lemma"].tolist() == ["", EMPTY_TOKEN_TEXT]
+    assert token_rows["is_alpha"].tolist() == [True, False]
+    assert token_rows["is_stop"].tolist() == [False, False]
+    assert token_rows["char_start"].tolist() == [0, 0]
+    assert token_rows["char_end"].tolist() == [5, 0]
+    assert outputs[SENTENCES_LABEL]["keys"]["document_id"].tolist() == [10, 11]
+    assert outputs[SENTENCES_LABEL]["data"]["text"].tolist() == ["apple", ""]
+    assert operator.from_json_state(operator.to_json_state()).empty_doc == "dummy"
+    assert SpacyTranslator.from_json_state({"model": "fake"}).empty_doc == "raise"
+    with pytest.raises(ValueError, match="empty_doc"):
+        SpacyTranslator(model="fake", empty_doc="ignore")
+
+
+def test_spacy_dummy_token_replays_identically_using_saved_configuration(
+    monkeypatch,
+) -> None:
+    import spacy
+    import text_analysis_lab.translators.spacy_translator as module
+    from text_analysis_lab.translators.spacy_translator import EMPTY_TOKEN_TEXT
+
+    nlp = spacy.blank("en")
+    nlp.add_pipe("sentencizer")
+    monkeypatch.setattr(module, "_load_spacy_pipeline", lambda model, disable: nlp)
+    operator = SpacyTranslator(model="fake", empty_doc="dummy")
+    direct = operator.translate(["", "banana"])["tokens"]
+    recovered = SpacyTranslator.from_json_state(operator.to_json_state())
+    replay = recovered.translate(["", "banana"])["tokens"]
+    pd.testing.assert_frame_equal(direct, replay)
+    assert direct.iloc[0]["text"] == EMPTY_TOKEN_TEXT
+    assert direct.iloc[0]["is_placeholder"]
