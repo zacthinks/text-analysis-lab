@@ -16,6 +16,22 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
+## [0.11.2] - release pending
+
+### Added
+
+- Boolean `metadata_filters` in `ArtifactCountVectorizer`, applied before feature generation while preserving the existing tokens-only input, grouped batching, and fitted vocabulary semantics (PR #72).
+- Explicit spaCy behavior for inputs that produce no tokens: error by default, or opt-in `empty_doc="dummy"` to emit a countable synthetic token with `is_placeholder=True` that may become a vocabulary feature (PR #72).
+
+### Fixed
+
+- Frozen spaCy-to-count-vectorizer replay respects custom sentence-key names, preventing n-grams from crossing sentence boundaries during standalone transformation (PR #72).
+
+### Notes
+
+- Token groups with rows that all fail metadata filters receive zero vectors. Inputs for which spaCy emits no token rows are rejected by default; opt-in dummy tokens can instead preserve their presence for downstream vectorization.
+- The new spaCy setting is frozen with the translator; no additional target artifact or multi-source batching contract is introduced.
+
 ## [0.11.1] - 2026-11-05
 
 ### Fixed
