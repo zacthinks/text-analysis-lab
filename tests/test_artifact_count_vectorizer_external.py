@@ -241,3 +241,55 @@ def test_artifact_count_vectorizer_fit_translate_resume_freezes_vocabulary(
         assert frozen.vocabulary_
     finally:
         project.close()
+
+
+def test_frozen_spacy_dtm_with_metadata_filters_target_and_native_replay(
+    tmp_path: Path,
+) -> None:
+    """Fit on original token rows, keep empty texts, replay frozen query pipeline."""
+    _external_modules()
+    model_dir = _saved_sentencizer_model(tmp_path)
+    source_rows = pd.DataFrame({
+        "document_id": [1, 2, 3, 4],
+        "text": [
+            "alpha the beta", "and the", "!!!", "",
+        ],
+    })
+    path = tmp_path / "with_target"
+    project = teal.Project.create(path, name="target_aligned_count")
+    try:
+        source = _seed_documents(project, source_rows)
+        tokens = project.translate(
+            SpacyTranslator(model=str(model_dir), save_model=True),
+            source, workers=1, batch_size=2,
+        )["tokens"]
+        vectorizer = ArtifactCountVectorizer(
+            field="text", group_by=("document_id",),
+            metadata_filters={"is_alpha": True, "is_stop": False},
+            min_df=1,
+        )
+        matrix = project.translate(
+            vectorizer, {"source": tokens, "target": source}, workers=1,
+        )["output"]
+        assert matrix.primary_key == ["document_id"]
+        assert matrix.n_rows == 4
+        assert matrix.descriptor["lineage"]["lineage_mode"] == "preserved_key"
+        assert matrix.get_data_columns() == ["alpha", "beta"]
+        assert matrix.get_matrix().toarray().tolist() == [
+            [1, 1], [0, 0], [0, 0], [0, 0],
+        ]
+        pipeline = project.pipeline(start=source, end=matrix)
+        values = pipeline.translate(["alpha the", "", "beta beta"])["output"]["values"]
+        assert values.toarray().tolist() == [[1, 0], [0, 0], [0, 2]]
+        artifact_id = matrix.artifact_id
+        source_id = source.artifact_id
+    finally:
+        project.close()
+
+    reopened = teal.Project.open(path)
+    try:
+        recovered = reopened.pipeline(start=source_id, end=artifact_id)
+        values = recovered.translate(["beta", "!!!"])["output"]["values"]
+        assert values.toarray().tolist() == [[0, 1], [0, 0]]
+    finally:
+        reopened.close()
