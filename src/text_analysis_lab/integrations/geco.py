@@ -722,6 +722,96 @@ class LinkedGeCoWorkspace:
             stale_at_export=(status == "stale"),
         )
 
+    def available_spacy_tokens(self) -> list[dict[str, str]]:
+        """Return compatible reusable spaCy token choices for this linked text.
+
+        TeAL alone checks operation provenance, lineage, frozen operators and
+        replayability. GeCo receives only UI labels and opaque selection IDs.
+        """
+        from text_analysis_lab.translators import SpacyTranslator
+
+        source = self._project.get_artifact(str(self._manifest["text_artifact_id"]))
+        source_id = str(source.artifact_id)
+        source_key = tuple(source.primary_key)
+        text_field = str(self._manifest.get("text_field", "text"))
+        source_operation = self._project.operation_for_artifact(source)
+        source_is_sentences = False
+        if source_operation is not None:
+            source_is_sentences = any(
+                str(item.get("artifact_id")) == source_id
+                and str(item.get("output_label")) == "sentences"
+                for item in self._project.operation_outputs(
+                    str(source_operation["operation_id"])
+                )
+            )
+
+        records: dict[str, dict[str, Any]] = {}
+        for row in [
+            *self._project.list_artifacts(
+                artifact_type="table", source_artifact_id=source_id,
+            ),
+            *self._project.list_artifacts(
+                artifact_type="table", basis_artifact_id=source_id,
+            ),
+        ]:
+            records[str(row["artifact_id"])] = row
+
+        candidates: list[dict[str, str]] = []
+        for artifact_id, row in records.items():
+            try:
+                candidate = self._project.get_artifact(artifact_id)
+                operation = self._project.operation_for_artifact(candidate)
+                if operation is None or str(operation.get("status")) != "complete":
+                    continue
+                operation_id = str(operation["operation_id"])
+                if not any(
+                    str(item.get("artifact_id")) == artifact_id
+                    and str(item.get("output_label")) == "tokens"
+                    for item in self._project.operation_outputs(operation_id)
+                ):
+                    continue
+                translator = self._project.get_operator(str(operation["operator_id"]))
+                if not isinstance(translator, SpacyTranslator):
+                    continue
+
+                key = tuple(candidate.primary_key)
+                direct = (
+                    len(key) == len(source_key) + 2
+                    and key[:len(source_key)] == source_key
+                    and translator.text_field == text_field
+                    and any(
+                        str(item.get("source_artifact_id")) == source_id
+                        for item in self._project.operation_sources(operation_id)
+                    )
+                )
+                sibling = (
+                    source_is_sentences
+                    and source_operation is not None
+                    and str(source_operation["operation_id"]) == operation_id
+                    and len(key) == len(source_key) + 1
+                    and key[:len(source_key)] == source_key
+                    and any(
+                        str(edge.get("basis_artifact_id")) == source_id
+                        for edge in self._project.catalog.artifact_basis(artifact_id)
+                    )
+                )
+                if not (direct or sibling):
+                    continue
+
+                self._project.pipeline(
+                    start=source, end=candidate, allow_looser_lineage=True,
+                )
+                aliases = row.get("aliases") or []
+                display = str(aliases[0]) if aliases else f"Tokens {artifact_id[:8]}"
+                candidates.append({
+                    "label": f"{display} — {translator.model}",
+                    "value": artifact_id,
+                })
+            except (KeyError, ValueError, PipelineError, TypeError):
+                # Exclude incomplete, incompatible or non-replayable choices.
+                continue
+        return sorted(candidates, key=lambda item: item["label"].casefold())
+
     def add_geometry(
         self,
         name: str,
