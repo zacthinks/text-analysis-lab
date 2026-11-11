@@ -423,6 +423,20 @@ def test_frozen_spacy_sibling_tokens_replay_from_sentence_artifact(
         )
         assert len(frozen.stages) == 2
         assert isinstance(frozen.stages[0].translator, SpacyTranslator)
+        # Looser reconstruction does not disable valid artifact execution.
+        # The original frozen spaCy translator can still consume documents.
+        assert frozen.execution_capabilities(project=project).artifact
+        reconstructed = frozen.run_artifacts(project, documents)["output"]
+        assert reconstructed.primary_key == matrix.primary_key
+        np.testing.assert_array_equal(
+            reconstructed.get_matrix().toarray(),
+            matrix.get_matrix().toarray(),
+        )
+        # The *sentence artifact* is not a valid artifact-mode input:
+        # spaCy would try to introduce a sentence_id already in its keys.
+        from text_analysis_lab.core.errors import OperatorError
+        with pytest.raises(OperatorError, match="already present"):
+            frozen.run_artifacts(project, sentences)
         transformed = frozen.translate(original_texts, project=project)
         np.testing.assert_array_equal(
             transformed["output"]["values"].toarray(),
@@ -443,3 +457,67 @@ def test_frozen_spacy_sibling_tokens_replay_from_sentence_artifact(
         values = frozen.translate(["alpha beta."], project=reopened)["output"]["values"]
         assert values.shape[0] == 1
         assert values.nnz == 2
+
+
+@pytest.mark.parametrize("failure", ["operator", "artifact"])
+def test_spacy_token_discovery_skips_unloadable_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    """One unusable saved token artifact must not hide another valid choice."""
+    from text_analysis_lab.core.errors import ArtifactError, OperatorError
+    from text_analysis_lab.integrations.geco import LinkedGeCoWorkspace
+
+    _external_modules()
+    model_dir = _saved_sentencizer_model(tmp_path)
+    project = teal.Project.create(tmp_path / "token_discovery", name="token_discovery")
+    try:
+        documents = _seed_documents(project, pd.DataFrame({
+            "document_id": [1, 2],
+            "text": ["alpha beta.", "gamma delta."],
+        }))
+        stale = project.translate(
+            SpacyTranslator(model=str(model_dir), save_model=True),
+            documents, workers=1,
+        )["tokens"]
+        healthy = project.translate(
+            SpacyTranslator(model=str(model_dir), save_model=True),
+            documents, workers=1,
+        )["tokens"]
+        stale_operator_id = str(
+            project.operation_for_artifact(stale)["operator_id"]
+        )
+
+        # Exercise the actual TeAL discovery implementation without requiring
+        # the optional GeCo package or an actual GeCo UI.
+        linked = object.__new__(LinkedGeCoWorkspace)
+        linked._project = project
+        linked._manifest = {
+            "text_artifact_id": str(documents.artifact_id),
+            "text_field": "text",
+        }
+
+        if failure == "operator":
+            original_get_operator = project.get_operator
+
+            def broken_operator(ref, **kwargs):
+                if str(ref) == stale_operator_id:
+                    raise OperatorError("Legacy spaCy snapshot is not loadable.")
+                return original_get_operator(ref, **kwargs)
+
+            monkeypatch.setattr(project, "get_operator", broken_operator)
+        else:
+            original_get_artifact = project.get_artifact
+
+            def broken_artifact(ref, **kwargs):
+                if str(ref) == str(stale.artifact_id):
+                    raise ArtifactError("Saved token descriptor is unavailable.")
+                return original_get_artifact(ref, **kwargs)
+
+            monkeypatch.setattr(project, "get_artifact", broken_artifact)
+
+        options = linked.available_spacy_tokens()
+        ids = {option["value"] for option in options}
+        assert str(healthy.artifact_id) in ids
+        assert str(stale.artifact_id) not in ids
+    finally:
+        project.close()
