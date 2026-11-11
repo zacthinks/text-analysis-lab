@@ -415,7 +415,12 @@ def test_frozen_spacy_sibling_tokens_replay_from_sentence_artifact(
             order_by="_position", form="table",
         )
         original_texts = sentence_rows["text"].tolist()
-        frozen = project.pipeline(start=sentences, end=matrix)
+        from text_analysis_lab.core.errors import PipelineError
+        with pytest.raises(PipelineError):
+            project.pipeline(start=sentences, end=matrix)
+        frozen = project.pipeline(
+            start=sentences, end=matrix, allow_looser_lineage=True,
+        )
         assert len(frozen.stages) == 2
         assert isinstance(frozen.stages[0].translator, SpacyTranslator)
         transformed = frozen.translate(original_texts, project=project)
@@ -429,7 +434,12 @@ def test_frozen_spacy_sibling_tokens_replay_from_sentence_artifact(
         project.close()
 
     with teal.Project.open(project_path) as reopened:
-        frozen = reopened.pipeline(start=sentence_id, end=matrix_id)
+        from text_analysis_lab.core.errors import PipelineError
+        with pytest.raises(PipelineError):
+            reopened.pipeline(start=sentence_id, end=matrix_id)
+        frozen = reopened.pipeline(
+            start=sentence_id, end=matrix_id, allow_looser_lineage=True,
+        )
         values = frozen.translate(["alpha beta."], project=reopened)["output"]["values"]
         assert values.shape[0] == 1
         assert values.nnz == 2
