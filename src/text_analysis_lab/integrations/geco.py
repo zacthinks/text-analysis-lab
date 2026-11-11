@@ -262,7 +262,7 @@ class TeALGeCoProvider:
             artifact = self._matrix_artifact(project, external_ref, purpose="geometry")
             start_id = _text_artifact_id_from_external_ref(external_ref)
             try:
-                pipeline = project.pipeline(start=start_id, end=artifact)
+                pipeline = project.pipeline(start=start_id, end=artifact, allow_looser_lineage=True)
                 result = pipeline.translate(
                     ["" if value is None else str(value) for value in texts],
                     project=project,
@@ -742,7 +742,7 @@ class LinkedGeCoWorkspace:
             str(self._manifest["text_artifact_id"])
         )
         try:
-            self._project.pipeline(start=text_source, end=geometry)
+            self._project.pipeline(start=text_source, end=geometry, allow_looser_lineage=True)
         except PipelineError as exc:
             raise GeCoIntegrationError(
                 f"TeAL geometry {geometry.artifact_id!r} is not replayable from "
@@ -1005,6 +1005,7 @@ class GeCoManager:
             self.project.pipeline(
                 start=text_artifact,
                 end=geometry_artifact,
+                allow_looser_lineage=True,
             )
         except PipelineError as exc:
             raise GeCoIntegrationError(
