@@ -292,3 +292,43 @@ def test_frozen_spacy_dtm_with_metadata_filters_and_native_replay(
         assert values.toarray().tolist() == [[0, 1], [1, 0]]
     finally:
         reopened.close()
+
+
+def test_custom_spacy_sentence_key_preserves_frozen_bigram_boundaries(
+    tmp_path: Path,
+) -> None:
+    """A known bigram must never arise only by joining two sentence edges."""
+    _external_modules()
+    model_dir = _saved_sentencizer_model(tmp_path)
+    project = teal.Project.create(tmp_path / "custom_sentences", name="custom_sentences")
+    try:
+        source = _seed_documents(project, pd.DataFrame({
+            "document_id": [1, 2],
+            "text": ["alpha beta. gamma delta.", "beta gamma."],
+        }))
+        tokens = project.translate(
+            SpacyTranslator(
+                model=str(model_dir), save_model=True, sentence_key="segment_id",
+            ), source, workers=1,
+        )["tokens"]
+        assert tokens.primary_key == ["document_id", "segment_id", "token_id"]
+        output = project.translate(
+            ArtifactCountVectorizer(
+                field="text", group_by=("document_id",),
+                metadata_filters={"is_alpha": True, "is_stop": False},
+                ngram_range=(2, 2),
+            ), tokens, workers=1, batch_by="document_id", batch_size=2,
+        )["output"]
+        columns = output.get_data_columns()
+        assert "beta_gamma" in columns
+        original = output.get_matrix().toarray()
+        beta_gamma = columns.index("beta_gamma")
+        assert original[0, beta_gamma] == 0
+        assert original[1, beta_gamma] == 1
+        replay = project.pipeline(start=source, end=output).translate(
+            ["alpha beta. gamma delta."]
+        )["output"]["values"].toarray()
+        assert replay.shape == (1, len(columns))
+        np.testing.assert_array_equal(replay[0], original[0])
+    finally:
+        project.close()
