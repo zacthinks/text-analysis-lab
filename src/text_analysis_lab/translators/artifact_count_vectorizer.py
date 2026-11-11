@@ -138,12 +138,14 @@ class ArtifactCountVectorizer(BaseTranslator):
         frame: pd.DataFrame,
         *,
         source_key: Sequence[str] | None = None,
+        target: pd.DataFrame | Sequence[str] | None = None,
     ) -> dict[str, Any]:
-        """Count a fitted vocabulary over an ordinary annotated row table.
+        """Count the frozen vocabulary over an ordinary keyed token table.
 
-        source_key is required only when sequence_by was not configured,
-        because the default sequence boundary is the immediate parent of that
-        hierarchical key.
+        A recovered spaCy pipeline uses source_position as a temporary key
+        rather than original project key names. If a standalone text sequence
+        is supplied as target, each text is represented (including empty
+        texts) in its original input order.
         """
         if not isinstance(frame, pd.DataFrame):
             raise TypeError(
@@ -154,40 +156,100 @@ class ArtifactCountVectorizer(BaseTranslator):
                 "ArtifactCountVectorizer has no fitted vocabulary."
             )
 
-        if self.sequence_by is None:
+        regular_keys = all(column in frame for column in self.group_by)
+        ephemeral_keys = (
+            not regular_keys and "source_position" in frame.columns
+        )
+        if ephemeral_keys:
+            effective_group_by = ("source_position",)
+            # Retain explicit cross-sentence n-gram choice when sequence_by
+            # equals group_by in the original fitted configuration.
+            cross_sentence = (
+                self.sequence_by is not None
+                and tuple(self.sequence_by) == tuple(self.group_by)
+            )
+            sequence_by = (
+                ("source_position",)
+                if cross_sentence or "sentence_id" not in frame.columns
+                else ("source_position", "sentence_id")
+            )
+        elif self.sequence_by is None:
             if source_key is None:
                 raise ValueError(
                     "ArtifactCountVectorizer.translate(...) requires source_key "
                     "when sequence_by was not configured."
                 )
+            effective_group_by = tuple(self.group_by)
             sequence_by = self._validate_source_key(source_key)
         else:
+            effective_group_by = tuple(self.group_by)
             sequence_by = tuple(self.sequence_by)
-            if not _is_prefix(self.group_by, sequence_by):
+            if not _is_prefix(effective_group_by, sequence_by):
                 raise OperatorError(
                     "sequence_by must retain group_by as its prefix; got "
-                    f"group_by={list(self.group_by)}, sequence_by={list(sequence_by)}."
+                    f"group_by={list(effective_group_by)}, sequence_by={list(sequence_by)}."
                 )
 
         required = [*dict.fromkeys([
-            *self.group_by, *sequence_by, self.field, *self.metadata_filters,
+            *effective_group_by, *sequence_by, self.field,
+            *self.metadata_filters,
         ])]
         missing = [name for name in required if name not in frame.columns]
         if missing:
             raise ArtifactError(
                 f"ArtifactCountVectorizer source is missing columns {missing}."
             )
-        group_keys, events = _build_feature_events(
-            frame,
-            field=self.field,
-            group_by=self.group_by,
-            sequence_by=sequence_by,
-            ngram_range=self.ngram_range,
-            drop_empty=self.drop_empty,
-            ngram_separator=self.ngram_separator,
-            metadata_filters=self.metadata_filters,
-        )
-        return self._translate_events(group_keys, events)
+        if frame.empty:
+            # Native spaCy output contains no token rows when all input texts
+            # are empty. We can still produce fixed-width zeros if target is
+            # specified; otherwise there is no authoritative row universe.
+            if target is None:
+                raise ArtifactError(
+                    "ArtifactCountVectorizer cannot infer document keys "
+                    "from an empty token table without target."
+                )
+            group_keys = pd.DataFrame(columns=list(effective_group_by))
+            events = pd.DataFrame(
+                columns=["_group_id", "_feature_key", "_feature_label"]
+            )
+        else:
+            group_keys, events = _build_feature_events(
+                frame,
+                field=self.field,
+                group_by=effective_group_by,
+                sequence_by=sequence_by,
+                ngram_range=self.ngram_range,
+                drop_empty=self.drop_empty,
+                ngram_separator=self.ngram_separator,
+                metadata_filters=self.metadata_filters,
+            )
+        translated = self._translate_events(group_keys, events)
+        if target is not None:
+            if ephemeral_keys:
+                if isinstance(target, pd.DataFrame):
+                    if "source_position" not in target.columns:
+                        raise ValueError(
+                            "Standalone spaCy target DataFrame must contain "
+                            "source_position."
+                        )
+                    keys = target[["source_position"]]
+                elif isinstance(target, Sequence) and not isinstance(target, bytes):
+                    # str is a single text input; a sequence is a batch.
+                    length = 1 if isinstance(target, str) else len(target)
+                    keys = pd.DataFrame({"source_position": range(length)})
+                else:
+                    raise ValueError("Standalone target must contain input text keys.")
+            elif isinstance(target, pd.DataFrame):
+                keys = target.loc[:, list(effective_group_by)]
+            else:
+                raise ValueError(
+                    "Standalone target requires a keyed DataFrame unless "
+                    "using spaCy source_position."
+                )
+            translated = _align_target_rows(
+                translated, keys, effective_group_by,
+            )
+        return translated
 
     def output_specs(
         self,
