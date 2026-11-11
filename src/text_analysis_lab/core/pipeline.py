@@ -158,14 +158,16 @@ class Pipeline:
         *,
         start: BaseArtifact | str,
         end: BaseArtifact | str,
+        allow_looser_lineage: bool = False,
     ) -> Pipeline:
         """Reconstruct a transform-only Pipeline from recorded artifact provenance.
 
         ``start`` is the sole public Pipeline input and traversal stops exactly at
         that artifact. Every source required to produce ``end`` must be derivable
-        from ``start`` through recorded operations. The exact frozen translator
-        snapshots are reused; scientific intent is never guessed from configuration
-        or operation-time parameters.
+        from ``start`` through recorded operations by default. When
+        ``allow_looser_lineage=True``, narrowly verified reconstruction rules
+        may rebind a frozen operator without asserting strict historical lineage.
+        The recorded artifacts and their provenance are never altered.
         """
         start_artifact = project.get_artifact(start)
         end_artifact = project.get_artifact(end)
@@ -260,7 +262,8 @@ class Pipeline:
                         for row in output_rows
                     )
                     from_spacy_sibling = (
-                        sibling_sentences and sibling_tokens
+                        allow_looser_lineage
+                        and sibling_sentences and sibling_tokens
                         and tuple(artifact.primary_key[:len(start_artifact.primary_key)])
                             == tuple(start_artifact.primary_key)
                         and len(artifact.primary_key)
