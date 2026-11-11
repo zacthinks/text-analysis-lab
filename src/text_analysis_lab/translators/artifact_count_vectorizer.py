@@ -196,12 +196,13 @@ class ArtifactCountVectorizer(BaseTranslator):
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
-        source = _single_source(sources)
+        source, target = _count_sources(sources)
         self._validate_source_key(source.primary_key)
+        _validate_target(target, self.group_by)
         return OutputSpec(
             artifact_type="sparse_matrix",
-            lineage_mode="reduced_key",
-            basis_labels=DEFAULT_SOURCE_LABEL,
+            lineage_mode="preserved_key" if target is not None else "reduced_key",
+            basis_labels="target" if target is not None else DEFAULT_SOURCE_LABEL,
             feature_metadata_mode="own",
         )
 
@@ -226,27 +227,46 @@ class ArtifactCountVectorizer(BaseTranslator):
         sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> SourceRequest:
+    ) -> SourceRequest | Mapping[str, SourceRequest]:
         _ = mode
-        source = _single_source(sources)
+        source, target = _count_sources(sources)
         if source.artifact_type.value != "table":
             raise OperatorError(
                 "ArtifactCountVectorizer requires a table artifact source."
             )
         self._validate_source_key(source.primary_key)
+        _validate_target(target, self.group_by)
+        if target is not None and request.batch_by is not None:
+            raise OperatorError(
+                "Two-source ArtifactCountVectorizer requires whole-artifact "
+                "translation; grouped batch_by is not supported."
+            )
         grouped = request.batch_by is not None
-        return SourceRequest(
+        data_columns: str | list[str] = (
+            self.field if not self.metadata_filters else
+            list(dict.fromkeys([self.field, *self.metadata_filters]))
+        )
+        source_request = SourceRequest(
             artifact_type="table",
             mode="batches" if grouped else "full_artifact",
-            columns=ColumnRequest(
-                keys=True, data=[self.field, *self.metadata_filters], metadata=False,
-            ),
+            columns=ColumnRequest(keys=True, data=data_columns, metadata=False),
             batch_size=(request.batch_size or 100) if grouped else None,
             form="table",
             metadata_mode="none",
             include_position=False,
             min_batch_by=self.group_by[-1] if grouped else None,
         )
+        if target is None:
+            return source_request
+        return {
+            DEFAULT_SOURCE_LABEL: source_request,
+            "target": SourceRequest(
+                artifact_type="table",
+                mode="full_artifact",
+                columns=ColumnRequest(keys=True, data=False, metadata=False),
+                form="table", metadata_mode="none", include_position=False,
+            ),
+        }
 
     def translation_passes(
         self, *, sources: Mapping[str, BaseArtifact], mode: TranslationMode,
@@ -264,8 +284,21 @@ class ArtifactCountVectorizer(BaseTranslator):
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> BatchResult:
-        packet = _single_input(inputs)
+        if set(inputs) not in ({DEFAULT_SOURCE_LABEL}, {DEFAULT_SOURCE_LABEL, "target"}):
+            raise OperatorError(
+                "ArtifactCountVectorizer requires a 'source' token table "
+                "and optionally a 'target' key artifact."
+            )
+        packet = inputs[DEFAULT_SOURCE_LABEL]
         frame = _require_frame(packet.data)
+        target_keys = None
+        if "target" in inputs:
+            target_packet = inputs["target"]
+            if tuple(target_packet.primary_key) != tuple(self.group_by):
+                raise ArtifactError("Target key columns must match group_by.")
+            target_keys = _require_frame(target_packet.data).loc[
+                :, list(self.group_by)
+            ]
         source_key = tuple(str(name) for name in packet.primary_key)
         sequence_by = self._validate_source_key(source_key)
         required = [*dict.fromkeys([*source_key, self.field, *self.metadata_filters])]
@@ -324,6 +357,8 @@ class ArtifactCountVectorizer(BaseTranslator):
             raise OperatorError(f"Unsupported ArtifactCountVectorizer mode {mode!r}.")
 
         translated = self._translate_events(group_keys, events)
+        if target_keys is not None:
+            translated = _align_target_rows(translated, target_keys, self.group_by)
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
@@ -624,6 +659,64 @@ def _normalize_metadata_filters(
             )
         normalized[column] = required
     return normalized
+
+
+
+def _count_sources(
+    sources: Mapping[str, BaseArtifact],
+) -> tuple[BaseArtifact, BaseArtifact | None]:
+    if set(sources) not in ({DEFAULT_SOURCE_LABEL}, {DEFAULT_SOURCE_LABEL, "target"}):
+        raise OperatorError(
+            "ArtifactCountVectorizer sources must be {'source': tokens} "
+            "with optional 'target': key_artifact."
+        )
+    return sources[DEFAULT_SOURCE_LABEL], sources.get("target")
+
+
+def _validate_target(target: BaseArtifact | None, group_by: Sequence[str]) -> None:
+    if target is None:
+        return
+    if target.artifact_type.value != "table":
+        raise OperatorError("ArtifactCountVectorizer target must be a table artifact.")
+    if tuple(target.primary_key) != tuple(group_by):
+        raise OperatorError(
+            "Target primary-key hierarchy must exactly match group_by; "
+            f"expected {list(group_by)}, got {list(target.primary_key)}."
+        )
+
+
+def _align_target_rows(
+    result: dict[str, Any], target_keys: pd.DataFrame,
+    group_by: Sequence[str],
+) -> dict[str, Any]:
+    """Align known vectors to target keys and fill absent groups with CSR zeros."""
+    columns = list(group_by)
+    keys = result["groups"].loc[:, columns]
+    expected = target_keys.loc[:, columns]
+    if expected.duplicated().any():
+        raise ArtifactError("Target artifact contains duplicate primary keys.")
+    actual_index = pd.MultiIndex.from_frame(keys)
+    target_index = pd.MultiIndex.from_frame(expected)
+    if not actual_index.isin(target_index).all():
+        raise ArtifactError(
+            "Token rows contain group keys absent from the target artifact."
+        )
+    offsets = actual_index.get_indexer(target_index)
+    values = result["values"].tocsr()
+    matches = offsets >= 0
+    if matches.all():
+        matrix = values[offsets]
+    else:
+        # Construct COO only from observed target positions; unrepresented
+        # target rows remain structural zero vectors.
+        present_positions = np.flatnonzero(matches)
+        present_rows = values[offsets[matches]].tocoo()
+        matrix = sparse.coo_matrix(
+            (present_rows.data,
+             (present_positions[present_rows.row], present_rows.col)),
+            shape=(len(expected), values.shape[1]), dtype=values.dtype,
+        ).tocsr()
+    return {**result, "groups": expected.reset_index(drop=True), "values": matrix}
 
 
 def _normalize_key_columns(value: str | Sequence[str], *, name: str) -> tuple[str, ...]:
