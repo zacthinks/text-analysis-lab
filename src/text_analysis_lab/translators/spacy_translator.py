@@ -64,8 +64,11 @@ SENTENCE_DATA_COLUMNS: tuple[str, ...] = (
     "char_end",
 )
 
+EMPTY_TOKEN_TEXT = "__TEAL_EMPTY_SPACY_DOC__"
+
 TOKEN_DATA_COLUMNS: tuple[str, ...] = (
     "text",
+    "is_placeholder",
     "lemma",
     "norm",
     "shape",
@@ -122,6 +125,12 @@ class SpacyTranslator(BaseTranslator):
     disable:
         Optional spaCy pipeline components to disable while loading the model.
         The resulting pipeline must still provide sentence boundaries.
+    empty_doc:
+        How to handle a source document with zero spaCy tokens. "raise"
+        (default) fails with its source position; "dummy" emits a single
+        synthetic token with text/lemma/norm EMPTY_TOKEN_TEXT and
+        is_placeholder=True. The dummy is a countable token and may become
+        a vocabulary feature unless downstream metadata filters exclude it.
     save_model:
         If True, vendor the exact spaCy pipeline under the operator assets.
         The default is False: freeze an exact resource reference without copying
@@ -145,6 +154,7 @@ class SpacyTranslator(BaseTranslator):
         sentence_key: str = "sentence_id",
         token_key: str = "token_id",
         spacy_batch_size: int = 128,
+        empty_doc: str = "raise",
         disable: Sequence[str] = (),
         save_model: bool = False,
         download_model: bool = True,
@@ -168,6 +178,8 @@ class SpacyTranslator(BaseTranslator):
             raise TypeError("spacy_batch_size must be a positive integer.")
         if spacy_batch_size <= 0:
             raise ValueError("spacy_batch_size must be a positive integer.")
+        if empty_doc not in {"raise", "dummy"}:
+            raise ValueError("empty_doc must be 'raise' or 'dummy'.")
 
         normalized_disable = tuple(str(component) for component in disable)
         if any(not component for component in normalized_disable):
@@ -178,6 +190,7 @@ class SpacyTranslator(BaseTranslator):
         self.sentence_key = sentence_key
         self.token_key = token_key
         self.spacy_batch_size = int(spacy_batch_size)
+        self.empty_doc = empty_doc
         self.disable = normalized_disable
         self.save_model = bool(save_model)
         self.download_model = bool(download_model)
@@ -266,6 +279,25 @@ class SpacyTranslator(BaseTranslator):
                 token_keys=token_keys,
                 token_data=token_data,
             )
+            if not token_keys:
+                if self.empty_doc == "raise":
+                    raise ArtifactError(
+                        "spaCy produced no tokens for source_position "
+                        f"{source_position}. Remove empty documents before "
+                        "translation or use empty_doc='dummy'."
+                    )
+                sentence_keys.append({
+                    "source_position": source_position,
+                    self.sentence_key: 0,
+                })
+                sentence_data.append({
+                    "text": source_text, "char_start": 0, "char_end": len(source_text),
+                })
+                token_keys.append({
+                    "source_position": source_position,
+                    self.sentence_key: 0, self.token_key: 0,
+                })
+                token_data.append(_dummy_token_record())
             for key, data in zip(sentence_keys, sentence_data, strict=True):
                 sentence_rows.append({**key, **data})
             for key, data in zip(token_keys, token_data, strict=True):
@@ -534,6 +566,7 @@ class SpacyTranslator(BaseTranslator):
             "sentence_key": self.sentence_key,
             "token_key": self.token_key,
             "spacy_batch_size": self.spacy_batch_size,
+            "empty_doc": self.empty_doc,
             "disable": list(self.disable),
             "save_model": self.save_model,
             "download_model": self.download_model,
@@ -549,6 +582,7 @@ class SpacyTranslator(BaseTranslator):
             sentence_key=str(state.get("sentence_key", "sentence_id")),
             token_key=str(state.get("token_key", "token_id")),
             spacy_batch_size=int(state.get("spacy_batch_size", 128)),
+            empty_doc=str(state.get("empty_doc", "raise")),
             disable=cast(Sequence[str], state.get("disable", ())),
             save_model=bool(state.get("save_model", False)),
             download_model=bool(state.get("download_model", True)),
@@ -646,9 +680,35 @@ def _append_doc_rows(
             token_data.append(_token_record(token, sentence_start=sentence.start))
 
 
+def _dummy_token_record() -> dict[str, Any]:
+    # Represent an absent tokenization as one explicit synthetic token.
+    # This is deliberately eligible for vocabulary learning; callers may
+    # exclude it via metadata_filters={"is_placeholder": False}.
+    data: dict[str, Any] = {
+        name: "" for name in TOKEN_DATA_COLUMNS
+    }
+    data.update({
+        "text": EMPTY_TOKEN_TEXT,
+        "lemma": EMPTY_TOKEN_TEXT,
+        "norm": EMPTY_TOKEN_TEXT,
+        "is_placeholder": True,
+        "head_token_id": 0,
+        "char_start": 0,
+        "char_end": 0,
+        "is_sent_start": True,
+        "is_sent_end": True,
+    })
+    for name in TOKEN_DATA_COLUMNS:
+        if name.startswith("is_") or name.startswith("like_"):
+            if name not in {"is_placeholder", "is_sent_start", "is_sent_end"}:
+                data[name] = False
+    return data
+
+
 def _token_record(token: Any, *, sentence_start: int) -> dict[str, Any]:
     return {
         "text": token.text,
+        "is_placeholder": False,
         "lemma": token.lemma_,
         "norm": token.norm_,
         "shape": token.shape_,
