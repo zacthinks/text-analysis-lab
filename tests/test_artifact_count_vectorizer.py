@@ -372,7 +372,7 @@ def test_tokens_only_excludes_unrepresented_documents_but_keeps_filtered_groups(
     # Doc 3 is not present in the token table and is not invented.
     assert len(result["keys"]) == 2
     with pytest.raises(ArtifactError, match="empty"):
-        operator.translate(frame.iloc[:0])
+        operator.translate(frame.iloc[:0], source_key=("doc_id", "sentence_id", "token_id"))
 
 
 def test_metadata_filtered_tokens_support_grouped_batching() -> None:
