@@ -812,6 +812,32 @@ class LinkedGeCoWorkspace:
                 continue
         return sorted(candidates, key=lambda item: item["label"].casefold())
 
+    def validate_text_replay(self, geometry: BaseArtifact | str) -> None:
+        """Verify that a frozen text-to-numeric replay works for this workspace.
+
+        GeCo requests a text transformation, not provenance reconstruction.
+        """
+        artifact = self._project.get_artifact(geometry)
+        text_source = self._project.get_artifact(str(self._manifest["text_artifact_id"]))
+        try:
+            pipeline = self._project.pipeline(
+                start=text_source, end=artifact, allow_looser_lineage=True,
+            )
+            result = pipeline.translate(
+                ["geco replay probe"], project=self._project,
+            )["output"]
+            values = result["values"]
+            expected = (1, len(artifact.get_data_columns()))
+            if values.shape != expected:
+                raise ValueError(
+                    f"Text replay returned shape {values.shape}, expected {expected}."
+                )
+        except Exception as exc:
+            raise GeCoIntegrationError(
+                "The selected geometry does not support frozen text replay "
+                "from the linked text source."
+            ) from exc
+
     def add_geometry(
         self,
         name: str,
