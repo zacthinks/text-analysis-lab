@@ -376,3 +376,60 @@ def test_spacy_dummy_token_is_learned_as_vocab_feature_and_can_be_filtered(
         assert filtered.get_matrix()[1].nnz == 0
     finally:
         project.close()
+
+
+def test_frozen_spacy_sibling_tokens_replay_from_sentence_artifact(
+    tmp_path: Path,
+) -> None:
+    """Sentence text is an actual GeCo input; tokens are a sibling spaCy output."""
+    _external_modules()
+    model_dir = _saved_sentencizer_model(tmp_path)
+    project_path = tmp_path / "sibling_sentence_replay"
+    project = teal.Project.create(project_path, name="sibling_sentence_replay")
+    try:
+        documents = _seed_documents(project, pd.DataFrame({
+            "document_id": [1, 2],
+            "text": ["alpha beta. gamma delta.", "beta gamma. delta alpha."],
+        }))
+        parsed = project.translate(
+            SpacyTranslator(model=str(model_dir), save_model=True),
+            documents, workers=1,
+        )
+        sentences = parsed["sentences"]
+        tokens = parsed["tokens"]
+        assert tokens.descriptor["lineage"]["basis_artifact_ids"] == [
+            sentences.artifact_id
+        ]
+        matrix = project.translate(
+            ArtifactCountVectorizer(
+                field="text", group_by=tuple(sentences.primary_key),
+                metadata_filters={"is_alpha": True},
+            ),
+            tokens, workers=1,
+            batch_by=sentences.primary_key[-1], batch_size=2,
+        )["output"]
+        assert matrix.primary_key == sentences.primary_key
+        assert matrix.n_rows == sentences.n_rows
+        sentence_rows = sentences.query(
+            key_columns=False, data_columns=["text"],
+            order_by="_position", form="table",
+        )
+        original_texts = sentence_rows["text"].tolist()
+        frozen = project.pipeline(start=sentences, end=matrix)
+        assert len(frozen.stages) == 2
+        assert isinstance(frozen.stages[0].translator, SpacyTranslator)
+        transformed = frozen.translate(original_texts, project=project)
+        np.testing.assert_array_equal(
+            transformed["output"]["values"].toarray(),
+            matrix.get_matrix().toarray(),
+        )
+        sentence_id = sentences.artifact_id
+        matrix_id = matrix.artifact_id
+    finally:
+        project.close()
+
+    with teal.Project.open(project_path) as reopened:
+        frozen = reopened.pipeline(start=sentence_id, end=matrix_id)
+        values = frozen.translate(["alpha beta."], project=reopened)["output"]["values"]
+        assert values.shape[0] == 1
+        assert values.nnz == 2
