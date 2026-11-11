@@ -376,3 +376,148 @@ def test_spacy_dummy_token_is_learned_as_vocab_feature_and_can_be_filtered(
         assert filtered.get_matrix()[1].nnz == 0
     finally:
         project.close()
+
+
+def test_frozen_spacy_sibling_tokens_replay_from_sentence_artifact(
+    tmp_path: Path,
+) -> None:
+    """Sentence text is an actual GeCo input; tokens are a sibling spaCy output."""
+    _external_modules()
+    model_dir = _saved_sentencizer_model(tmp_path)
+    project_path = tmp_path / "sibling_sentence_replay"
+    project = teal.Project.create(project_path, name="sibling_sentence_replay")
+    try:
+        documents = _seed_documents(project, pd.DataFrame({
+            "document_id": [1, 2],
+            "text": ["alpha beta. gamma delta.", "beta gamma. delta alpha."],
+        }))
+        parsed = project.translate(
+            SpacyTranslator(model=str(model_dir), save_model=True),
+            documents, workers=1,
+        )
+        sentences = parsed["sentences"]
+        tokens = parsed["tokens"]
+        assert tokens.descriptor["lineage"]["basis_artifact_ids"] == [
+            sentences.artifact_id
+        ]
+        matrix = project.translate(
+            ArtifactCountVectorizer(
+                field="text", group_by=tuple(sentences.primary_key),
+                metadata_filters={"is_alpha": True},
+            ),
+            tokens, workers=1,
+            batch_by=sentences.primary_key[-1], batch_size=2,
+        )["output"]
+        assert matrix.primary_key == sentences.primary_key
+        assert matrix.n_rows == sentences.n_rows
+        sentence_rows = sentences.query(
+            key_columns=False, data_columns=["text"],
+            order_by="_position", form="table",
+        )
+        original_texts = sentence_rows["text"].tolist()
+        from text_analysis_lab.core.errors import PipelineError
+        with pytest.raises(PipelineError):
+            project.pipeline(start=sentences, end=matrix)
+        frozen = project.pipeline(
+            start=sentences, end=matrix, allow_looser_lineage=True,
+        )
+        assert len(frozen.stages) == 2
+        assert isinstance(frozen.stages[0].translator, SpacyTranslator)
+        # Looser reconstruction does not disable valid artifact execution.
+        # The original frozen spaCy translator can still consume documents.
+        assert frozen.execution_capabilities(project=project).artifact
+        reconstructed = frozen.run_artifacts(project, documents)["output"]
+        assert reconstructed.primary_key == matrix.primary_key
+        np.testing.assert_array_equal(
+            reconstructed.get_matrix().toarray(),
+            matrix.get_matrix().toarray(),
+        )
+        # The *sentence artifact* is not a valid artifact-mode input:
+        # spaCy would try to introduce a sentence_id already in its keys.
+        from text_analysis_lab.core.errors import OperatorError
+        with pytest.raises(OperatorError, match="already present"):
+            frozen.run_artifacts(project, sentences)
+        transformed = frozen.translate(original_texts, project=project)
+        np.testing.assert_array_equal(
+            transformed["output"]["values"].toarray(),
+            matrix.get_matrix().toarray(),
+        )
+        sentence_id = sentences.artifact_id
+        matrix_id = matrix.artifact_id
+    finally:
+        project.close()
+
+    with teal.Project.open(project_path) as reopened:
+        from text_analysis_lab.core.errors import PipelineError
+        with pytest.raises(PipelineError):
+            reopened.pipeline(start=sentence_id, end=matrix_id)
+        frozen = reopened.pipeline(
+            start=sentence_id, end=matrix_id, allow_looser_lineage=True,
+        )
+        values = frozen.translate(["alpha beta."], project=reopened)["output"]["values"]
+        assert values.shape[0] == 1
+        assert values.nnz == 2
+
+
+@pytest.mark.parametrize("failure", ["operator", "artifact"])
+def test_spacy_token_discovery_skips_unloadable_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    """One unusable saved token artifact must not hide another valid choice."""
+    from text_analysis_lab.core.errors import ArtifactError, OperatorError
+    from text_analysis_lab.integrations.geco import LinkedGeCoWorkspace
+
+    _external_modules()
+    model_dir = _saved_sentencizer_model(tmp_path)
+    project = teal.Project.create(tmp_path / "token_discovery", name="token_discovery")
+    try:
+        documents = _seed_documents(project, pd.DataFrame({
+            "document_id": [1, 2],
+            "text": ["alpha beta.", "gamma delta."],
+        }))
+        stale = project.translate(
+            SpacyTranslator(model=str(model_dir), save_model=True),
+            documents, workers=1,
+        )["tokens"]
+        healthy = project.translate(
+            SpacyTranslator(model=str(model_dir), save_model=True),
+            documents, workers=1,
+        )["tokens"]
+        stale_operator_id = str(
+            project.operation_for_artifact(stale)["operator_id"]
+        )
+
+        # Exercise the actual TeAL discovery implementation without requiring
+        # the optional GeCo package or an actual GeCo UI.
+        linked = object.__new__(LinkedGeCoWorkspace)
+        linked._project = project
+        linked._manifest = {
+            "text_artifact_id": str(documents.artifact_id),
+            "text_field": "text",
+        }
+
+        if failure == "operator":
+            original_get_operator = project.get_operator
+
+            def broken_operator(ref, **kwargs):
+                if str(ref) == stale_operator_id:
+                    raise OperatorError("Legacy spaCy snapshot is not loadable.")
+                return original_get_operator(ref, **kwargs)
+
+            monkeypatch.setattr(project, "get_operator", broken_operator)
+        else:
+            original_get_artifact = project.get_artifact
+
+            def broken_artifact(ref, **kwargs):
+                if str(ref) == str(stale.artifact_id):
+                    raise ArtifactError("Saved token descriptor is unavailable.")
+                return original_get_artifact(ref, **kwargs)
+
+            monkeypatch.setattr(project, "get_artifact", broken_artifact)
+
+        options = linked.available_spacy_tokens()
+        ids = {option["value"] for option in options}
+        assert str(healthy.artifact_id) in ids
+        assert str(stale.artifact_id) not in ids
+    finally:
+        project.close()

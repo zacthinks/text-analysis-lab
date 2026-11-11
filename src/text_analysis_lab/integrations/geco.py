@@ -23,7 +23,13 @@ import pandas as pd
 from scipy import sparse
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
-from text_analysis_lab.core.errors import ArtifactNotFoundError, LineageError, PipelineError
+from text_analysis_lab.core.errors import (
+    ArtifactError,
+    ArtifactNotFoundError,
+    LineageError,
+    OperatorError,
+    PipelineError,
+)
 from text_analysis_lab.core.lineage import basis_artifact_ids
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.core.utils import utc_now_iso
@@ -262,7 +268,7 @@ class TeALGeCoProvider:
             artifact = self._matrix_artifact(project, external_ref, purpose="geometry")
             start_id = _text_artifact_id_from_external_ref(external_ref)
             try:
-                pipeline = project.pipeline(start=start_id, end=artifact)
+                pipeline = project.pipeline(start=start_id, end=artifact, allow_looser_lineage=True)
                 result = pipeline.translate(
                     ["" if value is None else str(value) for value in texts],
                     project=project,
@@ -722,6 +728,123 @@ class LinkedGeCoWorkspace:
             stale_at_export=(status == "stale"),
         )
 
+    def available_spacy_tokens(self) -> list[dict[str, str]]:
+        """Return compatible reusable spaCy token choices for this linked text.
+
+        TeAL alone checks operation provenance, lineage, frozen operators and
+        replayability. GeCo receives only UI labels and opaque selection IDs.
+        """
+        from text_analysis_lab.translators import SpacyTranslator
+
+        source = self._project.get_artifact(str(self._manifest["text_artifact_id"]))
+        source_id = str(source.artifact_id)
+        source_key = tuple(source.primary_key)
+        text_field = str(self._manifest.get("text_field", "text"))
+        source_operation = self._project.operation_for_artifact(source)
+        source_is_sentences = False
+        if source_operation is not None:
+            source_is_sentences = any(
+                str(item.get("artifact_id")) == source_id
+                and str(item.get("output_label")) == "sentences"
+                for item in self._project.operation_outputs(
+                    str(source_operation["operation_id"])
+                )
+            )
+
+        records: dict[str, dict[str, Any]] = {}
+        for row in [
+            *self._project.list_artifacts(
+                artifact_type="table", source_artifact_id=source_id,
+            ),
+            *self._project.list_artifacts(
+                artifact_type="table", basis_artifact_id=source_id,
+            ),
+        ]:
+            records[str(row["artifact_id"])] = row
+
+        candidates: list[dict[str, str]] = []
+        for artifact_id, row in records.items():
+            try:
+                candidate = self._project.get_artifact(artifact_id)
+                operation = self._project.operation_for_artifact(candidate)
+                if operation is None or str(operation.get("status")) != "complete":
+                    continue
+                operation_id = str(operation["operation_id"])
+                if not any(
+                    str(item.get("artifact_id")) == artifact_id
+                    and str(item.get("output_label")) == "tokens"
+                    for item in self._project.operation_outputs(operation_id)
+                ):
+                    continue
+                translator = self._project.get_operator(str(operation["operator_id"]))
+                if not isinstance(translator, SpacyTranslator):
+                    continue
+
+                key = tuple(candidate.primary_key)
+                direct = (
+                    len(key) == len(source_key) + 2
+                    and key[:len(source_key)] == source_key
+                    and translator.text_field == text_field
+                    and any(
+                        str(item.get("source_artifact_id")) == source_id
+                        for item in self._project.operation_sources(operation_id)
+                    )
+                )
+                sibling = (
+                    source_is_sentences
+                    and source_operation is not None
+                    and str(source_operation["operation_id"]) == operation_id
+                    and len(key) == len(source_key) + 1
+                    and key[:len(source_key)] == source_key
+                    and any(
+                        str(edge.get("basis_artifact_id")) == source_id
+                        for edge in self._project.catalog.artifact_basis(artifact_id)
+                    )
+                )
+                if not (direct or sibling):
+                    continue
+
+                self._project.pipeline(
+                    start=source, end=candidate, allow_looser_lineage=True,
+                )
+                aliases = row.get("aliases") or []
+                display = str(aliases[0]) if aliases else f"Tokens {artifact_id[:8]}"
+                candidates.append({
+                    "label": f"{display} — {translator.model}",
+                    "value": artifact_id,
+                })
+            except (ArtifactError, OperatorError, PipelineError, KeyError, ValueError):
+                # A failed saved candidate must not hide other reusable tokens.
+                # Do not mask unrelated programming errors such as TypeError.
+                continue
+        return sorted(candidates, key=lambda item: item["label"].casefold())
+
+    def validate_text_replay(self, geometry: BaseArtifact | str) -> None:
+        """Verify that a frozen text-to-numeric replay works for this workspace.
+
+        GeCo requests a text transformation, not provenance reconstruction.
+        """
+        artifact = self._project.get_artifact(geometry)
+        text_source = self._project.get_artifact(str(self._manifest["text_artifact_id"]))
+        try:
+            pipeline = self._project.pipeline(
+                start=text_source, end=artifact, allow_looser_lineage=True,
+            )
+            result = pipeline.translate(
+                ["geco replay probe"], project=self._project,
+            )["output"]
+            values = result["values"]
+            expected = (1, len(artifact.get_data_columns()))
+            if values.shape != expected:
+                raise ValueError(
+                    f"Text replay returned shape {values.shape}, expected {expected}."
+                )
+        except Exception as exc:
+            raise GeCoIntegrationError(
+                "The selected geometry does not support frozen text replay "
+                "from the linked text source."
+            ) from exc
+
     def add_geometry(
         self,
         name: str,
@@ -742,7 +865,7 @@ class LinkedGeCoWorkspace:
             str(self._manifest["text_artifact_id"])
         )
         try:
-            self._project.pipeline(start=text_source, end=geometry)
+            self._project.pipeline(start=text_source, end=geometry, allow_looser_lineage=True)
         except PipelineError as exc:
             raise GeCoIntegrationError(
                 f"TeAL geometry {geometry.artifact_id!r} is not replayable from "
@@ -1005,6 +1128,7 @@ class GeCoManager:
             self.project.pipeline(
                 start=text_artifact,
                 end=geometry_artifact,
+                allow_looser_lineage=True,
             )
         except PipelineError as exc:
             raise GeCoIntegrationError(
