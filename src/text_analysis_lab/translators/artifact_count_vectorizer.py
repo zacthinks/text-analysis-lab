@@ -50,10 +50,11 @@ class ArtifactCountVectorizer(BaseTranslator):
     used, so token n-grams naturally stop at sentence boundaries for a source
     keyed ``(..., sentence_id, token_id)``.
 
-    This translator does *not* tokenize, lowercase, or apply stop-word rules.
-    Those choices belong upstream (for example in a spaCy token artifact or an
-    explicit subset). Null values are omitted; empty strings are omitted by
-    default.
+    This translator does not tokenize or lowercase. Optional Boolean
+    metadata_filters select input rows internally; group keys are determined
+    before those filters, so groups with only rejected tokens get zero vectors.
+    Genuinely tokenless documents have no group in this tokens-only contract.
+    Null values and, by default, empty strings are omitted.
     """
 
     operation_type = "translate"
@@ -138,14 +139,13 @@ class ArtifactCountVectorizer(BaseTranslator):
         frame: pd.DataFrame,
         *,
         source_key: Sequence[str] | None = None,
-        target: pd.DataFrame | Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """Count the frozen vocabulary over an ordinary keyed token table.
 
-        A recovered spaCy pipeline uses source_position as a temporary key
-        rather than original project key names. If a standalone text sequence
-        is supplied as target, each text is represented (including empty
-        texts) in its original input order.
+        Recovered spaCy token tables have ephemeral source_position keys.
+        Their next two columns are the configured sentence and token keys;
+        the original sentence boundary is preserved regardless of its name.
+        An input with no token rows has no output group.
         """
         if not isinstance(frame, pd.DataFrame):
             raise TypeError(
@@ -162,17 +162,24 @@ class ArtifactCountVectorizer(BaseTranslator):
         )
         if ephemeral_keys:
             effective_group_by = ("source_position",)
-            # Retain explicit cross-sentence n-gram choice when sequence_by
-            # equals group_by in the original fitted configuration.
             cross_sentence = (
                 self.sequence_by is not None
                 and tuple(self.sequence_by) == tuple(self.group_by)
             )
-            sequence_by = (
-                ("source_position",)
-                if cross_sentence or "sentence_id" not in frame.columns
-                else ("source_position", "sentence_id")
-            )
+            if cross_sentence:
+                sequence_by = ("source_position",)
+            else:
+                # SpacyTranslator.translate() returns normalized token
+                # tables whose first three columns are source_position,
+                # the configured sentence key, and the configured token key.
+                # Do not hardcode the default sentence_id name.
+                columns = list(frame.columns)
+                if len(columns) < 3 or columns[0] != "source_position":
+                    raise ArtifactError(
+                        "Standalone spaCy token rows must begin with "
+                        "source_position, sentence key, token key."
+                    )
+                sequence_by = ("source_position", str(columns[1]))
         elif self.sequence_by is None:
             if source_key is None:
                 raise ValueError(
@@ -200,17 +207,8 @@ class ArtifactCountVectorizer(BaseTranslator):
                 f"ArtifactCountVectorizer source is missing columns {missing}."
             )
         if frame.empty:
-            # Native spaCy output contains no token rows when all input texts
-            # are empty. We can still produce fixed-width zeros if target is
-            # specified; otherwise there is no authoritative row universe.
-            if target is None:
-                raise ArtifactError(
-                    "ArtifactCountVectorizer cannot infer document keys "
-                    "from an empty token table without target."
-                )
-            group_keys = pd.DataFrame(columns=list(effective_group_by))
-            events = pd.DataFrame(
-                columns=["_group_id", "_feature_key", "_feature_label"]
+            raise ArtifactError(
+                "ArtifactCountVectorizer cannot vectorize an empty token source."
             )
         else:
             group_keys, events = _build_feature_events(
@@ -223,33 +221,7 @@ class ArtifactCountVectorizer(BaseTranslator):
                 ngram_separator=self.ngram_separator,
                 metadata_filters=self.metadata_filters,
             )
-        translated = self._translate_events(group_keys, events)
-        if target is not None:
-            if ephemeral_keys:
-                if isinstance(target, pd.DataFrame):
-                    if "source_position" not in target.columns:
-                        raise ValueError(
-                            "Standalone spaCy target DataFrame must contain "
-                            "source_position."
-                        )
-                    keys = target[["source_position"]]
-                elif isinstance(target, Sequence) and not isinstance(target, bytes):
-                    # str is a single text input; a sequence is a batch.
-                    length = 1 if isinstance(target, str) else len(target)
-                    keys = pd.DataFrame({"source_position": range(length)})
-                else:
-                    raise ValueError("Standalone target must contain input text keys.")
-            elif isinstance(target, pd.DataFrame):
-                keys = target.loc[:, list(effective_group_by)]
-            else:
-                raise ValueError(
-                    "Standalone target requires a keyed DataFrame unless "
-                    "using spaCy source_position."
-                )
-            translated = _align_target_rows(
-                translated, keys, effective_group_by,
-            )
-        return translated
+        return self._translate_events(group_keys, events)
 
     def output_specs(
         self,
@@ -258,13 +230,12 @@ class ArtifactCountVectorizer(BaseTranslator):
         request: TranslationRequest,
     ) -> OutputSpec:
         _ = request
-        source, target = _count_sources(sources)
+        source = _single_source(sources)
         self._validate_source_key(source.primary_key)
-        _validate_target(target, self.group_by)
         return OutputSpec(
             artifact_type="sparse_matrix",
-            lineage_mode="preserved_key" if target is not None else "reduced_key",
-            basis_labels="target" if target is not None else DEFAULT_SOURCE_LABEL,
+            lineage_mode="reduced_key",
+            basis_labels=DEFAULT_SOURCE_LABEL,
             feature_metadata_mode="own",
         )
 
@@ -289,26 +260,20 @@ class ArtifactCountVectorizer(BaseTranslator):
         sources: Mapping[str, BaseArtifact],
         mode: TranslationMode,
         request: TranslationRequest,
-    ) -> SourceRequest | Mapping[str, SourceRequest]:
+    ) -> SourceRequest:
         _ = mode
-        source, target = _count_sources(sources)
+        source = _single_source(sources)
         if source.artifact_type.value != "table":
             raise OperatorError(
                 "ArtifactCountVectorizer requires a table artifact source."
             )
         self._validate_source_key(source.primary_key)
-        _validate_target(target, self.group_by)
-        if target is not None and request.batch_by is not None:
-            raise OperatorError(
-                "Two-source ArtifactCountVectorizer requires whole-artifact "
-                "translation; grouped batch_by is not supported."
-            )
         grouped = request.batch_by is not None
         data_columns: str | list[str] = (
             self.field if not self.metadata_filters else
             list(dict.fromkeys([self.field, *self.metadata_filters]))
         )
-        source_request = SourceRequest(
+        return SourceRequest(
             artifact_type="table",
             mode="batches" if grouped else "full_artifact",
             columns=ColumnRequest(keys=True, data=data_columns, metadata=False),
@@ -318,17 +283,6 @@ class ArtifactCountVectorizer(BaseTranslator):
             include_position=False,
             min_batch_by=self.group_by[-1] if grouped else None,
         )
-        if target is None:
-            return source_request
-        return {
-            DEFAULT_SOURCE_LABEL: source_request,
-            "target": SourceRequest(
-                artifact_type="table",
-                mode="full_artifact",
-                columns=ColumnRequest(keys=True, data=False, metadata=False),
-                form="table", metadata_mode="none", include_position=False,
-            ),
-        }
 
     def translation_passes(
         self, *, sources: Mapping[str, BaseArtifact], mode: TranslationMode,
@@ -346,21 +300,8 @@ class ArtifactCountVectorizer(BaseTranslator):
         mode: TranslationMode,
         request: TranslationRequest,
     ) -> BatchResult:
-        if set(inputs) not in ({DEFAULT_SOURCE_LABEL}, {DEFAULT_SOURCE_LABEL, "target"}):
-            raise OperatorError(
-                "ArtifactCountVectorizer requires a 'source' token table "
-                "and optionally a 'target' key artifact."
-            )
-        packet = inputs[DEFAULT_SOURCE_LABEL]
+        packet = _single_input(inputs)
         frame = _require_frame(packet.data)
-        target_keys = None
-        if "target" in inputs:
-            target_packet = inputs["target"]
-            if tuple(target_packet.primary_key) != tuple(self.group_by):
-                raise ArtifactError("Target key columns must match group_by.")
-            target_keys = _require_frame(target_packet.data).loc[
-                :, list(self.group_by)
-            ]
         source_key = tuple(str(name) for name in packet.primary_key)
         sequence_by = self._validate_source_key(source_key)
         required = [*dict.fromkeys([*source_key, self.field, *self.metadata_filters])]
@@ -419,8 +360,6 @@ class ArtifactCountVectorizer(BaseTranslator):
             raise OperatorError(f"Unsupported ArtifactCountVectorizer mode {mode!r}.")
 
         translated = self._translate_events(group_keys, events)
-        if target_keys is not None:
-            translated = _align_target_rows(translated, target_keys, self.group_by)
         return BatchResult(
             outputs={
                 DEFAULT_OUTPUT_LABEL: {
@@ -722,63 +661,6 @@ def _normalize_metadata_filters(
         normalized[column] = required
     return normalized
 
-
-
-def _count_sources(
-    sources: Mapping[str, BaseArtifact],
-) -> tuple[BaseArtifact, BaseArtifact | None]:
-    if set(sources) not in ({DEFAULT_SOURCE_LABEL}, {DEFAULT_SOURCE_LABEL, "target"}):
-        raise OperatorError(
-            "ArtifactCountVectorizer sources must be {'source': tokens} "
-            "with optional 'target': key_artifact."
-        )
-    return sources[DEFAULT_SOURCE_LABEL], sources.get("target")
-
-
-def _validate_target(target: BaseArtifact | None, group_by: Sequence[str]) -> None:
-    if target is None:
-        return
-    if target.artifact_type.value != "table":
-        raise OperatorError("ArtifactCountVectorizer target must be a table artifact.")
-    if tuple(target.primary_key) != tuple(group_by):
-        raise OperatorError(
-            "Target primary-key hierarchy must exactly match group_by; "
-            f"expected {list(group_by)}, got {list(target.primary_key)}."
-        )
-
-
-def _align_target_rows(
-    result: dict[str, Any], target_keys: pd.DataFrame,
-    group_by: Sequence[str],
-) -> dict[str, Any]:
-    """Align known vectors to target keys and fill absent groups with CSR zeros."""
-    columns = list(group_by)
-    keys = result["groups"].loc[:, columns]
-    expected = target_keys.loc[:, columns]
-    if expected.duplicated().any():
-        raise ArtifactError("Target artifact contains duplicate primary keys.")
-    actual_index = pd.MultiIndex.from_frame(keys)
-    target_index = pd.MultiIndex.from_frame(expected)
-    if not actual_index.isin(target_index).all():
-        raise ArtifactError(
-            "Token rows contain group keys absent from the target artifact."
-        )
-    offsets = actual_index.get_indexer(target_index)
-    values = result["values"].tocsr()
-    matches = offsets >= 0
-    if matches.all():
-        matrix = values[offsets]
-    else:
-        # Construct COO only from observed target positions; unrepresented
-        # target rows remain structural zero vectors.
-        present_positions = np.flatnonzero(matches)
-        present_rows = values[offsets[matches]].tocoo()
-        matrix = sparse.coo_matrix(
-            (present_rows.data,
-             (present_positions[present_rows.row], present_rows.col)),
-            shape=(len(expected), values.shape[1]), dtype=values.dtype,
-        ).tocsr()
-    return {**result, "groups": expected.reset_index(drop=True), "values": matrix}
 
 
 def _normalize_key_columns(value: str | Sequence[str], *, name: str) -> tuple[str, ...]:
