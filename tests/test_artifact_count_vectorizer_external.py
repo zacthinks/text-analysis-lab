@@ -332,3 +332,47 @@ def test_custom_spacy_sentence_key_preserves_frozen_bigram_boundaries(
         np.testing.assert_array_equal(replay[0], original[0])
     finally:
         project.close()
+
+
+def test_spacy_dummy_token_is_learned_as_vocab_feature_and_can_be_filtered(
+    tmp_path: Path,
+) -> None:
+    from text_analysis_lab.translators.spacy_translator import EMPTY_TOKEN_TEXT
+
+    _external_modules()
+    model_dir = _saved_sentencizer_model(tmp_path)
+    project = teal.Project.create(tmp_path / "dummy_vocab", name="dummy_vocab")
+    try:
+        documents = _seed_documents(project, pd.DataFrame({
+            "document_id": [1, 2, 3],
+            "text": ["apple", "", "banana"],
+        }))
+        tokens = project.translate(
+            SpacyTranslator(
+                model=str(model_dir), save_model=True, empty_doc="dummy",
+            ),
+            documents, workers=1,
+        )["tokens"]
+        assert tokens.n_rows == 3
+        matrix = project.translate(
+            ArtifactCountVectorizer(
+                field="text", group_by=("document_id",),
+            ),
+            tokens, workers=1,
+        )["output"]
+        assert matrix.n_rows == 3
+        columns = matrix.get_data_columns()
+        assert EMPTY_TOKEN_TEXT in columns
+        assert matrix.get_matrix().toarray()[1, columns.index(EMPTY_TOKEN_TEXT)] == 1
+
+        filtered = project.translate(
+            ArtifactCountVectorizer(
+                field="text", group_by=("document_id",),
+                metadata_filters={"is_placeholder": False},
+            ), tokens, workers=1,
+        )["output"]
+        assert filtered.n_rows == 3
+        assert EMPTY_TOKEN_TEXT not in filtered.get_data_columns()
+        assert filtered.get_matrix()[1].nnz == 0
+    finally:
+        project.close()
