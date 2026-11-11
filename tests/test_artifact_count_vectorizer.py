@@ -414,3 +414,37 @@ def test_standalone_spacy_tokens_replay_zero_for_empty_query() -> None:
     result = operator.translate(all_empty, target=[""])
     assert result["values"].shape == (1, 2)
     assert result["values"].nnz == 0
+
+
+def test_target_can_be_sentence_grain_with_composite_primary_key() -> None:
+    source = pd.DataFrame({
+        "doc_id": [1, 1, 2],
+        "sentence_id": [0, 0, 0],
+        "token_id": [0, 1, 0],
+        "lemma": ["alpha", "beta", "beta"],
+        "is_alpha": [True, True, True],
+    })
+    target = pd.DataFrame({
+        "doc_id": [1, 1, 2, 3],
+        "sentence_id": [0, 1, 0, 0],
+    })
+    operator = ArtifactCountVectorizer(
+        field="lemma", group_by=("doc_id", "sentence_id"),
+        metadata_filters={"is_alpha": True},
+    )
+    inputs = {
+        "source": _packet(source),
+        "target": InputBatch(
+            source_label="target", artifact_id="art_sentences",
+            primary_key=("doc_id", "sentence_id"), data=target,
+            batch_index=0, batch_count=1, is_first=True, is_last=True,
+        ),
+    }
+    result = operator.translate_batch(
+        inputs, mode="fit_translate", request=TranslationRequest(),
+    ).outputs["output"]
+    assert result["keys"].to_dict("records") == target.to_dict("records")
+    assert result["data"]["columns"] == ["alpha", "beta"]
+    assert result["data"]["values"].toarray().tolist() == [
+        [1, 1], [0, 0], [0, 1], [0, 0],
+    ]
