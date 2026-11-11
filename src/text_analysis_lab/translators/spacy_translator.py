@@ -286,13 +286,15 @@ class SpacyTranslator(BaseTranslator):
                         f"{source_position}. Remove empty documents before "
                         "translation or use empty_doc='dummy'."
                     )
-                sentence_keys.append({
-                    "source_position": source_position,
-                    self.sentence_key: 0,
-                })
-                sentence_data.append({
-                    "text": source_text, "char_start": 0, "char_end": len(source_text),
-                })
+                if not sentence_keys:
+                    sentence_keys.append({
+                        "source_position": source_position,
+                        self.sentence_key: 0,
+                    })
+                    sentence_data.append({
+                        "text": source_text, "char_start": 0,
+                        "char_end": len(source_text),
+                    })
                 token_keys.append({
                     "source_position": source_position,
                     self.sentence_key: 0, self.token_key: 0,
