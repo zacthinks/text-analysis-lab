@@ -23,7 +23,13 @@ import pandas as pd
 from scipy import sparse
 
 from text_analysis_lab.core.artifact_base import BaseArtifact
-from text_analysis_lab.core.errors import ArtifactNotFoundError, LineageError, PipelineError
+from text_analysis_lab.core.errors import (
+    ArtifactError,
+    ArtifactNotFoundError,
+    LineageError,
+    OperatorError,
+    PipelineError,
+)
 from text_analysis_lab.core.lineage import basis_artifact_ids
 from text_analysis_lab.core.types import ArtifactType
 from text_analysis_lab.core.utils import utc_now_iso
@@ -807,8 +813,9 @@ class LinkedGeCoWorkspace:
                     "label": f"{display} — {translator.model}",
                     "value": artifact_id,
                 })
-            except (KeyError, ValueError, PipelineError, TypeError):
-                # Exclude incomplete, incompatible or non-replayable choices.
+            except (ArtifactError, OperatorError, PipelineError, KeyError, ValueError):
+                # A failed saved candidate must not hide other reusable tokens.
+                # Do not mask unrelated programming errors such as TypeError.
                 continue
         return sorted(candidates, key=lambda item: item["label"].casefold())
 
