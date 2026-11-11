@@ -16,6 +16,23 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
+## [0.11.3] - release pending
+
+### Added
+
+- Explicit `allow_looser_lineage=False` option on `Project.pipeline(...)` and `Pipeline.from_artifacts(...)`: strict reconstruction remains the default; opt-in reconstruction supports the narrowly verified same-operation spaCy sibling sentence-to-token path, using the original frozen operator (PR #73).
+- TeAL-owned discovery of compatible saved spaCy token artifacts and frozen text-replay validation for linked GeCo workspaces, including sentence-level geometries derived from sibling tokens (PR #73).
+
+### Fixed
+
+- Isolate unusable historical token candidates during spaCy token discovery: operator- and artifact-loading errors no longer hide valid alternatives; unexpected programming errors remain visible (PR #73).
+
+### Notes
+
+- Looser lineage changes which transformation chains may be reconstructed; it does **not** automatically disable artifact execution. Compatible document artifacts can use the frozen pipeline; already sentence-keyed artifacts still raise spaCy's ordinary key-collision error.
+- A sentence string replayed independently may receive context-sensitive spaCy annotations that differ from its original full-document processing. Stored corpus tokens and their provenance are unchanged.
+- This is a version-preparation entry. No `v0.11.3` tag or GitHub Release has been created.
+
 ## [0.11.2] - release pending
 
 ### Added
