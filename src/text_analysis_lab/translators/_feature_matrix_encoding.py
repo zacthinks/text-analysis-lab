@@ -19,6 +19,18 @@ from text_analysis_lab.translators._feature_matrix_numeric import (
 )
 
 
+def _bin_is_inactive(fitted: Mapping[str, Any]) -> bool:
+    """No observed values => no learned bins for data-fitted strategies.
+
+    Also honor pre-fix frozen state with count=0 but no inactive flag.
+    Explicit boundaries remain meaningful even without observed values.
+    """
+    return bool(fitted.get(
+        "inactive",
+        fitted.get("count") == 0 and fitted.get("strategy") != "boundaries",
+    ))
+
+
 class FeatureMatrixEncoding:
     """Freeze scalar-column encodings and emit numeric blocks on demand.
 
@@ -223,17 +235,22 @@ class FeatureMatrixEncoding:
                             (-np.inf if i == 0 else np.inf) if edge is None else edge
                             for i, edge in enumerate(spec["fitted"]["edges"])
                         ], dtype=float)
-                        valid_rows = np.flatnonzero(np.isfinite(numbers))
-                        assigned = np.searchsorted(
-                            edges, numbers[valid_rows], side="right"
-                        ) - 1
-                        in_range = (assigned >= 0) & (assigned < len(edges) - 1)
-                        rows = valid_rows[in_range]
-                        columns = assigned[in_range]
-                        cached_bins[id(spec)] = sparse.csr_matrix(
-                            (np.ones(len(rows), dtype=float), (rows, columns)),
-                            shape=(len(frame), len(edges) - 1),
-                        )
+                        if _bin_is_inactive(spec["fitted"]):
+                            cached_bins[id(spec)] = sparse.csr_matrix(
+                                (len(frame), len(edges) - 1), dtype=float,
+                            )
+                        else:
+                            valid_rows = np.flatnonzero(np.isfinite(numbers))
+                            assigned = np.searchsorted(
+                                edges, numbers[valid_rows], side="right"
+                            ) - 1
+                            in_range = (assigned >= 0) & (assigned < len(edges) - 1)
+                            rows = valid_rows[in_range]
+                            columns = assigned[in_range]
+                            cached_bins[id(spec)] = sparse.csr_matrix(
+                                (np.ones(len(rows), dtype=float), (rows, columns)),
+                                shape=(len(frame), len(edges) - 1),
+                            )
                     requested = [local for _, local in selected[position:end]]
                     groups.append(cached_bins[id(spec)][:, requested])
                 else:
@@ -280,15 +297,23 @@ class FeatureMatrixEncoding:
                     raise ArtifactError(f"FeatureMatrix numeric column {name!r} contains infinity.")
                 valid = np.isfinite(numeric)
                 if spec["kind"] == "bin":
-                    edges = np.asarray([(-np.inf if i == 0 else np.inf) if edge is None else edge
-                                        for i, edge in enumerate(fitted["edges"])], dtype=float)
-                    # Lower edges inclusive, upper edges exclusive. Missing and
-                    # out-of-range values are all zero on onehot output.
-                    target = np.searchsorted(edges, numeric[valid], side="right") - 1
-                    rows = np.flatnonzero(valid)
-                    mask = (target == local_index) & (target >= 0) & (target < len(edges) - 1)
                     block = np.zeros((len(values), 1), dtype=float)
-                    block[rows[mask], 0] = 1.0
+                    if not _bin_is_inactive(fitted):
+                        edges = np.asarray([
+                            (-np.inf if i == 0 else np.inf) if edge is None else edge
+                            for i, edge in enumerate(fitted["edges"])
+                        ], dtype=float)
+                        # Lower edges inclusive, upper edges exclusive. Missing
+                        # and out-of-range values encode as all-zero features.
+                        target = np.searchsorted(
+                            edges, numeric[valid], side="right",
+                        ) - 1
+                        rows = np.flatnonzero(valid)
+                        mask = (
+                            (target == local_index) & (target >= 0)
+                            & (target < len(edges) - 1)
+                        )
+                        block[rows[mask], 0] = 1.0
                 elif spec["kind"] == "zscore":
                     sd = fitted["sd"]
                     block = np.zeros((len(values), 1), dtype=float)
