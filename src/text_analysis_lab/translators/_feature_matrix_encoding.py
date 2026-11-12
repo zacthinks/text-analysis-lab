@@ -14,6 +14,9 @@ import pandas as pd
 from scipy import sparse
 
 from text_analysis_lab.core.errors import ArtifactError
+from text_analysis_lab.translators._feature_matrix_numeric import (
+    ScalarStats, parse_transform,
+)
 
 
 class FeatureMatrixEncoding:
@@ -62,9 +65,13 @@ class FeatureMatrixEncoding:
             raise ArtifactError("FeatureMatrix input scalar columns must be unique.")
         specs: list[dict[str, Any]] = []
         vocabularies: dict[str, set[str]] = {}
+        numeric_stats: dict[str, ScalarStats] = {}
         for name in names:
             requested = self.encodings.get(name)
-            if requested is None:
+            transform = parse_transform(name, requested)
+            if transform is not None:
+                kind = transform["kind"]
+            elif requested is None:
                 kind = "auto"
             elif requested in ("onehot", "numeric"):
                 kind = requested
@@ -73,6 +80,10 @@ class FeatureMatrixEncoding:
             else:
                 raise ArtifactError(f"Unsupported encoding for {name!r}: {requested!r}")
             spec: dict[str, Any] = {"name": name, "kind": kind}
+            if transform is not None:
+                spec["config"] = transform
+                if kind in {"zscore", "minmax", "bin"}:
+                    numeric_stats[name] = ScalarStats(transform)
             if kind == "mapping":
                 if any(not isinstance(v, (int, float, np.integer, np.floating))
                        or isinstance(v, bool) for v in requested.values()):
@@ -112,6 +123,8 @@ class FeatureMatrixEncoding:
                     vocabularies[name].update(
                         str(value) for value in values.dropna().tolist()
                     )
+                if name in numeric_stats:
+                    numeric_stats[name].update(values)
 
         for spec in specs:
             name = spec["name"]
@@ -121,6 +134,13 @@ class FeatureMatrixEncoding:
                 categories = sorted(vocabularies[name])
                 spec["categories"] = categories
                 spec["outputs"] = [f"{name}_{cat}" for cat in categories]
+            elif name in numeric_stats:
+                spec["fitted"] = numeric_stats[name].finish()
+                if spec["kind"] == "bin":
+                    n_bins = len(spec["fitted"]["edges"]) - 1
+                    spec["outputs"] = [f"{name}_bin_{index}" for index in range(n_bins)]
+                else:
+                    spec["outputs"] = [name]
             else:
                 spec["outputs"] = [name]
         outputs = [output for spec in specs for output in spec["outputs"]]
@@ -181,6 +201,34 @@ class FeatureMatrixEncoding:
                     values.map(dict(spec["pairs"]))
                     .to_numpy(dtype=float).reshape(-1, 1)
                 )
+            elif spec["kind"] in {"bin", "zscore", "minmax"}:
+                fitted = spec["fitted"]
+                try:
+                    numeric = pd.to_numeric(values, errors="raise").to_numpy(dtype=float)
+                except (TypeError, ValueError) as exc:
+                    raise ArtifactError(f"FeatureMatrix numeric column {name!r} is not numeric.") from exc
+                if np.isinf(numeric).any():
+                    raise ArtifactError(f"FeatureMatrix numeric column {name!r} contains infinity.")
+                valid = np.isfinite(numeric)
+                if spec["kind"] == "bin":
+                    edges = np.asarray(fitted["edges"], dtype=float)
+                    # Lower edges inclusive, upper edges exclusive. Missing and
+                    # out-of-range values are all zero on onehot output.
+                    target = np.searchsorted(edges, numeric[valid], side="right") - 1
+                    rows = np.flatnonzero(valid)
+                    mask = (target == local_index) & (target >= 0) & (target < len(edges) - 1)
+                    block = np.zeros((len(values), 1), dtype=float)
+                    block[rows[mask], 0] = 1.0
+                elif spec["kind"] == "zscore":
+                    sd = fitted["sd"]
+                    block = np.zeros((len(values), 1), dtype=float)
+                    if sd > 0:
+                        block[valid, 0] = (numeric[valid] - fitted["mean"]) / sd
+                else:
+                    span = fitted["maximum"] - fitted["minimum"]
+                    block = np.zeros((len(values), 1), dtype=float)
+                    if span > 0:
+                        block[valid, 0] = (numeric[valid] - fitted["minimum"]) / span
             else:
                 try:
                     block = (
