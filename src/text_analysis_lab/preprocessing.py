@@ -86,6 +86,12 @@ class FeatureScaleNormalizer(TransformerMixin, BaseEstimator):
         X = self._check_input(X, copy=False)
         n_rows, n_columns = X.shape
         if sparse.issparse(X):
+            # CSR/CSC may store the same coordinate more than once. These
+            # entries must be summed *before* second moments are computed:
+            # (100 - 99)**2 is not 100**2 + (-99)**2. Never mutate fit input.
+            if not X.has_canonical_format:
+                X = X.copy()
+                X.sum_duplicates()
             means, variances = mean_variance_axis(X, axis=0)
             square_means = np.maximum(variances, 0.0) + np.square(means)
             rms = np.sqrt(square_means)
@@ -193,4 +199,7 @@ def portable_feature_scale_pipeline(pipeline, *, scale_steps: Mapping[str, Mappi
          if name in scale_steps else estimator)
         for name, estimator in pipeline.steps
     ]
-    return Pipeline(steps, memory=pipeline.memory, verbose=pipeline.verbose)
+    return Pipeline(
+        steps, transform_input=pipeline.transform_input,
+        memory=pipeline.memory, verbose=pipeline.verbose,
+    )
