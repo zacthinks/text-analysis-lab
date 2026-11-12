@@ -247,3 +247,50 @@ def test_fixed_width_unrepresentable_float_edges_fail_explicitly():
             "kind": "bin", "strategy": "fixed_width",
             "width": 0.1, "anchor": 1e20,
         }}).fit(pd.DataFrame({"value": [1e20]}))
+
+
+def test_sparse_bin_projection_order_duplicates_and_nonbin_interleaving():
+    frame = pd.DataFrame({
+        "value": [0.0, 1.0, 2.0, 3.0, np.nan],
+        "category": ["a", "b", "a", "b", None],
+        "other": [10., 20., 30., 40., 50.],
+    })
+    encoder = FeatureMatrixEncoding({
+        "value": {"kind": "bin", "strategy": "fixed_width", "width": 1},
+        "category": "onehot",
+        "other": "zscore",
+    }).fit(frame)
+    all_dense = encoder.transform(frame)
+    # Deliberately interleave binned, scalar and categorical features.
+    indices = [2, 4, 2, 1, 6, 5, 0, 3]
+    selected_columns = encoder.required_columns(indices)
+    result = encoder.transform(
+        frame.loc[:, selected_columns], sparse_output=True, indices=indices,
+    )
+    assert sparse.isspmatrix_csr(result)
+    np.testing.assert_array_equal(result.toarray(), all_dense[:, indices])
+
+
+def test_sparse_wide_bins_300k_rows_bounded_nnz():
+    n_rows, width = 300_000, 4096
+    frame = pd.DataFrame({"value": (np.arange(n_rows) % width).astype(float)})
+    encoder = FeatureMatrixEncoding({
+        "value": {"kind": "bin", "strategy": "fixed_width",
+                  "width": 1., "anchor": 0.},
+    }).fit_batches(
+        (frame.iloc[i:i + 10000] for i in range(0, n_rows, 10000)),
+        columns=["value"],
+    )
+    assert len(encoder.columns) == width
+    result = encoder.transform(frame, sparse_output=True)
+    assert sparse.isspmatrix_csr(result)
+    assert result.shape == (n_rows, width)
+    assert result.nnz == n_rows
+    np.testing.assert_array_equal(
+        result[::29999].argmax(axis=1),
+        np.asarray((np.arange(n_rows) % width)[::29999]).reshape(-1, 1),
+    )
+    # A narrow lazy projection remains one sparse output column.
+    narrow = encoder.transform(frame[["value"]], sparse_output=True, indices=[0])
+    assert narrow.shape == (n_rows, 1)
+    assert narrow.nnz == int(np.count_nonzero((np.arange(n_rows) % width) == 0))
