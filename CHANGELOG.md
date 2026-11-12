@@ -8,15 +8,20 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Added
 
+- Public sklearn-compatible `FeatureScaleNormalizer` for dense and sparse column-wise scaling with tunable exponent `gamma`, RMS (default) or strict-L2 conventions, frozen fit statistics, and ordinary sklearn Pipeline / `ClassifierSearch` hyperparameter tuning (PR #74).
+- A versioned neutral fitted-scale state and pipeline conversion helper for exporting fitted pipelines without retaining foreign scaler class references (PR #74).
+
 ### Changed
 
 ### Fixed
+
+- Consolidate duplicate stored CSR/CSC coordinates before fitting column moments, without modifying input matrices; retain sklearn Pipeline metadata routing on portable conversion (PR #74).
 
 ### Deprecated
 
 ### Removed
 
-## [0.11.3] - release pending
+## [0.11.3] - 2026-11-11
 
 ### Added
 
@@ -31,7 +36,7 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 - Looser lineage changes which transformation chains may be reconstructed; it does **not** automatically disable artifact execution. Compatible document artifacts can use the frozen pipeline; already sentence-keyed artifacts still raise spaCy's ordinary key-collision error.
 - A sentence string replayed independently may receive context-sensitive spaCy annotations that differ from its original full-document processing. Stored corpus tokens and their provenance are unchanged.
-- This is a version-preparation entry. No `v0.11.3` tag or GitHub Release has been created.
+- Released as `v0.11.3` on November 11, 2026.
 
 ## [0.11.2] - release pending
 
