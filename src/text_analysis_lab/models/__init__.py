@@ -6,7 +6,9 @@ model is safe, compatible, or ready for scientific execution.
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -128,6 +130,57 @@ class ModelManager:
         return {"teal": teal.root, "models": teal.models,
                 "huggingface_hub": hub, "legacy_teal_hf": teal.huggingface_hub}
 
+    def _local_registry_path(self) -> Path:
+        return self.cache_paths()["models"] / "local_resources.json"
+
+    def _local_entries(self) -> dict[str, str]:
+        path = self._local_registry_path()
+        if not path.is_file():
+            return {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in data.items()
+        ):
+            raise ValueError("Invalid local model resource registry")
+        return data
+
+    def _save_local_entries(self, data: dict[str, str]) -> None:
+        target = self._local_registry_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, staged = tempfile.mkstemp(prefix=".local-models-", dir=target.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(data, stream, indent=2, sort_keys=True)
+                stream.write("\n")
+            os.replace(staged, target)
+        finally:
+            if os.path.exists(staged):
+                os.unlink(staged)
+
+    def register_local(self, name: str, path: str | Path) -> ResourceStatus:
+        """Remember an external file/directory, without copying or executing it."""
+        alias = str(name).strip()
+        if not alias or any(c in alias for c in "/\\\\:") or alias in {".", ".."}:
+            raise ValueError("Choose a nonempty model name without path separators")
+        source = Path(path).expanduser().resolve()
+        if not source.exists() or not (source.is_file() or source.is_dir()):
+            raise FileNotFoundError(f"Local model resource not found: {source}")
+        entries = self._local_entries()
+        if alias in entries:
+            raise FileExistsError(f"Model resource name already registered: {alias}")
+        entries[alias] = str(source)
+        self._save_local_entries(entries)
+        return self.inspect(f"local:{alias}")
+
+    def unregister_local(self, name: str) -> None:
+        """Forget the external reference. Never delete the researcher's source."""
+        entries = self._local_entries()
+        if name not in entries:
+            raise KeyError(f"Unknown local model resource {name!r}")
+        del entries[name]
+        self._save_local_entries(entries)
+
     def list_models(self) -> tuple[ResourceStatus, ...]:
         """List known resources without downloads, optional ML imports, or writes."""
         paths = self.cache_paths()
@@ -189,6 +242,51 @@ class ModelManager:
                 locations=tuple(locations),
                 prepared=prepared,
             ))
+        # Existing standard and legacy Hugging Face snapshots are user assets,
+        # even when they are not one of TeAL's curated built-in models.
+        known = {item.descriptor.key for item in results}
+        discovered: dict[str, list[ResourceLocation]] = {}
+        for source, root in (
+            ("huggingface_hub", paths["huggingface_hub"]),
+            ("legacy_teal_hf", paths["legacy_teal_hf"]),
+        ):
+            if not root.is_dir():
+                continue
+            for repository in root.glob("models--*"):
+                if not repository.is_dir():
+                    continue
+                identifier = repository.name.removeprefix("models--").replace("--", "/")
+                if not identifier or f"huggingface:{identifier}" in known:
+                    continue
+                descriptor = ResourceDescriptor(
+                    "huggingface", identifier, "hf_snapshot", "user-supplied"
+                )
+                discovered.setdefault(identifier, []).extend(
+                    _hub_locations(root, descriptor, source)
+                )
+        for identifier, locations in sorted(discovered.items()):
+            if not locations:
+                continue
+            results.append(ResourceStatus(
+                descriptor=ResourceDescriptor(
+                    "huggingface", identifier, "hf_snapshot", "user-supplied"
+                ),
+                candidate_path=locations[0].path,
+                present=True,
+                locations=tuple(locations),
+            ))
+        for name, path in self._local_entries().items():
+            source = Path(path)
+            present = source.exists() and (source.is_file() or source.is_dir())
+            results.append(ResourceStatus(
+                descriptor=ResourceDescriptor(
+                    "local", name, "external_reference", "user-supplied"
+                ),
+                candidate_path=source if present else None,
+                present=present,
+                locations=(ResourceLocation("registered_local", source),),
+                detail="Reference only: execution compatibility is not verified.",
+            ))
         return tuple(results)
 
     def inspect(self, model_key: str) -> ResourceStatus:
@@ -203,6 +301,7 @@ class ModelManager:
         model_key: str,
         *,
         allow_download: bool = False,
+        revision: str | None = None,
         progress=None,
         cancelled=None,
     ):
@@ -234,7 +333,20 @@ class ModelManager:
                 (x for x in _BUILTINS if x.key == model_key), None
             )
             if descriptor is None:
-                raise KeyError(f"Unknown TeAL model resource {model_key!r}.")
+                # User-selected Hub resources are downloaded as data only.
+                # No model code is executed or treated as a supported translator.
+                model_id = model_key.removeprefix("huggingface:")
+                from huggingface_hub.utils import validate_repo_id
+
+                validate_repo_id(model_id)
+                descriptor = ResourceDescriptor(
+                    "huggingface", model_id, "hf_snapshot", "user-supplied",
+                    revision=revision,
+                )
+            elif revision is not None:
+                raise ValueError(
+                    "Known TeAL model revisions cannot be overridden by the model manager."
+                )
             from huggingface_hub import snapshot_download
             from text_analysis_lab.linguistics.cache import active_hf_cache_path
             cache = active_hf_cache_path(
@@ -267,7 +379,15 @@ class ModelManager:
 
 
     def verify(self, model_key: str) -> ResourceStatus:
-        """Run offline provider checks; no downloads or model initialization."""
+        """Run offline provider checks; local references are never called runnable."""
+        if model_key.startswith("local:"):
+            return self.inspect(model_key)
+        if (
+            model_key.startswith("huggingface:")
+            and not any(item.key == model_key for item in _BUILTINS)
+        ):
+            # Unknown Hub files may exist but are not scientifically verified.
+            return self.inspect(model_key)
         from text_analysis_lab.models.lifecycle import verify_resource
         return verify_resource(self, model_key)
 
