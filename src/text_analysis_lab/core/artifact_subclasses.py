@@ -965,7 +965,8 @@ class SparseMatrixArtifact(_MatrixArtifact):
         path = _first_part(self.storage.data_values_dir, self.value_suffix)
         if path is None:
             return 0
-        matrix = self._sparse_module().load_npz(path).tocsr()
+        from text_analysis_lab.core._sparse_batch_cache import sparse_batch
+        matrix = sparse_batch(path)
         return int(matrix.shape[1])
 
     def _load_batch_rows(
@@ -974,7 +975,8 @@ class SparseMatrixArtifact(_MatrixArtifact):
         path = self.storage.data_value_part_path(batch, self.value_suffix)
         if not path.exists():
             raise ArtifactError(f"Missing sparse matrix data part: {path}")
-        matrix = self._sparse_module().load_npz(path).tocsr()
+        from text_analysis_lab.core._sparse_batch_cache import sparse_batch
+        matrix = sparse_batch(path)
         return matrix[[int(offset) for offset in row_offsets], :]
 
     def _own_data_native_for_positions_by_indices(
