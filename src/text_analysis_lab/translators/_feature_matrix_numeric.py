@@ -86,7 +86,7 @@ class ScalarStats:
 
     def update(self, values):
         try:
-            nums = pd.to_numeric(values, errors="raise").to_numpy(dtype=float)
+            nums = pd.to_numeric(values, errors="raise").to_numpy(dtype=float, na_value=np.nan)
         except (TypeError, ValueError) as exc:
             raise ArtifactError("Numeric FeatureMatrix transform received nonnumeric data.") from exc
         if np.isinf(nums).any():
