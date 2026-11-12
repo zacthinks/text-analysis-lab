@@ -17,6 +17,56 @@ from text_analysis_lab.core.errors import ArtifactError
 
 MAX_BINS = 4096
 QUANTILE_SAMPLE_SIZE = 8192
+# Integers outside this interval are not guaranteed to survive float64
+# conversion and cannot safely use float-based frozen bin boundaries.
+MAX_EXACT_FLOAT_INTEGER = 1 << 53
+
+
+def _integer_metadata_values(values):
+    """Return exact Python integers and row positions, or None for floats.
+
+    This handles NumPy int64/uint64, pandas nullable integer extension arrays,
+    and object-backed Python/NumPy integers without first calling to_numpy(float).
+    """
+    nonmissing = values.dropna()
+    entries = nonmissing.tolist()
+    if not entries:
+        return None
+    if all(
+        isinstance(item, (int, np.integer))
+        and not isinstance(item, (bool, np.bool_))
+        for item in entries
+    ):
+        return nonmissing.index, [int(item) for item in entries]
+    return None
+
+
+def _require_float_safe_integer_bins(values):
+    """Reject unsafe integer-to-float binning instead of collapsing values."""
+    exact = _integer_metadata_values(values)
+    if exact is not None and any(
+        abs(value) > MAX_EXACT_FLOAT_INTEGER for value in exact[1]
+    ):
+        raise ArtifactError(
+            "Integer metadata exceeds the lossless float64 binning range; "
+            "convert to a smaller relative unit or use a supported numeric "
+            "scaler before binning."
+        )
+
+
+def _lossless_integer_differences(values, offset):
+    """Convert *integer differences*, never absolute integer observations."""
+    result = []
+    for value in values:
+        difference = value - offset
+        rounded = float(difference)
+        if not math.isfinite(rounded) or int(rounded) != difference:
+            raise ArtifactError(
+                "Integer z-score differences cannot be represented exactly "
+                "as float64; rescale the input."
+            )
+        result.append(rounded)
+    return np.asarray(result, dtype=float)
 
 
 def _fixed_width_edges(minimum: float, maximum: float, *, width: float, anchor: float) -> list[float]:
@@ -117,6 +167,7 @@ class ScalarStats:
     def __init__(self, config):
         self.config = config
         self.count = 0
+        self.integer_mode = None
         # Welford moments are accumulated relative to the first finite value.
         # Keeping this offset separate is essential for e.g. [1e16, 1e16+2].
         self.offset = None
@@ -129,21 +180,49 @@ class ScalarStats:
         self.rng = np.random.default_rng(0)
 
     def update(self, values):
-        try:
-            nums = pd.to_numeric(values, errors="raise").to_numpy(dtype=float, na_value=np.nan)
-        except (TypeError, ValueError) as exc:
-            raise ArtifactError("Numeric FeatureMatrix transform received nonnumeric data.") from exc
-        if np.isinf(nums).any():
-            raise ArtifactError("Numeric FeatureMatrix transforms require finite values or missing.")
-        valid = nums[np.isfinite(nums)]
+        integers = _integer_metadata_values(values)
+        if integers is not None:
+            if self.config["kind"] == "bin":
+                # Frozen bin boundaries are float64. Never learn cutpoints
+                # from silently rounded distinct int64/uint64 observations.
+                _require_float_safe_integer_bins(values)
+            positions, exact_values = integers
+            valid = np.asarray(exact_values, dtype=float)
+            is_integer = True
+        else:
+            try:
+                nums = pd.to_numeric(values, errors="raise").to_numpy(
+                    dtype=float, na_value=np.nan,
+                )
+            except (TypeError, ValueError) as exc:
+                raise ArtifactError(
+                    "Numeric FeatureMatrix transform received nonnumeric data."
+                ) from exc
+            if np.isinf(nums).any():
+                raise ArtifactError(
+                    "Numeric FeatureMatrix transforms require finite values or missing."
+                )
+            valid = nums[np.isfinite(nums)]
+            exact_values = None
+            is_integer = False
         if not len(valid):
             return
+        if self.integer_mode is None:
+            self.integer_mode = is_integer
+        elif self.integer_mode != is_integer:
+            raise ArtifactError(
+                "Numerical FeatureMatrix batches must retain their numeric "
+                "integer/float dtype to preserve fitted precision."
+            )
         count = len(valid)
         if self.config["kind"] == "zscore":
             if self.offset is None:
-                self.offset = float(valid[0])
+                self.offset = exact_values[0] if is_integer else float(valid[0])
             with np.errstate(over="ignore", invalid="ignore"):
-                shifted = valid - self.offset
+                shifted = (
+                    _lossless_integer_differences(exact_values, self.offset)
+                    if is_integer else valid - self.offset
+                )
                 batch_mean = float(np.mean(shifted))
                 residuals = shifted - batch_mean
                 batch_m2 = float(np.dot(residuals, residuals))
@@ -174,8 +253,12 @@ class ScalarStats:
                 self.mean = new_mean
                 self.m2 = new_m2
         self.count += count
-        self.minimum = min(self.minimum, float(valid.min()))
-        self.maximum = max(self.maximum, float(valid.max()))
+        if is_integer:
+            self.minimum = min(self.minimum, min(exact_values))
+            self.maximum = max(self.maximum, max(exact_values))
+        else:
+            self.minimum = min(self.minimum, float(valid.min()))
+            self.maximum = max(self.maximum, float(valid.max()))
         if self.config["kind"] == "bin" and self.config["strategy"] == "quantile":
             for value in valid:
                 self.seen += 1
@@ -195,6 +278,8 @@ class ScalarStats:
                 minimum=self.minimum if self.count else 0.0,
                 maximum=self.maximum if self.count else 0.0,
             )
+            if self.integer_mode:
+                fitted["integer_source"] = True
             if kind == "zscore":
                 # The rounded absolute mean is retained for compatibility;
                 # new renderers use the stable offset + centered mean.
@@ -225,16 +310,25 @@ class ScalarStats:
         elif self.minimum == self.maximum:
             edges = [-math.inf, math.inf]
         elif strategy == "equal_width":
-            requested_edges = np.linspace(
-                self.minimum, self.maximum, c["n_bins"] + 1,
-            )
-            if (not np.isfinite(requested_edges).all()
-                    or not np.all(np.diff(requested_edges) > 0)):
+            # Never subtract the two float64 endpoints: a finite span can
+            # overflow, even though all interior cutpoints are representable.
+            # n_bins=1 has no internal cutpoint and must always be supported.
+            count = c["n_bins"]
+            lo, hi = Fraction(str(self.minimum)), Fraction(str(self.maximum))
+            interior = [
+                float(lo + (hi - lo) * Fraction(index, count))
+                for index in range(1, count)
+            ]
+            boundaries = [float(self.minimum), *interior, float(self.maximum)]
+            if (not np.isfinite(boundaries).all()
+                    or any(right <= left for left, right in zip(
+                        boundaries, boundaries[1:],
+                    ))):
                 raise ArtifactError(
                     "Equal-width bin boundaries cannot be represented distinctly "
                     "as float64; reduce n_bins or rescale the input."
                 )
-            edges = [-math.inf, *requested_edges[1:-1].tolist(), math.inf]
+            edges = [-math.inf, *interior, math.inf]
         else:
             # Linear interpolation of the bounded reservoir's sorted values.
             # Exact decimal fractions avoid overflow in (upper - lower)
