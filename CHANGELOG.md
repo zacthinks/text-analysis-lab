@@ -16,7 +16,31 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
-## [0.11.3] - release pending
+## [0.12.0] - 2026-11-12
+
+### Added
+
+- Public sklearn-compatible `FeatureScaleNormalizer` for column-wise RMS (default) or strict-L2 feature scaling with a tunable exponent `gamma`; fitted statistics support dense and sparse inputs, sklearn Pipelines, model selection, and frozen estimator reuse (PR #74).
+- Versioned neutral fitted scaler state and a conversion helper to export sklearn Pipelines without depending on a foreign scaler's Python import path (PR #74).
+- `FeatureMatrix` metadata transforms for raw numeric features, population z-score standardization, min-max scaling, categorical one-hot encoding, fixed-width bins with optional anchor, quantile bins, equal-width bins, and explicit bin boundaries (PR #75).
+- Frozen, replayable numeric statistics and bin/category definitions, including deterministic ordered feature names, JSON-safe boundaries, and selected-column lazy materialization with sparse one-hot bin rendering (PR #75).
+
+### Changed
+
+- `FeatureMatrix` numerical metadata fitting now handles missing values, zero-variance columns, tied quantiles, out-of-range values, and lower-inclusive/upper-exclusive bin boundaries explicitly. Quantile boundaries use deterministic bounded-reservoir estimation, so learned quantiles may be approximate for large columns (PR #75).
+- Int64 and uint64 metadata differences are preserved for z-score/min-max scaling before float conversion. Raw or binned integer values outside the conservatively lossless float64 feature range are explicitly rejected instead of silently collapsing distinct observations (PR #75).
+
+### Fixed
+
+- Consolidate duplicate sparse CSR/CSC coordinates before computing fitted feature-column moments, without changing the caller's matrix; preserve sklearn Pipeline metadata routing during portable scaler export (PR #74).
+- Robust fixed-width decimal alignment, overflow-resistant min-max and equal-width/quantile interpolation, permanently inactive data-fitted bins with no valid observations, and preserved legacy numeric mappings using NumPy scalar values (PR #75).
+
+### Notes
+
+- Classifier-specific feature-column scaling remains an sklearn preprocessing operation, distinct from durable `FeatureMatrix` representation construction.
+- The frozen metadata recipe retains an explicit one-source geometry contract; there is no multi-geometry concatenation or GeCo UI change in this release.
+
+## [0.11.3] - 2026-11-11
 
 ### Added
 
@@ -31,9 +55,9 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 - Looser lineage changes which transformation chains may be reconstructed; it does **not** automatically disable artifact execution. Compatible document artifacts can use the frozen pipeline; already sentence-keyed artifacts still raise spaCy's ordinary key-collision error.
 - A sentence string replayed independently may receive context-sensitive spaCy annotations that differ from its original full-document processing. Stored corpus tokens and their provenance are unchanged.
-- This is a version-preparation entry. No `v0.11.3` tag or GitHub Release has been created.
+- Published as GitHub release `v0.11.3` on November 11, 2026.
 
-## [0.11.2] - release pending
+## [0.11.2] - 2026-11-10
 
 ### Added
 
