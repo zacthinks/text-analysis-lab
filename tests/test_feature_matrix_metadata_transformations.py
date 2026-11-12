@@ -167,7 +167,6 @@ def test_real_project_sparse_inherited_metadata_reopen_and_pushdown(tmp_path, mo
         )
         assert requested
         artifact_id, source_id, op_id = augmented.artifact_id, dtm.artifact_id, op.operator_id
-        expected = augmented.get_matrix().toarray() if False else None
     finally:
         project.close()
     reopened = Project.open(project_path)
