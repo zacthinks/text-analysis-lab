@@ -188,3 +188,62 @@ def test_legacy_mapping_can_have_kind_as_category():
     frame = pd.DataFrame({"name": ["kind", "other"]})
     encoder = FeatureMatrixEncoding({"name": {"kind": 7, "other": 3}}).fit(frame)
     np.testing.assert_array_equal(encoder.transform(frame), [[7], [3]])
+
+
+@pytest.mark.parametrize(
+    ("width", "anchor", "observations", "expected_edges", "expected_bins"),
+    [
+        (0.1, 0.0, [0.3, 0.4], [0.3, 0.4, 0.5], [0, 1]),
+        (0.1, 0.0, [-0.4, -0.3, -0.2], [-0.4, -0.3, -0.2, -0.1], [0, 1, 2]),
+        (0.1, 0.05, [0.25, 0.35], [0.25, 0.35, 0.45], [0, 1]),
+        (0.1, -0.05, [-0.35, -0.25], [-0.35, -0.25, -0.15], [0, 1]),
+    ],
+)
+def test_decimal_fixed_width_edges_and_lower_inclusion(
+    width, anchor, observations, expected_edges, expected_bins,
+):
+    config = {
+        "kind": "bin", "strategy": "fixed_width",
+        "width": width, "anchor": anchor,
+    }
+    frame = pd.DataFrame({"value": observations})
+    encoder = FeatureMatrixEncoding({"value": config}).fit(frame)
+    assert len(encoder.columns) == len(expected_edges) - 1
+    np.testing.assert_allclose(
+        encoder._specs[0]["fitted"]["edges"], expected_edges,
+        rtol=0, atol=1e-14,
+    )
+    actual = encoder.transform(frame, sparse_output=True)
+    assert sparse.isspmatrix_csr(actual)
+    np.testing.assert_array_equal(actual.argmax(axis=1), np.array(expected_bins).reshape(-1, 1))
+    np.testing.assert_array_equal(actual.toarray().sum(axis=1), np.ones(len(frame)))
+    reopened = FeatureMatrixEncoding.from_state(json.loads(json.dumps(encoder.to_state())))
+    np.testing.assert_array_equal(reopened.transform(frame), actual.toarray())
+
+
+def test_decimal_fixed_width_half_open_and_frozen_out_of_range():
+    encoder = FeatureMatrixEncoding({"value": {
+        "kind": "bin", "strategy": "fixed_width", "width": 0.1, "anchor": 0.,
+    }}).fit(pd.DataFrame({"value": [0.3, 0.4]}))
+    np.testing.assert_array_equal(
+        encoder.transform(pd.DataFrame({
+            "value": [0.29999999999999993, 0.3, 0.35, 0.4, 0.5, np.nan],
+        })),
+        [
+            [0, 0],  # immediately below the first lower edge
+            [1, 0],  # inclusive lower edge
+            [1, 0],
+            [0, 1],  # exclusive upper edge of preceding bin
+            [0, 0],  # upper edge of the final bin
+            [0, 0],
+        ],
+    )
+
+
+def test_fixed_width_unrepresentable_float_edges_fail_explicitly():
+    # Large anchors cannot distinguish widths below one float64 ULP.
+    with pytest.raises(ArtifactError, match="represented distinctly"):
+        FeatureMatrixEncoding({"value": {
+            "kind": "bin", "strategy": "fixed_width",
+            "width": 0.1, "anchor": 1e20,
+        }}).fit(pd.DataFrame({"value": [1e20]}))
