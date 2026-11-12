@@ -41,16 +41,16 @@ def _integer_metadata_values(values):
     return None
 
 
-def _require_float_safe_integer_bins(values):
-    """Reject unsafe integer-to-float binning instead of collapsing values."""
+def _require_float_safe_integer_bins(values, *, usage="binning"):
+    """Reject unsafe integer-to-float features instead of collapsing values."""
     exact = _integer_metadata_values(values)
     if exact is not None and any(
         abs(value) > MAX_EXACT_FLOAT_INTEGER for value in exact[1]
     ):
         raise ArtifactError(
-            "Integer metadata exceeds the lossless float64 binning range; "
+            f"Integer metadata exceeds the lossless float64 {usage} range; "
             "convert to a smaller relative unit or use a supported numeric "
-            "scaler before binning."
+            "scaler."
         )
 
 
