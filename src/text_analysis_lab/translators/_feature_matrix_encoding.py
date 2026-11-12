@@ -49,7 +49,7 @@ class FeatureMatrixEncoding:
     def fit_batches(
         self, batches: Iterable[pd.DataFrame], *, columns: Sequence[str],
     ) -> FeatureMatrixEncoding:
-        """Learn only category vocabularies; never accumulate source rows.
+        """Learn bounded scalar statistics and category vocabularies in batches.
 
         A column's type is determined from its first nonempty batch. This is
         stable for TeAL/Arrow-backed fields, whose schema is fixed throughout
