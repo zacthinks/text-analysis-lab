@@ -429,7 +429,9 @@ class FeatureMatrixEncoding:
                 # The output matrix is float64. Unlike fitted scalers, raw
                 # metadata has no offset to preserve large adjacent integers.
                 # Reject rather than silently alias integer observations.
-                _require_float_safe_integer_bins(values)
+                _require_float_safe_integer_bins(
+                    values, usage="raw numeric-feature",
+                )
                 try:
                     block = (
                         pd.to_numeric(values, errors="raise")
