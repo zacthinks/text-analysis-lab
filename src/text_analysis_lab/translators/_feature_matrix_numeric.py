@@ -29,6 +29,13 @@ def parse_transform(name, request):
             return {"kind": "minmax"}
         return None
     kind = request.get("kind")
+    # A legacy explicit category mapping may itself have the category "kind".
+    # Preserve that old mapping syntax when all mapped values are numeric.
+    if isinstance(kind, (int, float)) and not isinstance(kind, bool) and all(
+        isinstance(v, (int, float)) and not isinstance(v, bool)
+        for v in request.values()
+    ):
+        return None
     if kind in {"raw", "numeric", "zscore", "minmax"}:
         if set(request) != {"kind"}:
             raise ArtifactError(f"Unrecognized options for {name!r} {kind!r}.")
