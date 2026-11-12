@@ -145,4 +145,5 @@ class ScalarStats:
             inner = np.quantile(self.sample, np.linspace(0, 1, c["n_bins"] + 1)[1:-1])
             edges = [-math.inf, *np.unique(inner).tolist(), math.inf]
         # Fixed-width edges are finite; out-of-range observations encode as all zero.
-        return dict(c, edges=edges, missing="all_zero", count=self.count)
+        return dict(c, edges=[None if not math.isfinite(e) else e for e in edges],
+                    missing="all_zero", count=self.count)
