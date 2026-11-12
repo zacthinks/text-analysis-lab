@@ -466,3 +466,11 @@ def test_stable_zscore_batch_independence():
         [-3 / np.sqrt(5), -1 / np.sqrt(5), 1 / np.sqrt(5), 3 / np.sqrt(5)],
         atol=1e-14,
     )
+
+
+def test_tiny_unrepresentable_zscore_variance_rejected():
+    # Distinct finite subnormal observations must not freeze zero variance.
+    with pytest.raises(ArtifactError, match="stable float64 precision|underflowed"):
+        FeatureMatrixEncoding({"score": "zscore"}).fit(
+            pd.DataFrame({"score": [1e-300, 2e-300]})
+        )
