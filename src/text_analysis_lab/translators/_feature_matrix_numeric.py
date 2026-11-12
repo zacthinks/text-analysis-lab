@@ -63,8 +63,10 @@ def parse_transform(name, request):
     kind = request.get("kind")
     # A legacy explicit category mapping may itself have the category "kind".
     # Preserve that old mapping syntax when all mapped values are numeric.
-    if isinstance(kind, (int, float)) and not isinstance(kind, bool) and all(
-        isinstance(v, (int, float)) and not isinstance(v, bool)
+    # Match the accepted legacy mapping types, including numpy scalars.
+    numeric_mapping_types = (int, float, np.integer, np.floating)
+    if isinstance(kind, numeric_mapping_types) and not isinstance(kind, bool) and all(
+        isinstance(v, numeric_mapping_types) and not isinstance(v, bool)
         for v in request.values()
     ):
         return None
@@ -174,13 +176,27 @@ class ScalarStats:
         elif self.minimum == self.maximum:
             edges = [-math.inf, math.inf]
         elif strategy == "equal_width":
-            edges = [-math.inf, *np.linspace(self.minimum, self.maximum,
-                     c["n_bins"] + 1)[1:-1].tolist(), math.inf]
+            requested_edges = np.linspace(
+                self.minimum, self.maximum, c["n_bins"] + 1,
+            )
+            if (not np.isfinite(requested_edges).all()
+                    or not np.all(np.diff(requested_edges) > 0)):
+                raise ArtifactError(
+                    "Equal-width bin boundaries cannot be represented distinctly "
+                    "as float64; reduce n_bins or rescale the input."
+                )
+            edges = [-math.inf, *requested_edges[1:-1].tolist(), math.inf]
         else:
             # Deterministic bounded-reservoir quantile estimate. Duplicate
             # cutpoints are collapsed; actual output width can be < n_bins.
             inner = np.quantile(self.sample, np.linspace(0, 1, c["n_bins"] + 1)[1:-1])
             edges = [-math.inf, *np.unique(inner).tolist(), math.inf]
         # Fixed-width edges are finite; out-of-range observations encode as all zero.
-        return dict(c, edges=[None if not math.isfinite(e) else e for e in edges],
-                    missing="all_zero", count=self.count)
+        return dict(
+            c, edges=[None if not math.isfinite(e) else e for e in edges],
+            missing="all_zero", count=self.count,
+            # Data-fitted bins with no observed values have no learned cutpoints.
+            # Keep one feature for schema stability, but never activate it on replay.
+            # Explicit boundaries do not require data, so remain active.
+            inactive=(self.count == 0 and strategy != "boundaries"),
+        )
