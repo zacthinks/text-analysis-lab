@@ -184,10 +184,19 @@ def test_real_project_sparse_inherited_metadata_reopen_and_pushdown(tmp_path, mo
         reopened.close()
 
 
-def test_legacy_mapping_can_have_kind_as_category():
+@pytest.mark.parametrize(
+    "mapping", [
+        {"kind": 7, "other": 3},
+        {"kind": np.int64(7), "other": np.float64(3.0)},
+        {"kind": np.float32(7.0), "other": np.int32(3)},
+    ],
+)
+def test_legacy_mapping_can_have_kind_as_category(mapping):
     frame = pd.DataFrame({"name": ["kind", "other"]})
-    encoder = FeatureMatrixEncoding({"name": {"kind": 7, "other": 3}}).fit(frame)
+    encoder = FeatureMatrixEncoding({"name": mapping}).fit(frame)
     np.testing.assert_array_equal(encoder.transform(frame), [[7], [3]])
+    frozen = FeatureMatrixEncoding.from_state(json.loads(json.dumps(encoder.to_state())))
+    np.testing.assert_array_equal(frozen.transform(frame), [[7], [3]])
 
 
 @pytest.mark.parametrize(
@@ -294,3 +303,73 @@ def test_sparse_wide_bins_300k_rows_bounded_nnz():
     narrow = encoder.transform(frame[["value"]], sparse_output=True, indices=[0])
     assert narrow.shape == (n_rows, 1)
     assert narrow.nnz == int(np.count_nonzero((np.arange(n_rows) % width) == 0))
+
+
+@pytest.mark.parametrize("strategy", ["fixed_width", "quantile", "equal_width"])
+@pytest.mark.parametrize("sparse_output", [False, True])
+def test_all_missing_fitted_bins_stay_inactive_after_reopen(strategy, sparse_output):
+    config = {
+        "kind": "bin", "strategy": strategy,
+        **({"width": 10, "anchor": 2000} if strategy == "fixed_width"
+           else {"n_bins": 4}),
+    }
+    encoder = FeatureMatrixEncoding({"year": config}).fit(
+        pd.DataFrame({"year": [np.nan, np.nan]})
+    )
+    assert encoder.columns == ("year_bin_0",)
+    frozen = encoder.to_state()
+    assert frozen["specs"][0]["fitted"]["inactive"] is True
+    reopened = FeatureMatrixEncoding.from_state(json.loads(json.dumps(frozen)))
+    incoming = pd.DataFrame({"year": [2000., 2010., -100., np.nan]})
+    result = reopened.transform(incoming, sparse_output=sparse_output)
+    if sparse_output:
+        assert sparse.isspmatrix_csr(result)
+        assert result.nnz == 0
+        result = result.toarray()
+    np.testing.assert_array_equal(result, np.zeros((4, 1)))
+    # Preserve replay of an older state that omitted the explicit inactive flag.
+    legacy = json.loads(json.dumps(frozen))
+    del legacy["specs"][0]["fitted"]["inactive"]
+    legacy_replay = FeatureMatrixEncoding.from_state(legacy).transform(
+        incoming, sparse_output=sparse_output,
+    )
+    if sparse.issparse(legacy_replay):
+        legacy_replay = legacy_replay.toarray()
+    np.testing.assert_array_equal(legacy_replay, np.zeros((4, 1)))
+
+
+@pytest.mark.parametrize("sparse_output", [False, True])
+def test_all_missing_explicit_edges_remain_active_after_reopen(sparse_output):
+    encoder = FeatureMatrixEncoding({"year": {
+        "kind": "bin", "strategy": "boundaries", "boundaries": [2000, 2010],
+    }}).fit(pd.DataFrame({"year": [np.nan, np.nan]}))
+    assert encoder.to_state()["specs"][0]["fitted"]["inactive"] is False
+    frozen = FeatureMatrixEncoding.from_state(
+        json.loads(json.dumps(encoder.to_state()))
+    )
+    result = frozen.transform(
+        pd.DataFrame({"year": [1999., 2000., 2010., np.nan]}),
+        sparse_output=sparse_output,
+    )
+    if sparse.issparse(result):
+        result = result.toarray()
+    np.testing.assert_array_equal(result, [
+        [1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, 0],
+    ])
+
+
+def test_equal_width_nonrepresentable_boundaries_rejected():
+    # The 4 requested bins cannot occupy distinct float64 intervals.
+    frame = pd.DataFrame({"value": [1e16, 1e16 + 2]})
+    with pytest.raises(ArtifactError, match="represented distinctly"):
+        FeatureMatrixEncoding({"value": {
+            "kind": "bin", "strategy": "equal_width", "n_bins": 4,
+        }}).fit(frame)
+    valid = FeatureMatrixEncoding({"value": {
+        "kind": "bin", "strategy": "equal_width", "n_bins": 1,
+    }}).fit(frame)
+    assert valid.columns == ("value_bin_0",)
+    np.testing.assert_array_equal(
+        valid.transform(pd.DataFrame({"value": [1e16, 1e16 + 2]})),
+        [[1], [1]],
+    )
