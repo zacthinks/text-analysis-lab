@@ -15,8 +15,55 @@ from scipy import sparse
 
 from text_analysis_lab.core.errors import ArtifactError
 from text_analysis_lab.translators._feature_matrix_numeric import (
-    ScalarStats, parse_transform,
+    ScalarStats, parse_transform, _integer_metadata_values,
+    _require_float_safe_integer_bins, _lossless_integer_differences,
 )
+
+
+def _scaling_numbers(values, fitted, kind):
+    """Preserve original integer values for exact scaling arithmetic.
+
+    A frozen integer source must be replayed using integer metadata, never
+    reinterpreted through float64. Legacy float-only recipes retain their
+    original behavior.
+    """
+    integers = _integer_metadata_values(values)
+    if fitted.get("integer_source") and integers is not None:
+        positions = values.notna().to_numpy(dtype=bool)
+        return positions, integers[1]
+    if fitted.get("integer_source") and values.notna().any():
+        raise ArtifactError(
+            "Frozen integer metadata scaling requires integer values on replay; "
+            "float conversion may lose precision."
+        )
+    try:
+        numeric = pd.to_numeric(values, errors="raise").to_numpy(
+            dtype=float, na_value=np.nan,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ArtifactError(
+            f"FeatureMatrix {kind} metadata is not numeric."
+        ) from exc
+    if np.isinf(numeric).any():
+        raise ArtifactError("FeatureMatrix metadata contains infinity.")
+    return np.isfinite(numeric), numeric[np.isfinite(numeric)]
+
+
+def _scaled_integer_minmax(values, minimum, maximum):
+    """Keep signed/unsigned integer differences exact until normalization."""
+    span = int(maximum) - int(minimum)
+    if span == 0:
+        return np.zeros(len(values), dtype=float)
+    from fractions import Fraction
+
+    scaled = np.array([
+        float(Fraction(value - int(minimum), span)) for value in values
+    ], dtype=float)
+    if not np.isfinite(scaled).all():
+        raise ArtifactError(
+            "Min-max integer metadata cannot be represented as finite float64."
+        )
+    return scaled
 
 
 def _bin_is_inactive(fitted: Mapping[str, Any]) -> bool:
@@ -219,6 +266,7 @@ class FeatureMatrixEncoding:
                         name = spec["name"]
                         if name not in frame.columns:
                             raise ArtifactError(f"FeatureMatrix input is missing {name!r}.")
+                        _require_float_safe_integer_bins(frame[name])
                         try:
                             numbers = pd.to_numeric(
                                 frame[name], errors="raise"
@@ -289,13 +337,26 @@ class FeatureMatrixEncoding:
                 )
             elif spec["kind"] in {"bin", "zscore", "minmax"}:
                 fitted = spec["fitted"]
-                try:
-                    numeric = pd.to_numeric(values, errors="raise").to_numpy(dtype=float, na_value=np.nan)
-                except (TypeError, ValueError) as exc:
-                    raise ArtifactError(f"FeatureMatrix numeric column {name!r} is not numeric.") from exc
-                if np.isinf(numeric).any():
-                    raise ArtifactError(f"FeatureMatrix numeric column {name!r} contains infinity.")
-                valid = np.isfinite(numeric)
+                if spec["kind"] == "bin":
+                    _require_float_safe_integer_bins(values)
+                    try:
+                        numeric = pd.to_numeric(
+                            values, errors="raise"
+                        ).to_numpy(dtype=float, na_value=np.nan)
+                    except (TypeError, ValueError) as exc:
+                        raise ArtifactError(
+                            f"FeatureMatrix numeric column {name!r} is not numeric."
+                        ) from exc
+                    if np.isinf(numeric).any():
+                        raise ArtifactError(
+                            f"FeatureMatrix numeric column {name!r} contains infinity."
+                        )
+                    valid = np.isfinite(numeric)
+                    observed = numeric[valid]
+                else:
+                    valid, observed = _scaling_numbers(
+                        values, fitted, spec["kind"],
+                    )
                 if spec["kind"] == "bin":
                     block = np.zeros((len(values), 1), dtype=float)
                     if not _bin_is_inactive(fitted):
@@ -306,7 +367,7 @@ class FeatureMatrixEncoding:
                         # Lower edges inclusive, upper edges exclusive. Missing
                         # and out-of-range values encode as all-zero features.
                         target = np.searchsorted(
-                            edges, numeric[valid], side="right",
+                            edges, observed, side="right",
                         ) - 1
                         rows = np.flatnonzero(valid)
                         mask = (
@@ -323,7 +384,13 @@ class FeatureMatrixEncoding:
                         offset = fitted.get("offset", fitted["mean"])
                         mean_shift = fitted.get("mean_shift", 0.0)
                         with np.errstate(over="ignore", invalid="ignore"):
-                            centered = (numeric[valid] - offset) - mean_shift
+                            if fitted.get("integer_source"):
+                                centered = (
+                                    _lossless_integer_differences(observed, int(offset))
+                                    - mean_shift
+                                )
+                            else:
+                                centered = (observed - offset) - mean_shift
                             scaled = centered / sd
                         if not np.isfinite(scaled).all():
                             raise ArtifactError(
@@ -336,20 +403,22 @@ class FeatureMatrixEncoding:
                     maximum = fitted["maximum"]
                     block = np.zeros((len(values), 1), dtype=float)
                     if maximum > minimum:
-                        with np.errstate(over="ignore", invalid="ignore"):
-                            span = maximum - minimum
-                            differences = numeric[valid] - minimum
-                            if np.isfinite(span) and np.isfinite(differences).all():
-                                scaled = differences / span
-                            else:
-                                # Halving before subtraction protects the
-                                # opposite-sign float64 extremes, without
-                                # requiring a fitted range larger than float64.
-                                half_span = maximum / 2.0 - minimum / 2.0
-                                scaled = (
-                                    (numeric[valid] / 2.0 - minimum / 2.0)
-                                    / half_span
-                                )
+                        if fitted.get("integer_source"):
+                            scaled = _scaled_integer_minmax(observed, minimum, maximum)
+                        else:
+                            with np.errstate(over="ignore", invalid="ignore"):
+                                span = maximum - minimum
+                                differences = observed - minimum
+                                if np.isfinite(span) and np.isfinite(differences).all():
+                                    scaled = differences / span
+                                else:
+                                    # Halving before subtraction protects the
+                                    # opposite-sign float64 extremes.
+                                    half_span = maximum / 2.0 - minimum / 2.0
+                                    scaled = (
+                                        (observed / 2.0 - minimum / 2.0)
+                                        / half_span
+                                    )
                         if not np.isfinite(scaled).all():
                             raise ArtifactError(
                                 f"Min-max values for {name!r} cannot be represented "
