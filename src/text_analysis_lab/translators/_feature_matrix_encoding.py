@@ -318,12 +318,44 @@ class FeatureMatrixEncoding:
                     sd = fitted["sd"]
                     block = np.zeros((len(values), 1), dtype=float)
                     if sd > 0:
-                        block[valid, 0] = (numeric[valid] - fitted["mean"]) / sd
+                        # New fitted states retain the offset and centered mean
+                        # separately. Old recipes with only "mean" still replay.
+                        offset = fitted.get("offset", fitted["mean"])
+                        mean_shift = fitted.get("mean_shift", 0.0)
+                        with np.errstate(over="ignore", invalid="ignore"):
+                            centered = (numeric[valid] - offset) - mean_shift
+                            scaled = centered / sd
+                        if not np.isfinite(scaled).all():
+                            raise ArtifactError(
+                                f"Z-score values for {name!r} cannot be represented "
+                                "as finite float64; rescale the input."
+                            )
+                        block[valid, 0] = scaled
                 else:
-                    span = fitted["maximum"] - fitted["minimum"]
+                    minimum = fitted["minimum"]
+                    maximum = fitted["maximum"]
                     block = np.zeros((len(values), 1), dtype=float)
-                    if span > 0:
-                        block[valid, 0] = (numeric[valid] - fitted["minimum"]) / span
+                    if maximum > minimum:
+                        with np.errstate(over="ignore", invalid="ignore"):
+                            span = maximum - minimum
+                            differences = numeric[valid] - minimum
+                            if np.isfinite(span) and np.isfinite(differences).all():
+                                scaled = differences / span
+                            else:
+                                # Halving before subtraction protects the
+                                # opposite-sign float64 extremes, without
+                                # requiring a fitted range larger than float64.
+                                half_span = maximum / 2.0 - minimum / 2.0
+                                scaled = (
+                                    (numeric[valid] / 2.0 - minimum / 2.0)
+                                    / half_span
+                                )
+                        if not np.isfinite(scaled).all():
+                            raise ArtifactError(
+                                f"Min-max values for {name!r} cannot be represented "
+                                "as finite float64; rescale the input."
+                            )
+                        block[valid, 0] = scaled
             else:
                 try:
                     block = (
