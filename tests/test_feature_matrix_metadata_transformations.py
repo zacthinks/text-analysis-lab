@@ -373,3 +373,96 @@ def test_equal_width_nonrepresentable_boundaries_rejected():
         valid.transform(pd.DataFrame({"value": [1e16, 1e16 + 2]})),
         [[1], [1]],
     )
+
+
+@pytest.mark.parametrize("sparse_output", [False, True])
+def test_large_offset_zscore_frozen_batches_and_replay(sparse_output):
+    frame = pd.DataFrame({"score": [1e16, 1e16 + 2]})
+    model = FeatureMatrixEncoding({"score": "zscore"}).fit_batches(
+        (frame.iloc[:1], frame.iloc[1:]), columns=["score"],
+    )
+    state = json.loads(json.dumps(model.to_state(), allow_nan=False))
+    assert state["specs"][0]["fitted"]["offset"] == 1e16
+    assert state["specs"][0]["fitted"]["mean_shift"] == 1.0
+    assert state["specs"][0]["fitted"]["sd"] == 1.0
+    reopened = FeatureMatrixEncoding.from_state(state)
+    actual = reopened.transform(frame, sparse_output=sparse_output)
+    if sparse.issparse(actual):
+        actual = actual.toarray()
+    np.testing.assert_allclose(actual.ravel(), [-1., 1.], rtol=0, atol=1e-14)
+    # The old fitted schema with only mean/sd must still be readable.
+    legacy = FeatureMatrixEncoding.from_state({
+        "specs": [{
+            "name": "score", "kind": "zscore", "outputs": ["score"],
+            "fitted": {"mean": 20., "sd": 10.},
+        }],
+    })
+    np.testing.assert_allclose(
+        legacy.transform(pd.DataFrame({"score": [10., 30.]})).ravel(),
+        [-1., 1.],
+    )
+
+
+@pytest.mark.parametrize("sparse_output", [False, True])
+def test_extreme_finite_minmax_fit_json_and_replay(sparse_output):
+    frame = pd.DataFrame({"score": [-1e308, 1e308, np.nan]})
+    fitted = FeatureMatrixEncoding({"score": "minmax"}).fit(frame)
+    state = json.loads(json.dumps(fitted.to_state(), allow_nan=False))
+    reloaded = FeatureMatrixEncoding.from_state(state)
+    transformed = reloaded.transform(frame, sparse_output=sparse_output)
+    if sparse.issparse(transformed):
+        transformed = transformed.toarray()
+    assert np.isfinite(transformed).all()
+    np.testing.assert_allclose(transformed.ravel(), [0., 1., 0.])
+
+
+@pytest.mark.parametrize("sparse_output", [False, True])
+def test_extreme_finite_quantiles_json_frozen_replay(sparse_output):
+    frame = pd.DataFrame({"score": [-1e308, 1e308]})
+    fitted = FeatureMatrixEncoding({"score": {
+        "kind": "bin", "strategy": "quantile", "n_bins": 4,
+    }}).fit(frame)
+    state = json.loads(json.dumps(fitted.to_state(), allow_nan=False))
+    edges = state["specs"][0]["fitted"]["edges"]
+    assert edges == [None, -5e307, 0., 5e307, None]
+    assert all(np.isfinite(edge) for edge in edges[1:-1])
+    reloaded = FeatureMatrixEncoding.from_state(state)
+    result = reloaded.transform(frame, sparse_output=sparse_output)
+    if sparse.issparse(result):
+        result = result.toarray()
+    np.testing.assert_array_equal(result, [
+        [1, 0, 0, 0], [0, 0, 0, 1],
+    ])
+
+
+def test_unrepresentable_zscore_moments_raise_instead_of_silent_corruption():
+    with pytest.raises(ArtifactError, match="stable float64 precision"):
+        FeatureMatrixEncoding({"score": "zscore"}).fit(
+            pd.DataFrame({"score": [-1e308, 1e308]})
+        )
+
+
+def test_nonfinite_zscore_replay_is_rejected():
+    trained = FeatureMatrixEncoding({"score": "zscore"}).fit(
+        pd.DataFrame({"score": [1., 1. + 1e-12]})
+    )
+    with pytest.raises(ArtifactError, match="cannot be represented"):
+        trained.transform(pd.DataFrame({"score": [1e308]}))
+
+
+def test_stable_zscore_batch_independence():
+    frame = pd.DataFrame({
+        "score": [1e16, 1e16 + 2, 1e16 + 4, 1e16 + 6],
+    })
+    first = FeatureMatrixEncoding({"score": "zscore"}).fit(frame)
+    second = FeatureMatrixEncoding({"score": "zscore"}).fit_batches(
+        (frame.iloc[:2], frame.iloc[2:]), columns=["score"],
+    )
+    np.testing.assert_allclose(
+        first.transform(frame), second.transform(frame), atol=1e-14,
+    )
+    np.testing.assert_allclose(
+        first.transform(frame).ravel(),
+        [-3 / np.sqrt(5), -1 / np.sqrt(5), 1 / np.sqrt(5), 3 / np.sqrt(5)],
+        atol=1e-14,
+    )
