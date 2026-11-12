@@ -38,7 +38,7 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 - A sentence string replayed independently may receive context-sensitive spaCy annotations that differ from its original full-document processing. Stored corpus tokens and their provenance are unchanged.
 - Released as `v0.11.3` on November 11, 2026.
 
-## [0.11.2] - release pending
+## [0.11.2] - 2026-11-10
 
 ### Added
 
