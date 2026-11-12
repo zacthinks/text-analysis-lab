@@ -117,7 +117,10 @@ class ScalarStats:
     def __init__(self, config):
         self.config = config
         self.count = 0
-        self.mean = 0.0
+        # Welford moments are accumulated relative to the first finite value.
+        # Keeping this offset separate is essential for e.g. [1e16, 1e16+2].
+        self.offset = None
+        self.mean = 0.0  # centered mean, not the rounded absolute mean
         self.m2 = 0.0
         self.minimum = math.inf
         self.maximum = -math.inf
@@ -136,12 +139,41 @@ class ScalarStats:
         if not len(valid):
             return
         count = len(valid)
-        mean = float(valid.mean())
-        delta = mean - self.mean
-        new_count = self.count + count
-        self.m2 += float(np.square(valid - mean).sum()) + delta * delta * self.count * count / new_count
-        self.mean += delta * count / new_count
-        self.count = new_count
+        if self.config["kind"] == "zscore":
+            if self.offset is None:
+                self.offset = float(valid[0])
+            with np.errstate(over="ignore", invalid="ignore"):
+                shifted = valid - self.offset
+                batch_mean = float(np.mean(shifted))
+                residuals = shifted - batch_mean
+                batch_m2 = float(np.dot(residuals, residuals))
+            if not np.isfinite(shifted).all() or not np.isfinite(
+                [batch_mean, batch_m2]
+            ).all():
+                raise ArtifactError(
+                    "Z-score moments exceed stable float64 precision; "
+                    "rescale the input or use another encoding."
+                )
+            if self.count == 0:
+                self.mean = batch_mean
+                self.m2 = batch_m2
+            else:
+                total = self.count + count
+                with np.errstate(over="ignore", invalid="ignore"):
+                    difference = batch_mean - self.mean
+                    new_mean = self.mean + difference * (count / total)
+                    new_m2 = (
+                        self.m2 + batch_m2
+                        + (difference * difference) * (self.count / total) * count
+                    )
+                if not np.isfinite([new_mean, new_m2]).all():
+                    raise ArtifactError(
+                        "Z-score moments exceed stable float64 precision; "
+                        "rescale the input or use another encoding."
+                    )
+                self.mean = new_mean
+                self.m2 = new_m2
+        self.count += count
         self.minimum = min(self.minimum, float(valid.min()))
         self.maximum = max(self.maximum, float(valid.max()))
         if self.config["kind"] == "bin" and self.config["strategy"] == "quantile":
@@ -158,10 +190,22 @@ class ScalarStats:
         c = self.config
         kind = c["kind"]
         if kind != "bin":
-            return dict(c, count=self.count, mean=self.mean if self.count else 0.0,
-                        sd=math.sqrt(max(self.m2, 0.0) / self.count) if self.count else 0.0,
-                        minimum=self.minimum if self.count else 0.0,
-                        maximum=self.maximum if self.count else 0.0)
+            fitted = dict(
+                c, count=self.count, mean=0.0, sd=0.0,
+                minimum=self.minimum if self.count else 0.0,
+                maximum=self.maximum if self.count else 0.0,
+            )
+            if kind == "zscore":
+                # The rounded absolute mean is retained for compatibility;
+                # new renderers use the stable offset + centered mean.
+                offset = self.offset if self.offset is not None else 0.0
+                fitted.update(
+                    mean=offset + self.mean,
+                    offset=offset,
+                    mean_shift=self.mean,
+                    sd=math.sqrt(self.m2 / self.count) if self.count else 0.0,
+                )
+            return fitted
         strategy = c["strategy"]
         if strategy == "boundaries":
             edges = [-math.inf, *c["boundaries"], math.inf]
@@ -187,10 +231,34 @@ class ScalarStats:
                 )
             edges = [-math.inf, *requested_edges[1:-1].tolist(), math.inf]
         else:
-            # Deterministic bounded-reservoir quantile estimate. Duplicate
-            # cutpoints are collapsed; actual output width can be < n_bins.
-            inner = np.quantile(self.sample, np.linspace(0, 1, c["n_bins"] + 1)[1:-1])
-            edges = [-math.inf, *np.unique(inner).tolist(), math.inf]
+            # Linear interpolation of the bounded reservoir's sorted values.
+            # Exact decimal fractions avoid overflow in (upper - lower)
+            # for finite values of opposite signs near float64 limits.
+            ordered = np.sort(np.asarray(self.sample, dtype=float))
+            cutpoints = []
+            for rank in range(1, c["n_bins"]):
+                lower_index, remainder = divmod(
+                    (len(ordered) - 1) * rank, c["n_bins"],
+                )
+                if remainder:
+                    left = Fraction(str(float(ordered[lower_index])))
+                    right = Fraction(str(float(ordered[lower_index + 1])))
+                    cut = float(
+                        left + (right - left) * Fraction(remainder, c["n_bins"])
+                    )
+                else:
+                    cut = float(ordered[lower_index])
+                if not math.isfinite(cut):
+                    raise ArtifactError(
+                        "Quantile interpolation produced a nonfinite boundary; "
+                        "rescale the input."
+                    )
+                cutpoints.append(cut)
+            # Legitimately tied float64 cutpoints collapse to fewer bins.
+            inner = np.unique(np.asarray(cutpoints, dtype=float))
+            if not np.isfinite(inner).all() or not np.all(inner[1:] > inner[:-1]):
+                raise ArtifactError("Quantile boundaries must be finite and ordered.")
+            edges = [-math.inf, *inner.tolist(), math.inf]
         # Fixed-width edges are finite; out-of-range observations encode as all zero.
         return dict(
             c, edges=[None if not math.isfinite(e) else e for e in edges],
