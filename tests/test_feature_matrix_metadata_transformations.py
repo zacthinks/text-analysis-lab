@@ -562,3 +562,18 @@ def test_extreme_equal_width_bins_are_finite_and_replay(
     expected[0, 0] = 1
     expected[1, -1] = 1
     np.testing.assert_array_equal(result, expected)
+
+
+@pytest.mark.parametrize("dtype", ["int64", "uint64"])
+@pytest.mark.parametrize("encoding", [None, "numeric", {"kind": "raw"}])
+def test_raw_large_integer_metadata_rejects_lossy_float_conversion(
+    dtype, encoding,
+):
+    values = ([2**53, 2**53 + 1] if dtype == "int64"
+              else [2**64 - 2, 2**64 - 1])
+    frame = pd.DataFrame({"value": pd.Series(values, dtype=dtype)})
+    fitted = FeatureMatrixEncoding(
+        {"value": encoding} if encoding is not None else None
+    ).fit(frame)
+    with pytest.raises(ArtifactError, match="lossless float64 raw numeric-feature"):
+        fitted.transform(frame)
