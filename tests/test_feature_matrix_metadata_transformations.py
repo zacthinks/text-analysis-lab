@@ -474,3 +474,91 @@ def test_tiny_unrepresentable_zscore_variance_rejected():
         FeatureMatrixEncoding({"score": "zscore"}).fit(
             pd.DataFrame({"score": [1e-300, 2e-300]})
         )
+
+
+@pytest.mark.parametrize(
+    ("dtype", "values"),
+    [
+        ("int64", [2**53, 2**53 + 1]),
+        ("uint64", [2**64 - 2, 2**64 - 1]),
+        ("int64", [-2**63, -2**63 + 1]),
+        ("Int64", [2**53, 2**53 + 1]),
+        ("UInt64", [2**64 - 2, 2**64 - 1]),
+    ],
+)
+@pytest.mark.parametrize("sparse_output", [False, True])
+def test_large_integer_scalers_preserve_adjacent_values_after_reopen(
+    dtype, values, sparse_output,
+):
+    frame = pd.DataFrame({"value": pd.Series(values, dtype=dtype)})
+    for kind, expected in (("zscore", [-1., 1.]), ("minmax", [0., 1.])):
+        fitted = FeatureMatrixEncoding({"value": {"kind": kind}}).fit_batches(
+            (frame.iloc[:1], frame.iloc[1:]), columns=["value"],
+        )
+        state = json.loads(json.dumps(fitted.to_state(), allow_nan=False))
+        assert state["specs"][0]["fitted"]["integer_source"] is True
+        assert state["specs"][0]["fitted"]["minimum"] == values[0]
+        assert state["specs"][0]["fitted"]["maximum"] == values[1]
+        reopened = FeatureMatrixEncoding.from_state(state)
+        result = reopened.transform(frame, sparse_output=sparse_output)
+        if sparse.issparse(result):
+            result = result.toarray()
+        np.testing.assert_allclose(result.ravel(), expected, atol=1e-14)
+        # Freeze must not inadvertently accept rounded float replay values.
+        with pytest.raises(ArtifactError, match="requires integer values"):
+            reopened.transform(
+                pd.DataFrame({"value": np.asarray(values, dtype=float)})
+            )
+
+
+@pytest.mark.parametrize("dtype", ["int64", "uint64"])
+@pytest.mark.parametrize("strategy", ["fixed_width", "quantile", "equal_width", "boundaries"])
+def test_large_integer_binning_rejected_before_lossy_float_conversion(dtype, strategy):
+    values = ([2**53, 2**53 + 1] if dtype == "int64"
+              else [2**64 - 2, 2**64 - 1])
+    frame = pd.DataFrame({"value": pd.Series(values, dtype=dtype)})
+    config = {"kind": "bin", "strategy": strategy}
+    if strategy == "fixed_width":
+        config["width"] = 1
+    elif strategy == "boundaries":
+        config["boundaries"] = [0]
+    else:
+        config["n_bins"] = 2
+    with pytest.raises(ArtifactError, match="lossless float64 binning range"):
+        FeatureMatrixEncoding({"value": config}).fit(frame)
+    # Even an ordinary fitted schema must not silently quantize huge
+    # integers at replay time; both paths use the same guard.
+    ordinary = FeatureMatrixEncoding({"value": {
+        "kind": "bin", "strategy": "equal_width", "n_bins": 2,
+    }}).fit(pd.DataFrame({"value": [1., 3.]}))
+    for sparse_output in (False, True):
+        with pytest.raises(ArtifactError, match="lossless float64 binning range"):
+            ordinary.transform(frame, sparse_output=sparse_output)
+
+
+@pytest.mark.parametrize("n_bins", [1, 2, 4])
+@pytest.mark.parametrize("sparse_output", [False, True])
+def test_extreme_equal_width_bins_are_finite_and_replay(
+    n_bins, sparse_output,
+):
+    frame = pd.DataFrame({"value": [-1e308, 1e308]})
+    fitted = FeatureMatrixEncoding({"value": {
+        "kind": "bin", "strategy": "equal_width", "n_bins": n_bins,
+    }}).fit(frame)
+    state = json.loads(json.dumps(fitted.to_state(), allow_nan=False))
+    edges = state["specs"][0]["fitted"]["edges"]
+    assert len(edges) == n_bins + 1
+    if n_bins == 1:
+        assert edges == [None, None]
+    elif n_bins == 2:
+        assert edges == [None, 0.0, None]
+    else:
+        assert edges == [None, -5e307, 0., 5e307, None]
+    frozen = FeatureMatrixEncoding.from_state(state)
+    result = frozen.transform(frame, sparse_output=sparse_output)
+    if sparse.issparse(result):
+        result = result.toarray()
+    expected = np.zeros((2, n_bins))
+    expected[0, 0] = 1
+    expected[1, -1] = 1
+    np.testing.assert_array_equal(result, expected)
