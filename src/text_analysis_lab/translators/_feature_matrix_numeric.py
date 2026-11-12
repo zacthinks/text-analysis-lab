@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from fractions import Fraction
 
 import numpy as np
 import pandas as pd
@@ -16,6 +17,37 @@ from text_analysis_lab.core.errors import ArtifactError
 
 MAX_BINS = 4096
 QUANTILE_SAMPLE_SIZE = 8192
+
+
+def _fixed_width_edges(minimum: float, maximum: float, *, width: float, anchor: float) -> list[float]:
+    """Exact decimal bin alignment followed by representable float edges.
+
+    The shortest decimal spellings of the supplied float inputs define the
+    requested widths, anchor and values. Converting them to exact fractions
+    avoids both floor(0.3 / 0.1) == 2 and shifted-anchor cancellation.
+    The float edges are what the frozen renderer compares with float data.
+    """
+    step = Fraction(str(width))
+    origin = Fraction(str(anchor))
+    start = (Fraction(str(minimum)) - origin) // step
+    stop = (Fraction(str(maximum)) - origin) // step
+    n_bins = stop - start + 1
+    if n_bins > MAX_BINS:
+        raise ArtifactError(f"Fixed-width field exceeds the {MAX_BINS}-bin safety limit.")
+
+    try:
+        edges = [float(origin + index * step) for index in range(start, stop + 2)]
+    except OverflowError as exc:
+        raise ArtifactError("Fixed-width bin edges exceed finite float range.") from exc
+
+    # At extreme magnitudes, two distinct decimal edges can round to the
+    # same binary float. Reject rather than freeze a non-increasing schema.
+    if not np.isfinite(edges).all() or not np.all(np.diff(edges) > 0):
+        raise ArtifactError(
+            "Fixed-width bin boundaries cannot be represented distinctly as "
+            "float64; increase width or change anchor."
+        )
+    return edges
 
 
 def parse_transform(name, request):
@@ -135,12 +167,10 @@ class ScalarStats:
             # A missing-only field yields one permanently inactive bin.
             edges = [-math.inf, math.inf]
         elif strategy == "fixed_width":
-            width, anchor = c["width"], c["anchor"]
-            start = math.floor((self.minimum - anchor) / width)
-            stop = math.floor((self.maximum - anchor) / width)
-            if stop - start + 1 > MAX_BINS:
-                raise ArtifactError(f"Fixed-width field exceeds the {MAX_BINS}-bin safety limit.")
-            edges = [anchor + i * width for i in range(start, stop + 2)]
+            edges = _fixed_width_edges(
+                self.minimum, self.maximum,
+                width=c["width"], anchor=c["anchor"],
+            )
         elif self.minimum == self.maximum:
             edges = [-math.inf, math.inf]
         elif strategy == "equal_width":
