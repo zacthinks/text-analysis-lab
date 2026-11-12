@@ -185,6 +185,71 @@ class FeatureMatrixEncoding:
     ) -> Any:
         """Materialize only selected encoded features, in the requested order."""
         selected = self._selected_specs(indices)
+        if sparse_output and any(spec["kind"] == "bin" for spec, _ in selected):
+            # Build each bin field's CSR indicators once, rather than creating
+            # O(n_rows * n_bins) intermediate dense columns. Column slicing
+            # preserves arbitrary projections, repetition and output order.
+            offsets: dict[int, int] = {}
+            offset = 0
+            for spec in self._specs:
+                offsets[id(spec)] = offset
+                offset += len(spec["outputs"])
+            cached_bins: dict[int, Any] = {}
+            groups: list[Any] = []
+            position = 0
+            while position < len(selected):
+                spec, _ = selected[position]
+                end = position + 1
+                if spec["kind"] == "bin":
+                    while end < len(selected) and selected[end][0] is spec:
+                        end += 1
+                    if id(spec) not in cached_bins:
+                        name = spec["name"]
+                        if name not in frame.columns:
+                            raise ArtifactError(f"FeatureMatrix input is missing {name!r}.")
+                        try:
+                            numbers = pd.to_numeric(
+                                frame[name], errors="raise"
+                            ).to_numpy(dtype=float, na_value=np.nan)
+                        except (TypeError, ValueError) as exc:
+                            raise ArtifactError(
+                                f"FeatureMatrix numeric column {name!r} is not numeric."
+                            ) from exc
+                        if np.isinf(numbers).any():
+                            raise ArtifactError(
+                                f"FeatureMatrix numeric column {name!r} contains infinity."
+                            )
+                        edges = np.asarray([
+                            (-np.inf if i == 0 else np.inf) if edge is None else edge
+                            for i, edge in enumerate(spec["fitted"]["edges"])
+                        ], dtype=float)
+                        valid_rows = np.flatnonzero(np.isfinite(numbers))
+                        assigned = np.searchsorted(
+                            edges, numbers[valid_rows], side="right"
+                        ) - 1
+                        in_range = (assigned >= 0) & (assigned < len(edges) - 1)
+                        rows = valid_rows[in_range]
+                        columns = assigned[in_range]
+                        cached_bins[id(spec)] = sparse.csr_matrix(
+                            (np.ones(len(rows), dtype=float), (rows, columns)),
+                            shape=(len(frame), len(edges) - 1),
+                        )
+                    requested = [local for _, local in selected[position:end]]
+                    groups.append(cached_bins[id(spec)][:, requested])
+                else:
+                    while end < len(selected) and selected[end][0]["kind"] != "bin":
+                        end += 1
+                    nonbin_indices = [
+                        offsets[id(other)] + local
+                        for other, local in selected[position:end]
+                    ]
+                    groups.append(self.transform(
+                        frame, sparse_output=True, indices=nonbin_indices,
+                    ))
+                position = end
+            return sparse.hstack(groups, format="csr") if groups else sparse.csr_matrix(
+                (len(frame), 0)
+            )
         blocks: list[Any] = []
         string_values: dict[str, pd.Series] = {}
         for spec, local_index in selected:
