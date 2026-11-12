@@ -179,3 +179,9 @@ def test_real_project_sparse_inherited_metadata_reopen_and_pushdown(tmp_path, mo
         assert replay.get_data_columns() == restored.get_data_columns()
     finally:
         reopened.close()
+
+
+def test_legacy_mapping_can_have_kind_as_category():
+    frame = pd.DataFrame({"name": ["kind", "other"]})
+    encoder = FeatureMatrixEncoding({"name": {"kind": 7, "other": 3}}).fit(frame)
+    np.testing.assert_array_equal(encoder.transform(frame), [[7], [3]])
