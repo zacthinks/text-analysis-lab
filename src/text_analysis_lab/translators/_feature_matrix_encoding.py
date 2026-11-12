@@ -123,6 +123,10 @@ class FeatureMatrixEncoding:
                     vocabularies[name].update(
                         str(value) for value in values.dropna().tolist()
                     )
+                    if len(vocabularies[name]) > 50_000:
+                        raise ArtifactError(
+                            f"FeatureMatrix onehot column {name!r} exceeds 50,000 categories."
+                        )
                 if name in numeric_stats:
                     numeric_stats[name].update(values)
 
@@ -211,7 +215,8 @@ class FeatureMatrixEncoding:
                     raise ArtifactError(f"FeatureMatrix numeric column {name!r} contains infinity.")
                 valid = np.isfinite(numeric)
                 if spec["kind"] == "bin":
-                    edges = np.asarray(fitted["edges"], dtype=float)
+                    edges = np.asarray([(-np.inf if i == 0 else np.inf) if edge is None else edge
+                                        for i, edge in enumerate(fitted["edges"])], dtype=float)
                     # Lower edges inclusive, upper edges exclusive. Missing and
                     # out-of-range values are all zero on onehot output.
                     target = np.searchsorted(edges, numeric[valid], side="right") - 1
