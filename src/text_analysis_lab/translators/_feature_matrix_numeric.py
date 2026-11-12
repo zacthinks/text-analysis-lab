@@ -186,8 +186,11 @@ class ScalarStats:
                 # Frozen bin boundaries are float64. Never learn cutpoints
                 # from silently rounded distinct int64/uint64 observations.
                 _require_float_safe_integer_bins(values)
-            positions, exact_values = integers
-            valid = np.asarray(exact_values, dtype=float)
+            _, exact_values = integers
+            # Never coerce large integer observations to float64 at fit time.
+            # The count/extrema use exact integers, z-scores use exact
+            # integer differences, and safe quantile bins cast individually.
+            valid = exact_values
             is_integer = True
         else:
             try:
