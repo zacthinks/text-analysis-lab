@@ -224,3 +224,37 @@ def test_geco_contract_gate_accepts_per_geometry_text_capability(monkeypatch):
         SimpleNamespace(__version__="0.next", GeometricCoder=CurrentGeometricCoder),
     )
     assert bridge._load_geometric_coder() is CurrentGeometricCoder
+
+
+def test_batch_topic_reads_share_one_provider_session(monkeypatch):
+    from contextlib import contextmanager
+
+    project = _FakeProject([])
+    provider = TeALGeCoProvider(project)
+    session_events = []
+    artifact_requests = []
+
+    @contextmanager
+    def counted_session():
+        session_events.append("open")
+        yield project
+        session_events.append("close")
+
+    def read_one(session, artifact_id, keys):
+        assert session is project
+        artifact_requests.append((artifact_id, keys))
+        return artifact_id
+
+    monkeypatch.setattr(provider, "_project_session", counted_session)
+    monkeypatch.setattr(provider, "_read_artifact_in_session", read_one)
+    keys = [{"row_id": 2}]
+    result = provider.read_artifacts([
+        ("membership", keys), ("argmax", keys), ("description", None),
+    ])
+    assert result == ["membership", "argmax", "description"]
+    assert session_events == ["open", "close"]
+    assert artifact_requests == [
+        ("membership", keys), ("argmax", keys), ("description", None),
+    ]
+    assert provider.read_artifacts([]) == []
+    assert session_events == ["open", "close"]
