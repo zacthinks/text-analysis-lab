@@ -159,13 +159,16 @@ def test_real_project_sparse_inherited_metadata_reopen_and_pushdown(tmp_path, mo
                     pytest.fail("Metadata-only projection fetched DTM")
             return original_query(artifact, **kwargs)
 
-        monkeypatch.setattr(type(dtm), "query", spy)
-        narrow = augmented.get_matrix(data_columns=["length"])
-        np.testing.assert_allclose(
-            narrow.toarray().ravel(),
-            [-np.sqrt(1.8), -np.sqrt(.2), np.sqrt(.2), np.sqrt(1.8)],
-        )
-        assert requested
+        # Spy only on the metadata-only projection. Full matrix reads below,
+        # including after reopening the project, must remain legitimate.
+        with monkeypatch.context() as narrow_patch:
+            narrow_patch.setattr(type(dtm), "query", spy)
+            narrow = augmented.get_matrix(data_columns=["length"])
+            np.testing.assert_allclose(
+                narrow.toarray().ravel(),
+                [-np.sqrt(1.8), -np.sqrt(.2), np.sqrt(.2), np.sqrt(1.8)],
+            )
+            assert requested
         artifact_id, source_id, op_id = augmented.artifact_id, dtm.artifact_id, op.operator_id
     finally:
         project.close()
