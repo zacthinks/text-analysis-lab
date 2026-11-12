@@ -426,6 +426,10 @@ class FeatureMatrixEncoding:
                             )
                         block[valid, 0] = scaled
             else:
+                # The output matrix is float64. Unlike fitted scalers, raw
+                # metadata has no offset to preserve large adjacent integers.
+                # Reject rather than silently alias integer observations.
+                _require_float_safe_integer_bins(values)
                 try:
                     block = (
                         pd.to_numeric(values, errors="raise")
