@@ -208,7 +208,7 @@ class FeatureMatrixEncoding:
             elif spec["kind"] in {"bin", "zscore", "minmax"}:
                 fitted = spec["fitted"]
                 try:
-                    numeric = pd.to_numeric(values, errors="raise").to_numpy(dtype=float)
+                    numeric = pd.to_numeric(values, errors="raise").to_numpy(dtype=float, na_value=np.nan)
                 except (TypeError, ValueError) as exc:
                     raise ArtifactError(f"FeatureMatrix numeric column {name!r} is not numeric.") from exc
                 if np.isinf(numeric).any():
