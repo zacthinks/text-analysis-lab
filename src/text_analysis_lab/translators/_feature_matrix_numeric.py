@@ -147,9 +147,9 @@ class ScalarStats:
                 batch_mean = float(np.mean(shifted))
                 residuals = shifted - batch_mean
                 batch_m2 = float(np.dot(residuals, residuals))
-            if not np.isfinite(shifted).all() or not np.isfinite(
-                [batch_mean, batch_m2]
-            ).all():
+            if (not np.isfinite(shifted).all()
+                    or not np.isfinite([batch_mean, batch_m2]).all()
+                    or (batch_m2 == 0.0 and np.any(residuals != 0.0))):
                 raise ArtifactError(
                     "Z-score moments exceed stable float64 precision; "
                     "rescale the input or use another encoding."
@@ -199,11 +199,16 @@ class ScalarStats:
                 # The rounded absolute mean is retained for compatibility;
                 # new renderers use the stable offset + centered mean.
                 offset = self.offset if self.offset is not None else 0.0
+                variance = self.m2 / self.count if self.count else 0.0
+                if self.m2 > 0 and variance == 0.0:
+                    raise ArtifactError(
+                        "Z-score variance underflowed float64; rescale the input."
+                    )
                 fitted.update(
                     mean=offset + self.mean,
                     offset=offset,
                     mean_shift=self.mean,
-                    sd=math.sqrt(self.m2 / self.count) if self.count else 0.0,
+                    sd=math.sqrt(variance),
                 )
             return fitted
         strategy = c["strategy"]
