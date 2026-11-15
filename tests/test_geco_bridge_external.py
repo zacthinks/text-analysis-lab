@@ -319,11 +319,11 @@ def _seed_table(project: teal.Project):
     return project.get_artifact("art_docs")
 
 
-def _seed_display_table(project: teal.Project):
+def _seed_display_table(project: teal.Project, *, field: str = "text", count: int = 10):
     rows = pd.DataFrame(
         {
-            "row_id": list(range(10)),
-            "text": [f"display document {i}" for i in range(10)],
+            "row_id": list(range(count)),
+            field: [f"display document {i}" for i in range(count)],
         }
     )
     writer = create_artifact_writer(
@@ -337,7 +337,7 @@ def _seed_display_table(project: teal.Project):
     writer.write(
         {
             "keys": rows[["row_id"]],
-            "data": rows[["text"]],
+            "data": rows[[field]],
         }
     )
     writer.finalize()
@@ -391,6 +391,113 @@ def _frame(artifact, fields=False):
         include_position=True,
         form="table",
     )
+
+
+def test_linked_geco_starts_without_geometry_and_keeps_distinct_display_text(
+    tmp_path: Path, monkeypatch,
+):
+    import text_analysis_lab.integrations.geco as bridge
+
+    _FakeGeometricCoder._registry.clear()
+    monkeypatch.setattr(bridge, "_load_geometric_coder", lambda: _FakeGeometricCoder)
+    monkeypatch.setattr(bridge, "_installed_geco_version", lambda: "0.next-test")
+    with teal.Project.create(tmp_path / "geom_free", name="geom_free") as project:
+        docs = _seed_table(project)
+        displayed = _seed_display_table(project, field="visible")
+        linked = project.geco.create(
+            "initial", documents=docs, text=docs, display_text=displayed,
+            text_field="text", display_text_field="visible",
+            metadata_fields=["year"],
+        )
+        assert linked.name == "initial"
+        assert linked.coder._geometries == {}
+        assert linked.coder.data["text"].tolist() == [
+            f"display document {i}" for i in range(10)
+        ]
+        assert linked.manifest["text_artifact_id"] == docs.artifact_id
+        assert linked.manifest["display_text_artifact_id"] == displayed.artifact_id
+        assert linked.manifest["display_text_field"] == "visible"
+        linked.close()
+        reopened = project.geco.open("initial")
+        assert reopened.coder._geometries == {}
+        assert reopened.launch() == "launched"
+        reopened.close()
+
+
+def test_linked_geco_rejects_projection_without_geometry(tmp_path: Path, monkeypatch):
+    import text_analysis_lab.integrations.geco as bridge
+
+    monkeypatch.setattr(bridge, "_load_geometric_coder", lambda: _FakeGeometricCoder)
+    with teal.Project.create(tmp_path / "no_projection", name="no_projection") as project:
+        docs = _seed_table(project)
+        with pytest.raises(GeCoIntegrationError, match="requires a geometry"):
+            project.geco.create(
+                "initial", documents=docs, text_field="text",
+                projections={"map": docs},
+            )
+
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "message"),
+    [
+        ("missing_field", "must contain data column"),
+        ("partial_coverage", "does not cover all document keys"),
+        ("matrix", "must be a TeAL table"),
+    ],
+)
+def test_geometry_free_geco_validates_numerical_text_source(
+    tmp_path: Path, source_kind: str, message: str,
+):
+    with teal.Project.create(tmp_path / source_kind, name=source_kind) as project:
+        docs = _seed_table(project)
+        if source_kind == "missing_field":
+            source = _seed_display_table(project, field="visible")
+        elif source_kind == "partial_coverage":
+            source = _seed_display_table(project, field="text", count=8)
+        else:
+            source = _seed_matrix(
+                project, "art_text_matrix", "text_matrix",
+                np.ones((10, 1)), columns=["feature"],
+            )
+        with pytest.raises(GeCoIntegrationError, match=message):
+            project.geco.create(
+                "coding", documents=docs, text=source, display_text=docs,
+                text_field="text",
+            )
+        assert project.geco.list() == []
+
+
+@pytest.mark.acceptance
+def test_real_geco_browser_can_initialize_before_first_geometry(tmp_path: Path):
+    pytest.importorskip("geometric_coder")
+    from geometric_coder.ui.app import create_app
+
+    with teal.Project.create(tmp_path / "real_geometry_free", name="study") as project:
+        docs = _seed_table(project)
+        linked = project.geco.create(
+            "coding", documents=docs, text_field="text",
+            metadata_fields=["year"],
+        )
+        try:
+            assert linked.coder.geometries(public_only=True) == []
+            assert create_app(linked.coder).layout is not None
+            geometry = project.translate(
+                CountVectorizer(text_field="text", vocabulary={"document": 0}),
+                docs,
+            )["output"]
+            geometry_id = linked.add_geometry("first_counts", geometry)
+            assert len(linked.coder.geometries(public_only=True)) == 1
+        finally:
+            linked.close()
+
+        reopened = project.geco.open("coding")
+        try:
+            assert len(reopened.coder.geometries(public_only=True)) == 1
+            assert reopened.coder.geometry_matrix(geometry_id).shape == (10, 1)
+            assert create_app(reopened.coder).layout is not None
+        finally:
+            reopened.close()
 
 
 def test_linked_geco_create_export_reopen_and_apply(tmp_path: Path, monkeypatch):

@@ -16,6 +16,26 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
+## [0.12.1] - 2026-11-15
+
+### Added
+
+- TeAL-linked GeCo workspaces can now be created without an initial geometry, preserving their keyed document universe, declared numerical text source, separate display text, and metadata. Researchers may add numerical geometries later through GeCo (PR #68).
+- Optional `display_text_field` selects a display-text column independently of the numerical source's `text_field`, without changing the GeCo document text column's name (PR #68).
+
+### Changed
+
+- Geometry-backed linked-workspace creation retains its existing frozen Pipeline replay and keyed-matrix validation; geometry-free creation validates that the numerical text source is a table with the requested text field and covers all document keys (PR #68).
+
+### Fixed
+
+- Geometry-free creation rejects a projection or geometry name without an initial geometry and does not register a dummy numerical representation (PR #68).
+
+### Notes
+
+- GeCo owns interactive geometry construction and coding state; TeAL continues to own immutable text/numerical artifacts, source identities, and frozen replay. Existing geometry-backed links remain supported.
+
+
 ## [0.12.0] - 2026-11-12
 
 ### Added

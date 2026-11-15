@@ -1049,9 +1049,10 @@ class GeCoManager:
         *,
         documents: BaseArtifact | str,
         text_field: str,
-        geometry: BaseArtifact | str,
+        geometry: BaseArtifact | str | None = None,
         text: BaseArtifact | str | None = None,
         display_text: BaseArtifact | str | None = None,
+        display_text_field: str | None = None,
         projections: Mapping[str, BaseArtifact | str] | None = None,
         topic_models: Mapping[str, Mapping[str, Any]] | None = None,
         metadata_fields: Sequence[str] | None = None,
@@ -1061,6 +1062,9 @@ class GeCoManager:
         """Create a fixed-universe GeCo workspace linked to TeAL numerical artifacts."""
         workspace_name = _validate_workspace_name(name)
         text_field = _validate_field_name(text_field, kind="text_field")
+        display_field = _validate_field_name(
+            display_text_field or text_field, kind="display_text_field"
+        )
         metadata = _normalize_metadata_fields(metadata_fields)
         documents_artifact = self.project.get_artifact(documents)
         if not documents_artifact.primary_key:
@@ -1087,11 +1091,23 @@ class GeCoManager:
                     f"documents primary key {documents_artifact.primary_key!r}."
                 )
 
-        geometry_artifact = self._validate_numerical_resource(
-            geometry, documents_artifact, purpose="geometry"
+        # Geometry construction can happen later in the GeCo research interface.
+        # Preserve the existing fully validated numerical path when supplied.
+        if geometry is None and (projections or geometry_name):
+            raise GeCoIntegrationError(
+                "A named geometry or projection requires a geometry artifact."
+            )
+        geometry_artifact = (
+            self._validate_numerical_resource(
+                geometry, documents_artifact, purpose="geometry"
+            )
+            if geometry is not None else None
         )
-        external_geometry_name = _validate_resource_name(
-            geometry_name or _default_resource_name(geometry_artifact), kind="geometry"
+        external_geometry_name = (
+            _validate_resource_name(
+                geometry_name or _default_resource_name(geometry_artifact), kind="geometry"
+            )
+            if geometry_artifact is not None else None
         )
         projection_artifacts: dict[str, BaseArtifact] = {}
         for raw_name, ref in dict(projections or {}).items():
@@ -1100,6 +1116,61 @@ class GeCoManager:
                 raise GeCoIntegrationError(f"Duplicate projection name {view_name!r}.")
             projection_artifacts[view_name] = self._validate_numerical_resource(
                 ref, documents_artifact, purpose=f"projection {view_name!r}"
+            )
+
+        document_frame = self._source_document_frame(
+            documents_artifact,
+            display_artifact,
+            text_field=text_field,
+            display_text_field=display_field,
+            metadata_fields=metadata,
+        )
+        ordered_keys = _key_records(document_frame, documents_artifact.primary_key)
+
+        # Geometry-free startup must retain a usable numerical text source;
+        # the display-text artifact is not a substitute.
+        if geometry_artifact is None:
+            if text_artifact.artifact_type != ArtifactType.TABLE:
+                raise GeCoIntegrationError(
+                    "GeCo numerical text source must be a TeAL table."
+                )
+            if text_field not in text_artifact.get_data_columns():
+                raise GeCoIntegrationError(
+                    f"GeCo numerical text source {text_artifact.artifact_id!r} "
+                    f"must contain data column text_field={text_field!r}."
+                )
+            try:
+                self.project.query.positions_by_keys(text_artifact, ordered_keys)
+            except KeyError as exc:
+                raise GeCoIntegrationError(
+                    "GeCo numerical text source does not cover all document keys."
+                ) from exc
+        provider = TeALGeCoProvider(self.project)
+        if geometry_artifact is not None:
+            try:
+                self.project.pipeline(
+                    start=text_artifact,
+                    end=geometry_artifact,
+                    allow_looser_lineage=True,
+                )
+            except PipelineError as exc:
+                raise GeCoIntegrationError(
+                    f"TeAL geometry {geometry_artifact.artifact_id!r} is not replayable "
+                    f"from declared text {text_artifact.artifact_id!r}."
+                ) from exc
+            # Preflight the exact stable-key order before creating mutable GeCo state.
+            matrix = provider.geometry_matrix(
+                _external_ref(geometry_artifact, text=text_artifact), ordered_keys
+            )
+            _validate_matrix_rows(
+                matrix, expected_rows=len(document_frame), purpose="geometry"
+            )
+        for view_name, view in projection_artifacts.items():
+            coordinates = provider.view_coordinates(_external_ref(view), ordered_keys)
+            _validate_matrix_rows(
+                coordinates,
+                expected_rows=len(document_frame),
+                purpose=f"projection {view_name!r}",
             )
 
         manifest_path = self._manifest_path(workspace_name)
@@ -1117,48 +1188,6 @@ class GeCoManager:
             if workspace_path.exists():
                 shutil.rmtree(workspace_path)
 
-        document_frame = self._source_document_frame(
-            documents_artifact,
-            display_artifact,
-            text_field=text_field,
-            metadata_fields=metadata,
-        )
-        ordered_keys = _key_records(document_frame, documents_artifact.primary_key)
-        try:
-            self.project.pipeline(
-                start=text_artifact,
-                end=geometry_artifact,
-                allow_looser_lineage=True,
-            )
-        except PipelineError as exc:
-            raise GeCoIntegrationError(
-                f"TeAL geometry {geometry_artifact.artifact_id!r} is not replayable "
-                f"from declared text "
-                f"{text_artifact.artifact_id!r}."
-            ) from exc
-        text_replay = True
-        resolved_supports_query = True
-        provider = TeALGeCoProvider(self.project)
-
-        # Preflight the exact stable-key order before creating any mutable GeCo state.
-        matrix = provider.geometry_matrix(
-            _external_ref(
-                geometry_artifact,
-                text=text_artifact,
-            ),
-            ordered_keys
-        )
-        _validate_matrix_rows(
-            matrix, expected_rows=len(document_frame), purpose="geometry"
-        )
-        for view_name, view in projection_artifacts.items():
-            coordinates = provider.view_coordinates(_external_ref(view), ordered_keys)
-            _validate_matrix_rows(
-                coordinates,
-                expected_rows=len(document_frame),
-                purpose=f"projection {view_name!r}",
-            )
-
         GeometricCoder = _load_geometric_coder()
         coder = None
         try:
@@ -1171,16 +1200,16 @@ class GeCoManager:
                 external_provider=provider,
                 overwrite=False,
             )
-            geometry_id = int(
-                coder.register_external_geometry(
+            geometry_id = (
+                int(coder.register_external_geometry(
                     name=external_geometry_name,
                     external_ref=_external_ref(
-                        geometry_artifact,
-                        text=text_artifact,
+                        geometry_artifact, text=text_artifact,
                     ),
-                    supports_query=resolved_supports_query,
-                    supports_text_transform=text_replay,
-                )
+                    supports_query=True,
+                    supports_text_transform=True,
+                ))
+                if geometry_artifact is not None else None
             )
             for view_name, view in projection_artifacts.items():
                 coder.register_external_view(
@@ -1228,6 +1257,7 @@ class GeCoManager:
                 "documents_artifact_id": documents_artifact.artifact_id,
                 "text_artifact_id": text_artifact.artifact_id,
                 "display_text_artifact_id": display_artifact.artifact_id,
+                "display_text_field": display_field,
                 "text_field": text_field,
                 "metadata_fields": list(metadata),
                 "created_with_geco_version": _installed_geco_version(),
@@ -1536,6 +1566,7 @@ class GeCoManager:
         source: BaseArtifact,
         *,
         text_field: str,
+        display_text_field: str,
         metadata_fields: Sequence[str],
     ) -> pd.DataFrame:
         """Resolve display text onto the fixed GeCo document/metadata universe."""
@@ -1575,7 +1606,7 @@ class GeCoManager:
         try:
             source_frame = source.query(
                 key_columns=True,
-                data_columns=[text_field],
+                data_columns=[display_text_field],
                 metadata_columns=False,
                 metadata_mode="none",
                 order_by="_position",
@@ -1584,10 +1615,10 @@ class GeCoManager:
             )
         except Exception as exc:
             raise GeCoIntegrationError(
-                f"Could not resolve text_field={text_field!r} from display_text "
+                f"Could not resolve text_field={display_text_field!r} from display_text "
                 f"artifact {source.artifact_id!r}."
             ) from exc
-        expected_source_columns = [*key_columns, text_field]
+        expected_source_columns = [*key_columns, display_text_field]
         missing_source_columns = [
             column for column in expected_source_columns if column not in source_frame.columns
         ]
@@ -1600,8 +1631,11 @@ class GeCoManager:
             raise GeCoIntegrationError(
                 "GeCo display_text source contains duplicate stable keys."
             )
+        display_source = source_frame.loc[:, expected_source_columns].rename(
+            columns={display_text_field: text_field}
+        )
         merged = target.merge(
-            source_frame.loc[:, expected_source_columns],
+            display_source,
             on=key_columns,
             how="left",
             validate="one_to_one",
