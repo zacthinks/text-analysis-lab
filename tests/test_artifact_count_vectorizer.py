@@ -277,3 +277,116 @@ def test_json_state_round_trip_preserves_ngram_and_boundary_configuration() -> N
     assert restored.to_json_state(include_vocabulary=True) == translator.to_json_state(
         include_vocabulary=True
     )
+
+
+def test_boolean_metadata_filters_preserve_empty_groups_and_fitted_state() -> None:
+    frame = pd.DataFrame({
+        "doc_id": [1, 1, 2, 2, 3],
+        "sentence_id": [0, 0, 0, 0, 0],
+        "token_id": [0, 1, 0, 1, 0],
+        "lemma": ["alpha", "the", "beta", "gamma", "the"],
+        "is_alpha": [True, True, True, True, True],
+        "is_stop": [False, True, False, False, True],
+    })
+    operator = ArtifactCountVectorizer(
+        field="lemma", group_by=("doc_id",),
+        metadata_filters={"is_alpha": True, "is_stop": False},
+    )
+    result = operator.translate_batch(
+        {"source": _packet(frame)}, mode="fit_translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    assert result["keys"]["doc_id"].tolist() == [1, 2, 3]
+    assert result["data"]["columns"] == ["alpha", "beta", "gamma"]
+    assert result["data"]["values"].toarray().tolist() == [
+        [1, 0, 0], [0, 1, 1], [0, 0, 0],
+    ]
+    assert operator.to_json_state()["metadata_filters"] == {
+        "is_alpha": True, "is_stop": False,
+    }
+    assert operator.from_json_state(
+        operator.to_json_state(include_vocabulary=True)
+    ).metadata_filters == operator.metadata_filters
+    request = operator.input_request(
+        sources={"source": _source()}, mode="translate",
+        request=TranslationRequest(),
+    )
+    assert request.columns.data == ["lemma", "is_alpha", "is_stop"]
+
+
+def test_metadata_filter_rejects_non_boolean_values_and_missing_columns() -> None:
+    for value in (1, 0, "true", None):
+        with pytest.raises(ValueError, match="True or False"):
+            ArtifactCountVectorizer(
+                field="lemma", group_by=("doc_id",),
+                metadata_filters={"is_alpha": value},
+            )
+    with pytest.raises(ArtifactError, match="is_alpha"):
+        ArtifactCountVectorizer(
+            field="lemma", group_by=("doc_id",),
+            metadata_filters={"is_alpha": True},
+        ).translate_batch(
+            {"source": _packet(pd.DataFrame({
+                "doc_id": [1], "sentence_id": [0], "token_id": [0],
+                "lemma": ["one"],
+            }))}, mode="fit_translate", request=TranslationRequest(),
+        )
+
+
+
+def test_standalone_replay_respects_custom_spacy_sentence_key() -> None:
+    operator = ArtifactCountVectorizer(
+        field="lemma", group_by=("doc_id",), ngram_range=(2, 2),
+        metadata_filters={"is_alpha": True},
+        vocabulary={"alpha_beta": 0, "beta_gamma": 1},
+    )
+    frame = pd.DataFrame({
+        "source_position": [0, 0, 0, 0],
+        "segment_id": [0, 0, 1, 1],
+        "token_id": [0, 1, 0, 1],
+        "lemma": ["alpha", "beta", "gamma", "beta"],
+        "is_alpha": [True, True, True, True],
+    })
+    result = operator.translate(frame)
+    assert result["groups"]["source_position"].tolist() == [0]
+    # beta_gamma could be produced by joining the end of segment 0 to the
+    # start of segment 1, but never appears within a segment.
+    assert result["values"].toarray().tolist() == [[1, 0]]
+
+
+def test_tokens_only_excludes_unrepresented_documents_but_keeps_filtered_groups() -> None:
+    operator = ArtifactCountVectorizer(
+        field="lemma", group_by=("doc_id",),
+        metadata_filters={"is_alpha": True}, vocabulary={"apple": 0},
+    )
+    frame = pd.DataFrame({
+        "doc_id": [1, 2], "sentence_id": [0, 0], "token_id": [0, 0],
+        "lemma": ["apple", "!!!"], "is_alpha": [True, False],
+    })
+    result = operator.translate_batch(
+        {"source": _packet(frame)}, mode="translate",
+        request=TranslationRequest(),
+    ).outputs["output"]
+    assert result["keys"]["doc_id"].tolist() == [1, 2]
+    assert result["data"]["values"].toarray().tolist() == [[1], [0]]
+    # Doc 3 is not present in the token table and is not invented.
+    assert len(result["keys"]) == 2
+    with pytest.raises(ArtifactError, match="empty"):
+        operator.translate(frame.iloc[:0], source_key=("doc_id", "sentence_id", "token_id"))
+
+
+def test_metadata_filtered_tokens_support_grouped_batching() -> None:
+    operator = ArtifactCountVectorizer(
+        field="lemma", group_by=("doc_id",),
+        metadata_filters={"is_alpha": True},
+    )
+    req = TranslationRequest(batch_by="doc_id", batch_size=2)
+    source_req = operator.input_request(
+        sources={"source": _source()}, mode="fit_translate", request=req,
+    )
+    assert source_req.mode == "batches"
+    assert source_req.min_batch_by == "doc_id"
+    assert operator.translation_passes(
+        sources={"source": _source()}, mode="fit_translate",
+        request=req, input_request={"source": source_req},
+    ) == 2

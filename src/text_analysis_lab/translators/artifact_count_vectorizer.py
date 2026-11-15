@@ -50,10 +50,11 @@ class ArtifactCountVectorizer(BaseTranslator):
     used, so token n-grams naturally stop at sentence boundaries for a source
     keyed ``(..., sentence_id, token_id)``.
 
-    This translator does *not* tokenize, lowercase, or apply stop-word rules.
-    Those choices belong upstream (for example in a spaCy token artifact or an
-    explicit subset). Null values are omitted; empty strings are omitted by
-    default.
+    This translator does not tokenize or lowercase. Optional Boolean
+    metadata_filters select input rows internally; group keys are determined
+    before those filters, so groups with only rejected tokens get zero vectors.
+    Genuinely tokenless documents have no group in this tokens-only contract.
+    Null values and, by default, empty strings are omitted.
     """
 
     operation_type = "translate"
@@ -70,6 +71,7 @@ class ArtifactCountVectorizer(BaseTranslator):
         max_features: int | None = None,
         binary: bool = False,
         drop_empty: bool = True,
+        metadata_filters: Mapping[str, bool] | None = None,
         ngram_separator: str = "_",
         vocabulary: Mapping[str, int] | None = None,
         operator_id: str | None = None,
@@ -92,6 +94,7 @@ class ArtifactCountVectorizer(BaseTranslator):
         self.max_features = None if max_features is None else int(max_features)
         self.binary = bool(binary)
         self.drop_empty = bool(drop_empty)
+        self.metadata_filters = _normalize_metadata_filters(metadata_filters)
         if not isinstance(ngram_separator, str) or not ngram_separator:
             raise ValueError("ngram_separator must be a non-empty string.")
         if _INTERNAL_NGRAM_SEPARATOR in ngram_separator:
@@ -137,11 +140,12 @@ class ArtifactCountVectorizer(BaseTranslator):
         *,
         source_key: Sequence[str] | None = None,
     ) -> dict[str, Any]:
-        """Count a fitted vocabulary over an ordinary annotated row table.
+        """Count the frozen vocabulary over an ordinary keyed token table.
 
-        source_key is required only when sequence_by was not configured,
-        because the default sequence boundary is the immediate parent of that
-        hierarchical key.
+        Recovered spaCy token tables have ephemeral source_position keys.
+        Their next two columns are the configured sentence and token keys;
+        the original sentence boundary is preserved regardless of its name.
+        An input with no token rows has no output group.
         """
         if not isinstance(frame, pd.DataFrame):
             raise TypeError(
@@ -152,36 +156,71 @@ class ArtifactCountVectorizer(BaseTranslator):
                 "ArtifactCountVectorizer has no fitted vocabulary."
             )
 
-        if self.sequence_by is None:
+        regular_keys = all(column in frame for column in self.group_by)
+        ephemeral_keys = (
+            not regular_keys and "source_position" in frame.columns
+        )
+        if ephemeral_keys:
+            effective_group_by = ("source_position",)
+            cross_sentence = (
+                self.sequence_by is not None
+                and tuple(self.sequence_by) == tuple(self.group_by)
+            )
+            if cross_sentence:
+                sequence_by = ("source_position",)
+            else:
+                # SpacyTranslator.translate() returns normalized token
+                # tables whose first three columns are source_position,
+                # the configured sentence key, and the configured token key.
+                # Do not hardcode the default sentence_id name.
+                columns = list(frame.columns)
+                if len(columns) < 3 or columns[0] != "source_position":
+                    raise ArtifactError(
+                        "Standalone spaCy token rows must begin with "
+                        "source_position, sentence key, token key."
+                    )
+                sequence_by = ("source_position", str(columns[1]))
+        elif self.sequence_by is None:
             if source_key is None:
                 raise ValueError(
                     "ArtifactCountVectorizer.translate(...) requires source_key "
                     "when sequence_by was not configured."
                 )
+            effective_group_by = tuple(self.group_by)
             sequence_by = self._validate_source_key(source_key)
         else:
+            effective_group_by = tuple(self.group_by)
             sequence_by = tuple(self.sequence_by)
-            if not _is_prefix(self.group_by, sequence_by):
+            if not _is_prefix(effective_group_by, sequence_by):
                 raise OperatorError(
                     "sequence_by must retain group_by as its prefix; got "
-                    f"group_by={list(self.group_by)}, sequence_by={list(sequence_by)}."
+                    f"group_by={list(effective_group_by)}, sequence_by={list(sequence_by)}."
                 )
 
-        required = [*dict.fromkeys([*self.group_by, *sequence_by, self.field])]
+        required = [*dict.fromkeys([
+            *effective_group_by, *sequence_by, self.field,
+            *self.metadata_filters,
+        ])]
         missing = [name for name in required if name not in frame.columns]
         if missing:
             raise ArtifactError(
                 f"ArtifactCountVectorizer source is missing columns {missing}."
             )
-        group_keys, events = _build_feature_events(
-            frame,
-            field=self.field,
-            group_by=self.group_by,
-            sequence_by=sequence_by,
-            ngram_range=self.ngram_range,
-            drop_empty=self.drop_empty,
-            ngram_separator=self.ngram_separator,
-        )
+        if frame.empty:
+            raise ArtifactError(
+                "ArtifactCountVectorizer cannot vectorize an empty token source."
+            )
+        else:
+            group_keys, events = _build_feature_events(
+                frame,
+                field=self.field,
+                group_by=effective_group_by,
+                sequence_by=sequence_by,
+                ngram_range=self.ngram_range,
+                drop_empty=self.drop_empty,
+                ngram_separator=self.ngram_separator,
+                metadata_filters=self.metadata_filters,
+            )
         return self._translate_events(group_keys, events)
 
     def output_specs(
@@ -230,10 +269,14 @@ class ArtifactCountVectorizer(BaseTranslator):
             )
         self._validate_source_key(source.primary_key)
         grouped = request.batch_by is not None
+        data_columns: str | list[str] = (
+            self.field if not self.metadata_filters else
+            list(dict.fromkeys([self.field, *self.metadata_filters]))
+        )
         return SourceRequest(
             artifact_type="table",
             mode="batches" if grouped else "full_artifact",
-            columns=ColumnRequest(keys=True, data=self.field, metadata=False),
+            columns=ColumnRequest(keys=True, data=data_columns, metadata=False),
             batch_size=(request.batch_size or 100) if grouped else None,
             form="table",
             metadata_mode="none",
@@ -261,7 +304,7 @@ class ArtifactCountVectorizer(BaseTranslator):
         frame = _require_frame(packet.data)
         source_key = tuple(str(name) for name in packet.primary_key)
         sequence_by = self._validate_source_key(source_key)
-        required = [*source_key, self.field]
+        required = [*dict.fromkeys([*source_key, self.field, *self.metadata_filters])]
         missing = [name for name in required if name not in frame.columns]
         if missing:
             raise ArtifactError(
@@ -276,6 +319,7 @@ class ArtifactCountVectorizer(BaseTranslator):
             ngram_range=self.ngram_range,
             drop_empty=self.drop_empty,
             ngram_separator=self.ngram_separator,
+            metadata_filters=self.metadata_filters,
         )
         # _build_feature_events catches collisions inside a single packet.
         # This additionally rejects ambiguous labels across *different*
@@ -426,6 +470,7 @@ class ArtifactCountVectorizer(BaseTranslator):
             "max_features": self.max_features,
             "binary": self.binary,
             "drop_empty": self.drop_empty,
+            "metadata_filters": dict(self.metadata_filters),
             "ngram_separator": self.ngram_separator,
             "is_fitted": self.is_fitted,
         }
@@ -445,6 +490,7 @@ class ArtifactCountVectorizer(BaseTranslator):
             max_features=cast(int | None, state.get("max_features")),
             binary=bool(state.get("binary", False)),
             drop_empty=bool(state.get("drop_empty", True)),
+            metadata_filters=cast(Mapping[str, bool] | None, state.get("metadata_filters")),
             ngram_separator=str(state.get("ngram_separator", " ")),
             vocabulary=cast(Mapping[str, int] | None, state.get("vocabulary")),
         )
@@ -597,6 +643,26 @@ class ArtifactCountVectorizer(BaseTranslator):
         return sequence_by
 
 
+def _normalize_metadata_filters(
+    metadata_filters: Mapping[str, bool] | None,
+) -> dict[str, bool]:
+    if metadata_filters is None:
+        return {}
+    if not isinstance(metadata_filters, Mapping):
+        raise ValueError("metadata_filters must map column names to Booleans.")
+    normalized: dict[str, bool] = {}
+    for column, required in metadata_filters.items():
+        if not isinstance(column, str) or not column.strip():
+            raise ValueError("metadata_filters requires nonempty column names.")
+        if not isinstance(required, bool):
+            raise ValueError(
+                f"metadata_filters[{column!r}] must be True or False."
+            )
+        normalized[column] = required
+    return normalized
+
+
+
 def _normalize_key_columns(value: str | Sequence[str], *, name: str) -> tuple[str, ...]:
     columns = (value,) if isinstance(value, str) else tuple(value)
     if not columns or any(not isinstance(col, str) or not col for col in columns):
@@ -644,6 +710,7 @@ def _build_feature_events(
     ngram_range: tuple[int, int],
     drop_empty: bool,
     ngram_separator: str,
+    metadata_filters: Mapping[str, bool] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return output group keys and one row per n-gram occurrence.
 
@@ -666,9 +733,13 @@ def _build_feature_events(
             "Failed to map source rows to ArtifactCountVectorizer groups."
         )
 
-    work = frame.loc[:, [*dict.fromkeys([*sequence_by, field])]].copy()
+    work = frame.loc[:, [*dict.fromkeys([
+        *sequence_by, field, *(metadata_filters or {}),
+    ])]].copy()
     work["_group_id"] = group_ids.astype("int64", copy=False)
     valid = work[field].notna()
+    for column, wanted in (metadata_filters or {}).items():
+        valid &= work[column].eq(wanted).fillna(False)
     values = work[field].astype("string")
     if drop_empty:
         valid &= values.str.len().fillna(0).gt(0)

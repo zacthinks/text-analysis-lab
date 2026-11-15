@@ -158,14 +158,16 @@ class Pipeline:
         *,
         start: BaseArtifact | str,
         end: BaseArtifact | str,
+        allow_looser_lineage: bool = False,
     ) -> Pipeline:
         """Reconstruct a transform-only Pipeline from recorded artifact provenance.
 
         ``start`` is the sole public Pipeline input and traversal stops exactly at
         that artifact. Every source required to produce ``end`` must be derivable
-        from ``start`` through recorded operations. The exact frozen translator
-        snapshots are reused; scientific intent is never guessed from configuration
-        or operation-time parameters.
+        from ``start`` through recorded operations by default. When
+        ``allow_looser_lineage=True``, narrowly verified reconstruction rules
+        may rebind a frozen operator without asserting strict historical lineage.
+        The recorded artifacts and their provenance are never altered.
         """
         start_artifact = project.get_artifact(start)
         end_artifact = project.get_artifact(end)
@@ -241,21 +243,59 @@ class Pipeline:
                             "an upstream root before the declared start artifact."
                         )
 
+                    # A spaCy operation emits sentence and token artifacts
+                    # together. Its tokens have extended-key lineage from the
+                    # sentence output, even though the operation's sole source
+                    # was the parent document. For a sentence-level Pipeline,
+                    # replay the *same frozen spaCy operator* on each supplied
+                    # sentence text rather than tracing back to parent documents.
+                    # This branch is allowed only for the exact output siblings
+                    # of one recorded spaCy operation and matching key ancestry.
+                    sibling_sentences = any(
+                        str(row.get("artifact_id")) == start_id
+                        and str(row.get("output_label")) == "sentences"
+                        for row in output_rows
+                    )
+                    sibling_tokens = any(
+                        str(row.get("artifact_id")) == artifact_id
+                        and str(row.get("output_label")) == "tokens"
+                        for row in output_rows
+                    )
+                    from_spacy_sibling = (
+                        allow_looser_lineage
+                        and sibling_sentences and sibling_tokens
+                        and tuple(artifact.primary_key[:len(start_artifact.primary_key)])
+                            == tuple(start_artifact.primary_key)
+                        and len(artifact.primary_key)
+                            == len(start_artifact.primary_key) + 1
+                        and str(start_id) in {
+                            str(edge.get("basis_artifact_id"))
+                            for edge in project.catalog.artifact_basis(artifact_id)
+                        }
+                    )
                     bindings: dict[str, PipelinePort] = {}
-                    for row in source_rows:
-                        source_label = str(row.get("source_label", ""))
-                        source_artifact_id = str(row.get("source_artifact_id", ""))
-                        if not source_label or not source_artifact_id:
+                    if from_spacy_sibling:
+                        if len(source_rows) != 1:
                             raise PipelineError(
-                                f"Operation {operation_id!r} has malformed source "
-                                "provenance."
+                                "A spaCy sibling replay must have exactly one "
+                                "original source."
                             )
-                        if source_label in bindings:
-                            raise PipelineError(
-                                f"Operation {operation_id!r} records duplicate source "
-                                f"label {source_label!r}."
-                            )
-                        bindings[source_label] = resolve_artifact(source_artifact_id)
+                        bindings[DEFAULT_SOURCE_LABEL] = input_port
+                    else:
+                        for row in source_rows:
+                            source_label = str(row.get("source_label", ""))
+                            source_artifact_id = str(row.get("source_artifact_id", ""))
+                            if not source_label or not source_artifact_id:
+                                raise PipelineError(
+                                    f"Operation {operation_id!r} has malformed source "
+                                    "provenance."
+                                )
+                            if source_label in bindings:
+                                raise PipelineError(
+                                    f"Operation {operation_id!r} records duplicate source "
+                                    f"label {source_label!r}."
+                                )
+                            bindings[source_label] = resolve_artifact(source_artifact_id)
 
                     operator_id = operation.get("operator_id")
                     if not isinstance(operator_id, str) or not operator_id:
@@ -263,6 +303,15 @@ class Pipeline:
                             f"Operation {operation_id!r} has no frozen operator snapshot."
                         )
                     translator = project.get_operator(operator_id)
+                    if from_spacy_sibling:
+                        from text_analysis_lab.translators.spacy_translator import (
+                            SpacyTranslator,
+                        )
+                        if not isinstance(translator, SpacyTranslator):
+                            raise PipelineError(
+                                "Only a frozen SpacyTranslator may replay sibling "
+                                "sentence-to-token outputs."
+                            )
                     if not isinstance(translator, BaseTranslator):
                         raise PipelineError(
                             f"Operation {operation_id!r} used "
@@ -303,7 +352,10 @@ class Pipeline:
                                 f"label {output_label!r}."
                             )
                         seen_labels.add(output_label)
-                        artifact_ports[output_artifact_id] = stage[output_label]
+                        # Do not overwrite the declared input's port when
+                        # the same operation also produced the input sentences.
+                        if output_artifact_id != start_id:
+                            artifact_ports[output_artifact_id] = stage[output_label]
 
                 resolved = artifact_ports.get(artifact_id)
                 if resolved is None:

@@ -159,9 +159,10 @@ def test_provider_uses_same_recovered_pipeline_for_text_and_query():
             return {"output": {"values": values}}
 
     class PipelineProject(_FakeProject):
-        def pipeline(self, *, start, end):
+        def pipeline(self, *, start, end, allow_looser_lineage=False):
             assert start == "art_documents"
             assert end is artifact
+            assert allow_looser_lineage is True
             return FakePipeline()
 
     project_obj = PipelineProject([artifact, text])

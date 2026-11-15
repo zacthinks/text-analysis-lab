@@ -1046,11 +1046,15 @@ class Project:
         *,
         start: BaseArtifact | str,
         end: BaseArtifact | str,
+        allow_looser_lineage: bool = False,
     ) -> Pipeline:
-        """Reconstruct a transform-only Pipeline between explicit artifact endpoints."""
+        """Reconstruct a frozen Pipeline; optionally permit verified looser lineage."""
         from text_analysis_lab.core.pipeline import Pipeline
 
-        return Pipeline.from_artifacts(self, start=start, end=end)
+        return Pipeline.from_artifacts(
+            self, start=start, end=end,
+            allow_looser_lineage=allow_looser_lineage,
+        )
 
     def run_pipeline(
         self,
