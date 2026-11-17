@@ -1,8 +1,14 @@
 name: Tests
 
 on:
+  # Feature branches are checked by their PR; avoid a second, identical
+  # run on the same commit's push event.
   push:
+    branches:
+      - main
   pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
