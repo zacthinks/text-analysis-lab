@@ -164,8 +164,8 @@ class SentenceTransformerEncoder(BaseTranslator):
             raise OperatorError("model_batch_size must be a positive integer.")
         return {
             "device": resolve_device(
-                self.resolve_execution_device(params.get("device")) or
-                str(params.get("device", "auto"))
+                (self.resolve_execution_device(params.get("device")) if self._frozen_device_lock else None)
+                or str(params.get("device", "auto"))
             ),
             "model_batch_size": model_batch_size,
         }
@@ -204,7 +204,7 @@ class SentenceTransformerEncoder(BaseTranslator):
 
         values, token_counts, context_limit = self._translate_texts(
             texts,
-            device=self.resolve_execution_device(device) or device,
+            device=(self.resolve_execution_device(device) if self._frozen_device_lock else None) or device,
             model_batch_size=model_batch_size,
         )
         embedded_counts = [min(count, context_limit) for count in token_counts]
@@ -241,7 +241,8 @@ class SentenceTransformerEncoder(BaseTranslator):
             raise ValueError("model_batch_size must be a positive integer.")
 
         resolved_device = resolve_device(
-            self.resolve_execution_device(device) or str(device)
+            (self.resolve_execution_device(device) if self._frozen_device_lock else None)
+            or str(device)
         )
         model = self._runtime_component(device=resolved_device)
         tokenizer = _sentence_tokenizer(model)
@@ -312,7 +313,7 @@ class SentenceTransformerEncoder(BaseTranslator):
                 f"SentenceTransformerEncoder source batch is missing columns {missing}."
             )
 
-        device = self.resolve_execution_device(request.params.get("device")) or str(
+        device = (self.resolve_execution_device(request.params.get("device")) if self._frozen_device_lock else None) or str(
             request.params.get("device", "auto")
         )
         model_batch_size = int(request.params.get("model_batch_size", 32))
