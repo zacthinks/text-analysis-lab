@@ -359,7 +359,12 @@ def test_unit10_translators_write_teal_native_lineage(
             pipeline = teal.Pipeline(inputs=tuple(bindings))
             stage = pipeline.add(
                 kind, frozen,
-                sources={name: pipeline.input[name] for name in bindings},
+                sources={
+                    name: (
+                        pipeline.input if len(bindings) == 1 else pipeline.input[name]
+                    )
+                    for name in bindings
+                },
             )
             pipeline.output("output", stage[label])
             assert "output" in project.run_pipeline(pipeline, bindings, device="cpu")
