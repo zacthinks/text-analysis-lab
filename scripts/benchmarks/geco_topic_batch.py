@@ -37,10 +37,10 @@ def write_json(path, data):
 
 
 def load_teal(source):
-    sys.path.insert(0, str(Path(source).resolve()))
+    sys.path.insert(0, str((Path(source).resolve() / "src")))
     import text_analysis_lab as teal
     from text_analysis_lab.integrations.geco import TeALGeCoProvider
-    assert Path(teal.__file__).resolve().is_relative_to(Path(source).resolve()), teal.__file__
+    assert Path(teal.__file__).resolve().is_relative_to(Path(source).resolve() / "src"), teal.__file__
     return teal, TeALGeCoProvider
 
 
