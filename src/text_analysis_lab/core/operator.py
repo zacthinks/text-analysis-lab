@@ -642,6 +642,33 @@ class BaseOperator(ABC):
                 )
         return requested
 
+    def execution_device_provenance(
+        self, device: str | None = None
+    ) -> dict[str, str] | None:
+        """Record requested/resolved run placement without freezing it.
+
+        Only device-configured translators use this default. Resolution here is
+        a start-of-operation observation, not a claim that an optional backend
+        has executed a kernel. Leave normal runtime fallback warnings to the
+        translator's execution path.
+        """
+        if not self.supports_execution_device() or not hasattr(self, "device"):
+            return None
+        requested = str(self.device if device is None else device)
+        resolved = self.resolve_execution_device(device)
+        if resolved is None:
+            import warnings
+
+            from text_analysis_lab.linguistics.device import resolve_devices
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                resolved = resolve_devices(
+                    requested,
+                    strict=bool(getattr(self, "strict_device", False)),
+                ).primary
+        return {"requested": requested, "resolved": resolved}
+
     def to_json_state(self) -> dict[str, Any]:
         """Return JSON-serializable state needed to reconstruct this operator."""
         return {}
