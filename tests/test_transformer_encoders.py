@@ -629,3 +629,67 @@ def test_sentence_transformer_real_teal_dense_round_trip(monkeypatch, tmp_path: 
         assert reopened.get_artifact(artifact_id).get_matrix().shape == (2, 3)
     finally:
         reopened.close()
+
+
+def test_project_freeze_device_roundtrip_pipeline_and_conflicting_replay(
+    monkeypatch, tmp_path: Path
+):
+    """A Project-created lock survives reconstruction and every replay surface."""
+    import json
+
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("duckdb")
+    _install_fake_sentence_transformers(monkeypatch)
+    project = teal.Project.create(tmp_path / "locked-project", name="device_lock")
+    try:
+        source = _seed_documents(project)
+        encoder = SentenceTransformerEncoder("example/sbert", revision=_COMMIT)
+        embedded = project.translate(
+            encoder, source, device="cpu", freeze_device=True, batch_size=2
+        )["output"]
+        descriptor = json.loads(
+            (project.storage.operator_dir(encoder.operator_id) / "operator.json").read_text()
+        )
+        assert descriptor["device_lock"] == {"device": "cpu"}
+        assert "device" not in descriptor["json_state"]
+
+        frozen = project.get_operator(encoder.operator_id)
+        with pytest.raises(OperatorError, match="Frozen device lock"):
+            project.translate(frozen, source, device="mps")
+        recovered = project.pipeline(start=source, end=embedded)
+        result = recovered.translate(["one two"], project=project, device="cpu")
+        assert result["output"]["values"].shape == (1, 3)
+        with pytest.raises(OperatorError, match="Frozen device lock"):
+            recovered.translate(["one two"], project=project, device="mps")
+        replayed = project.run_pipeline(recovered, source, device="cpu")
+        assert replayed["output"].get_matrix().shape == (2, 3)
+        with pytest.raises(OperatorError, match="Frozen device lock"):
+            project.run_pipeline(recovered, source, device="mps")
+    finally:
+        project.close()
+
+
+def test_project_default_freeze_is_portable_after_gpu_origin(
+    monkeypatch, tmp_path: Path
+):
+    """Original GPU placement is operation provenance, not a future strict lock."""
+    import json
+
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("duckdb")
+    _install_fake_sentence_transformers(monkeypatch)
+    project = teal.Project.create(tmp_path / "portable-project", name="portable")
+    try:
+        source = _seed_documents(project)
+        encoder = SentenceTransformerEncoder("example/sbert", revision=_COMMIT)
+        embedded = project.translate(encoder, source, device="cpu")["output"]
+        descriptor = json.loads(
+            (project.storage.operator_dir(encoder.operator_id) / "operator.json").read_text()
+        )
+        assert "device_lock" not in descriptor
+        recovered = project.pipeline(start=source, end=embedded)
+        assert recovered.translate(["one two"], project=project, device="cpu")[
+            "output"
+        ]["values"].shape == (1, 3)
+    finally:
+        project.close()
