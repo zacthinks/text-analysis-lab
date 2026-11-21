@@ -610,6 +610,18 @@ def resume_translate(
     if not isinstance(restored_params, Mapping):
         raise OperatorError("deserialize_operation_params() must return a mapping.")
 
+    # New science-only linguistic snapshots no longer encode the constructor's
+    # original placement. Resuming an unfinished operation must not silently
+    # select a different device from the one recorded when it started.
+    placement = metadata.get("execution_device")
+    if (
+        translator.supports_execution_device()
+        and "device" not in restored_params
+        and isinstance(placement, Mapping)
+        and isinstance(placement.get("resolved"), str)
+    ):
+        restored_params = {**restored_params, "device": placement["resolved"]}
+
     request = _validate_translation_request(
         TranslationRequest(
             workers=request_data.get("workers", 1),
