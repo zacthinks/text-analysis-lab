@@ -608,22 +608,33 @@ class BaseOperator(ABC):
         """
         locked = self._frozen_device_lock
         if locked is not None:
+            requested = None
             if device is not None and str(device).strip().lower() != "auto":
                 requested = str(device).strip().lower()
-                if requested == "cuda":
-                    requested = "cuda:0"
-                if requested != locked:
+                if locked == "cuda":
+                    # An opt-in CUDA lock specifies the backend, not the local GPU.
+                    compatible = requested == "cuda" or requested.startswith("cuda:")
+                else:
+                    # Preserve exact-index enforcement for already-written locks.
+                    if requested == "cuda":
+                        requested = "cuda:0"
+                    compatible = requested == locked
+                if not compatible:
                     raise OperatorError(
                         f"Frozen device lock requires {locked!r}, not {requested!r}. "
-                        "Use the locked device or create a portable frozen operator."
+                        "Use the locked backend or create a portable frozen operator."
                     )
             from text_analysis_lab.linguistics.device import resolve_devices
 
+            # Validate any explicit CUDA index against *this* machine. With
+            # auto/no override, select an available device within the lock.
+            target = requested if locked == "cuda" and requested is not None else locked
             try:
-                return resolve_devices(locked, strict=True).primary
+                return resolve_devices(target, strict=True).primary
             except (RuntimeError, ValueError) as exc:
                 raise OperatorError(
-                    f"Frozen device lock requires {locked!r}, which is unavailable."
+                    f"Frozen device lock requires {locked!r}, but {target!r} "
+                    "is unavailable or invalid on this machine."
                 ) from exc
         if device is None:
             return None
@@ -737,7 +748,7 @@ class BaseOperator(ABC):
         freeze_device: bool = False,
         device: str | None = None,
     ) -> Path:
-        """Freeze scientific state; optionally lock resolved execution hardware.
+        """Freeze scientific state; optionally lock the execution backend family.
 
         ``device`` selects the freeze-time placement only when
         ``freeze_device=True``. It never becomes scientific JSON state.
@@ -758,7 +769,11 @@ class BaseOperator(ABC):
         self.prepare_for_freeze()
         if freeze_device:
             requested = device if device is not None else self.device_request_for_freeze()
-            self._frozen_device_lock = self.resolve_execution_device(requested)
+            resolved = self.resolve_execution_device(requested)
+            if resolved is None:
+                raise OperatorError("Cannot freeze an unresolved execution backend.")
+            # CUDA ordinals are host-local; freeze only cpu/cuda/mps identity.
+            self._frozen_device_lock = resolved.split(":", 1)[0]
 
         path = Path(operator_dir)
         path.mkdir(parents=True, exist_ok=True)
@@ -833,10 +848,13 @@ class BaseOperator(ABC):
             if not isinstance(device_lock, Mapping) or not isinstance(device_lock.get("device"), str):
                 raise OperatorError("operator device_lock must include a device string.")
             locked = str(device_lock["device"])
-            if locked not in {"cpu", "mps"} and not (
+            if locked not in {"cpu", "cuda", "mps"} and not (
                 locked.startswith("cuda:") and locked[5:].isdigit()
             ):
-                raise OperatorError("operator device_lock must name a concrete device.")
+                raise OperatorError(
+                    "operator device_lock must name a backend family "
+                    "or a historical concrete CUDA device."
+                )
             if not obj.supports_execution_device():
                 raise OperatorError("operator device_lock is unsupported for this translator.")
             obj._frozen_device_lock = locked
