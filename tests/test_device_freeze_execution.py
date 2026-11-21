@@ -214,3 +214,20 @@ def test_unlocked_hf_explicit_cuda_index_checked_before_model_load(monkeypatch):
     assert resolve_device("auto") == "cpu"
     with pytest.raises(TransformerResourceError, match="index 0.*unavailable"):
         resolve_device("cuda:0")
+
+
+@pytest.mark.parametrize("cls", LINGUISTIC)
+def test_implicit_linguistic_device_provenance_distinguishes_fallback_from_binding(
+    cls, monkeypatch
+):
+    # Fallback remains a run-specific observation, never a new frozen lock.
+    monkeypatch.setattr(device_module, "_torch_capabilities", lambda: (False, 0, False))
+    operator = cls(device="cuda:0")
+    assert operator.execution_device_provenance() == {
+        "requested": "cuda:0", "resolved": "cpu"
+    }
+    assert operator.execution_device_provenance("cpu") == {
+        "requested": "cpu", "resolved": "cpu"
+    }
+    assert "device" not in operator.to_json_state()
+    assert operator._frozen_device_lock is None
