@@ -289,16 +289,19 @@ class TeALGeCoProvider:
                 "may contain extra rows, but every GeCo document key must be present."
             ) from exc
 
-    def transform_texts(self, external_ref: Any, texts: list[str]) -> Any:
+    def transform_texts(
+        self, external_ref: Any, texts: list[str], *, device: str | None = None
+    ) -> Any:
         """Run a registered geometry's recovered TeAL Pipeline on new text."""
         with self._project_session() as project:
             artifact = self._matrix_artifact(project, external_ref, purpose="geometry")
             start_id = _text_artifact_id_from_external_ref(external_ref)
             try:
                 pipeline = project.pipeline(start=start_id, end=artifact, allow_looser_lineage=True)
+                execution = {} if device is None else {"device": device}
                 result = pipeline.translate(
                     ["" if value is None else str(value) for value in texts],
-                    project=project,
+                    project=project, **execution,
                 )["output"]
                 values = result["values"] if isinstance(result, Mapping) else result
             except Exception as exc:
@@ -308,9 +311,13 @@ class TeALGeCoProvider:
                 ) from exc
             return values.copy() if hasattr(values, "copy") else values
 
-    def transform_query(self, external_ref: Any, query: str) -> Any:
+    def transform_query(
+        self, external_ref: Any, query: str, *, device: str | None = None
+    ) -> Any:
         """Transform one semantic-search string through the geometry's frozen Pipeline."""
-        return self.transform_texts(external_ref, [str(query)])
+        if device is None:
+            return self.transform_texts(external_ref, [str(query)])
+        return self.transform_texts(external_ref, [str(query)], device=device)
 
 
 class LinkedGeCoWorkspace:
