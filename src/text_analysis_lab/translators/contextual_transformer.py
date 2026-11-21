@@ -82,6 +82,7 @@ class ContextualTransformer(BaseTranslator):
     """
 
     operation_type = "translate"
+    execution_device_capable = True
 
     frozen_runtime_fields = frozenset(['_runtime_model','_runtime_tokenizer','_runtime_device','_effective_context_limit','_warned_unpinned'])
 
@@ -156,7 +157,9 @@ class ContextualTransformer(BaseTranslator):
             )
         if int(model_batch_size) <= 0:
             raise ValueError("model_batch_size must be a positive integer.")
-        resolved_device = resolve_device(str(device))
+        resolved_device = resolve_device(
+            self.resolve_execution_device(device) or str(device)
+        )
         model, tokenizer = self._runtime_components(device=resolved_device)
         context_limit = self._context_limit(tokenizer=tokenizer, model=model)
         source_counts = count_tokens(tokenizer, values)
@@ -292,6 +295,9 @@ class ContextualTransformer(BaseTranslator):
             ),
         }
 
+    def device_request_for_freeze(self) -> str:
+        return "auto"
+
     def validate_operation_params(
         self,
         params: Mapping[str, Any],
@@ -309,7 +315,10 @@ class ContextualTransformer(BaseTranslator):
         if model_batch_size <= 0:
             raise OperatorError("model_batch_size must be a positive integer.")
         return {
-            "device": resolve_device(str(params.get("device", "auto"))),
+            "device": resolve_device(
+                self.resolve_execution_device(params.get("device")) or
+                str(params.get("device", "auto"))
+            ),
             "model_batch_size": model_batch_size,
         }
 
@@ -358,7 +367,9 @@ class ContextualTransformer(BaseTranslator):
 
         translated = self.translate(
             frame[self.text_field],
-            device=str(request.params.get("device", "auto")),
+            device=self.resolve_execution_device(request.params.get("device")) or str(
+                request.params.get("device", "auto")
+            ),
             model_batch_size=int(request.params.get("model_batch_size", 16)),
         )
         token_frame = translated["tokens"]
