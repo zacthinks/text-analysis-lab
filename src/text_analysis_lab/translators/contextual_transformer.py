@@ -158,7 +158,8 @@ class ContextualTransformer(BaseTranslator):
         if int(model_batch_size) <= 0:
             raise ValueError("model_batch_size must be a positive integer.")
         resolved_device = resolve_device(
-            self.resolve_execution_device(device) or str(device)
+            (self.resolve_execution_device(device) if self._frozen_device_lock else None)
+            or str(device)
         )
         model, tokenizer = self._runtime_components(device=resolved_device)
         context_limit = self._context_limit(tokenizer=tokenizer, model=model)
@@ -316,8 +317,8 @@ class ContextualTransformer(BaseTranslator):
             raise OperatorError("model_batch_size must be a positive integer.")
         return {
             "device": resolve_device(
-                self.resolve_execution_device(params.get("device")) or
-                str(params.get("device", "auto"))
+                (self.resolve_execution_device(params.get("device")) if self._frozen_device_lock else None)
+                or str(params.get("device", "auto"))
             ),
             "model_batch_size": model_batch_size,
         }
@@ -367,7 +368,7 @@ class ContextualTransformer(BaseTranslator):
 
         translated = self.translate(
             frame[self.text_field],
-            device=self.resolve_execution_device(request.params.get("device")) or str(
+            device=(self.resolve_execution_device(request.params.get("device")) if self._frozen_device_lock else None) or str(
                 request.params.get("device", "auto")
             ),
             model_batch_size=int(request.params.get("model_batch_size", 16)),
