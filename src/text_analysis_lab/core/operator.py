@@ -609,9 +609,9 @@ class BaseOperator(ABC):
         locked = self._frozen_device_lock
         if locked is not None:
             if device is not None and str(device).strip().lower() != "auto":
-                from text_analysis_lab.linguistics.device import resolve_devices
-
-                requested = resolve_devices(str(device), strict=True).primary
+                requested = str(device).strip().lower()
+                if requested == "cuda":
+                    requested = "cuda:0"
                 if requested != locked:
                     raise OperatorError(
                         f"Frozen device lock requires {locked!r}, not {requested!r}. "
