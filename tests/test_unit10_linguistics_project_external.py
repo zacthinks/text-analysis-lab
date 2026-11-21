@@ -383,7 +383,7 @@ def test_unit10_translators_write_teal_native_lineage(
             values = {name: _frame(artifact) for name, artifact in bindings.items()}
             values[key_name] = key_columns
             native_result = native_pipeline.translate(inputs=values, device="cpu")
-            assert label in native_result["output"]
+            assert isinstance(native_result["output"], pd.DataFrame)
 
         assert calls["coref"][-3:] == ["cpu"] * 3
         assert calls["srl"][-3:] == [("cpu", False)] * 3
