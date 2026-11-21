@@ -1086,6 +1086,8 @@ class Project:
             raise PipelineError(
                 f"run_pipeline(...) requires a Pipeline; got {type(pipeline).__name__}."
             )
+        if device is None:
+            return pipeline.run_artifacts(self, sources, outputs=outputs)
         return pipeline.run_artifacts(self, sources, outputs=outputs, device=device)
 
     def resume_operation(
