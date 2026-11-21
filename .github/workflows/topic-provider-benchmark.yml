@@ -1,0 +1,143 @@
+name: Topic provider persisted benchmark (opt-in)
+
+on:
+  workflow_dispatch:
+  # One-time scoped PR validation when this benchmark workflow is introduced.
+  # No ordinary PR code change, push or scheduled event runs this benchmark.
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/topic-provider-benchmark.yml
+
+permissions:
+  contents: read
+
+jobs:
+  topic-provider-benchmark:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'perf/geco-topic-session-batching-current-main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      PYTHONHASHSEED: "0"
+      BASELINE_SHA: "13b93d9c7c8598254e5d694bf5a4ef90e6e4cd0c"
+    steps:
+      - name: Check out benchmark candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - name: Install equivalent dependencies once
+        run: uv sync --python 3.11 --all-extras
+
+      - name: Freeze baseline and candidate identity
+        id: refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANDIDATE_SHA="$(git rev-parse HEAD)"
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          git worktree add --detach "${RUNNER_TEMP}/teal-baseline" "${BASELINE_SHA}"
+          echo "candidate_sha=${CANDIDATE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "baseline_sha=${BASELINE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "BASE_SOURCE=${RUNNER_TEMP}/teal-baseline" >> "$GITHUB_ENV"
+          echo "CANDIDATE_SOURCE=${GITHUB_WORKSPACE}" >> "$GITHUB_ENV"
+          echo "BENCH_TEMP=${RUNNER_TEMP}/topic-provider-bench" >> "$GITHUB_ENV"
+
+      - name: Create disposable persisted project once
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${BENCH_TEMP}/results"
+          .venv/bin/python scripts/benchmarks/geco_topic_batch.py \
+            --mode prepare --source "${CANDIDATE_SOURCE}" \
+            --project "${BENCH_TEMP}/fixture-project" --fixture "${BENCH_TEMP}/fixture.json"
+          cp -a "${BENCH_TEMP}/fixture-project" "${BENCH_TEMP}/baseline-project"
+          cp -a "${BENCH_TEMP}/fixture-project" "${BENCH_TEMP}/candidate-project"
+          cp "${BENCH_TEMP}/fixture.json" "${BENCH_TEMP}/results/fixture.json"
+          .venv/bin/python - <<'PY'
+          import json, os, platform, sys
+          import numpy, pandas, scipy, duckdb, pyarrow
+          from pathlib import Path
+          import importlib.metadata as md
+          p = Path(os.environ["BENCH_TEMP"]) / "results" / "environment.json"
+          p.write_text(json.dumps({
+            "baseline_sha": os.environ["BASELINE_SHA"],
+            "candidate_sha": os.environ.get("GITHUB_SHA"),
+            "python": sys.version,
+            "platform": platform.platform(),
+            "cpu_count": os.cpu_count(),
+            "numpy": numpy.__version__, "pandas": pandas.__version__,
+            "scipy": scipy.__version__, "duckdb": duckdb.__version__,
+            "pyarrow": pyarrow.__version__,
+            "geometric_coder": md.version("geometric-coder"),
+            "github_runner": os.environ.get("RUNNER_NAME"),
+            "blas_threads": 1,
+            "workflow": os.environ.get("GITHUB_WORKFLOW"),
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Run exact persisted-product comparisons, fresh-use and warm
+        shell: bash
+        run: |
+          set -euo pipefail
+          DRIVER="${GITHUB_WORKSPACE}/scripts/benchmarks/geco_topic_batch.py"
+          for kind in dense sparse; do
+            for size in 1 100 5000; do
+              for round in 1 2 3; do
+                # Each run starts a genuinely fresh Python interpreter.
+                for spec in baseline:sequential candidate:sequential candidate:batch; do
+                  role="${spec%%:*}"
+                  variant="${spec#*:}"
+                  if [ "$role" = baseline ]; then
+                    src="$BASE_SOURCE"
+                    project="${BENCH_TEMP}/baseline-project"
+                    revision="$BASELINE_SHA"
+                  else
+                    src="$CANDIDATE_SOURCE"
+                    project="${BENCH_TEMP}/candidate-project"
+                    revision="${{ steps.refs.outputs.candidate_sha }}"
+                  fi
+                  TEAL_REVISION="$revision" .venv/bin/python "$DRIVER" \
+                    --mode run --source "$src" --project "$project" \
+                    --fixture "${BENCH_TEMP}/fixture.json" --kind "$kind" --size "$size" \
+                    --role "$role" --first --first-round "$round" --variant "$variant" \
+                    --output "${BENCH_TEMP}/results/first_${kind}_${size}_${role}_${variant}_${round}.json"
+                done
+              done
+              # Run warm samples with the same interpreter, dependencies and runner.
+              for role in baseline candidate; do
+                if [ "$role" = baseline ]; then
+                  src="$BASE_SOURCE"
+                  project="${BENCH_TEMP}/baseline-project"
+                  revision="$BASELINE_SHA"
+                else
+                  src="$CANDIDATE_SOURCE"
+                  project="${BENCH_TEMP}/candidate-project"
+                  revision="${{ steps.refs.outputs.candidate_sha }}"
+                fi
+                TEAL_REVISION="$revision" .venv/bin/python "$DRIVER" \
+                  --mode run --source "$src" --project "$project" \
+                  --fixture "${BENCH_TEMP}/fixture.json" --kind "$kind" --size "$size" \
+                  --role "$role" --warm 24 \
+                  --output "${BENCH_TEMP}/results/warm_${kind}_${size}_${role}.json"
+              done
+            done
+          done
+          .venv/bin/python "$DRIVER" --mode report --results "${BENCH_TEMP}/results"
+
+      - name: Upload raw samples, reproducibility metadata and summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: topic-provider-persisted-benchmark-${{ github.run_id }}
+          path: ${{ runner.temp }}/topic-provider-bench/results/
+          if-no-files-found: warn
+          retention-days: 30
