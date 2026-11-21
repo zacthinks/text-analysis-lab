@@ -16,6 +16,18 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ### Removed
 
+## [0.12.2] - Unreleased (preparing)
+
+### Added
+
+- Optional `--no-warmup` flag for `teal geco` standard linked-workspace launches, forwarding `warmup=False` to compatible GeCo versions. Without the flag, existing launch behavior is unchanged (pending PR #77).
+
+### Notes
+
+- This patch release prepares the CLI opt-out for GeCo's default-enabled launch-time runtime preparation. GeCo owns UMAP and semantic-library warm-up; TeAL does not alter the UMAP fitting algorithm, training semantics, or saved artifacts.
+- The CLI option depends on a GeCo version supporting `GeometricCoder.launch(warmup=False)`. Focus Coding behavior is unchanged.
+- Release publication is pending dependency integration and CI; no version tag or GitHub release has been created.
+
 ## [0.12.1] - 2026-11-15
 
 ### Added
