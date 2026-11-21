@@ -32,6 +32,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "name", nargs="?",
         help="Linked workspace name (required when more than one exists).",
     )
+    geco.add_argument(
+        "--no-warmup", action="store_true",
+        help="Skip GeCo's optional startup preparation of heavy numerical libraries.",
+    )
 
     models = commands.add_parser("models", help="Manage user-level model resources.")
     models.add_argument(
@@ -247,7 +251,8 @@ def main(argv: list[str] | None = None) -> int:
             server = (
                 workspace.launch_focus()
                 if workspace.is_focus_coder
-                else workspace.launch()
+                else (workspace.launch(warmup=False) if args.no_warmup
+                      else workspace.launch())
             )
             try:
                 server.wait()

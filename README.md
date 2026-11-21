@@ -534,6 +534,18 @@ uv run teal geco path/to/teal-project coding
 The command automatically starts the appropriate GeCo interface, including Focus Coding
 for linked focus-coder workspaces. It does not create a workspace.
 
+Recent GeCo versions normally prepare heavy numerical libraries at launch, including a
+small disposable 2D cosine UMAP warm-up to avoid first-use JIT delays in View creation.
+This runs before the browser opens; no project data is changed. To launch faster
+without this optional preparation, use:
+
+```bash
+uv run teal geco path/to/teal-project coding --no-warmup
+```
+
+The flag is passed to a compatible GeCo standard launch. Focus Coding has
+no UMAP preparation and retains its existing launch behavior.
+
 Selected human codes and fitted classifiers can be exported back into TeAL:
 
 ```python
