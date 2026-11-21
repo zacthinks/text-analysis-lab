@@ -19,6 +19,7 @@ from text_analysis_lab.core.operator import (
     TranslationRequest,
 )
 from text_analysis_lab.linguistics.cache import user_cache_paths
+from text_analysis_lab.linguistics.device import resolve_devices
 from text_analysis_lab.linguistics.srl.resources import prepare_project_srl_runtime
 from text_analysis_lab.linguistics.srl.runtime import AllenNlpSrlRuntime
 
