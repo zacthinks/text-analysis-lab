@@ -483,6 +483,9 @@ def translate(
         translator,
         translation_request.params,
     )
+    # Operation provenance is independent of both translator science and its
+    # optional frozen execution lock. Do not add this to request.params.
+    execution_device = translator.execution_device_provenance(params.get("device"))
     runtime = _prepare_runtime(
         project=project,
         translator=translator,
@@ -502,6 +505,7 @@ def translate(
             request=translation_request,
             serialized_operation_params=serialized_operation_params,
             freeze_device=freeze_device,
+            execution_device=execution_device,
             input_request=input_request,
             sources=source_bindings,
             output_specs=output_specs,
@@ -2557,6 +2561,7 @@ def _save_operation_metadata(
     request: TranslationRequest,
     serialized_operation_params: Mapping[str, Any],
     freeze_device: bool,
+    execution_device: Mapping[str, str] | None,
     input_request: InputRequest,
     sources: Mapping[str, BaseArtifact],
     output_specs: Mapping[str, OutputSpec],
@@ -2593,6 +2598,8 @@ def _save_operation_metadata(
         "output_artifact_ids": dict(output_artifact_ids),
         "alias_plan": None if alias_plan is None else alias_plan.to_dict(),
     }
+    if execution_device is not None:
+        payload["execution_device"] = dict(execution_device)
     _write_json(runtime.operation_dir / "operation.json", payload)
 
 
