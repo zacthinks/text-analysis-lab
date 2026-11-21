@@ -1129,3 +1129,182 @@ def test_bad_topic_registration_rolls_back_new_link(tmp_path: Path, monkeypatch)
         assert argmax.artifact_type.value == "table"
     finally:
         project.close()
+
+
+def test_topic_batch_persisted_sparse_dense_argmax_and_detached_results(
+    tmp_path: Path, monkeypatch,
+):
+    """The same keyed packets are returned after the batched session closes."""
+    from contextlib import contextmanager
+    from text_analysis_lab.translators.argmax import ArgMax
+
+    path = tmp_path / "topic_batch"
+    with teal.Project.create(path, name="topic_batch") as project:
+        dense = _seed_matrix(
+            project, "topic_dense", "topic_dense",
+            np.array([[10., 1.], [20., 2.], [30., 3.], [40., 4.]]),
+            columns=["topic_a", "topic_b"],
+        )
+        sparse_matrix = _seed_matrix(
+            project, "topic_sparse", "topic_sparse",
+            sparse.csr_matrix(np.array([
+                [0., 1.], [2., 0.], [0., 3.], [4., 0.],
+            ])),
+            columns=["topic_a", "topic_b"],
+        )
+        argmax = project.translate(ArgMax(), dense)["output"]
+        description = _seed_matrix(
+            project, "topic_description", "topic_description",
+            np.array([[0.6, 0.4], [0.2, 0.8]]),
+            columns=["word_a", "word_b"],
+        )
+        ids = [dense.artifact_id, sparse_matrix.artifact_id,
+               argmax.artifact_id, description.artifact_id]
+        # Original and batch APIs must agree, including duplicates and misses.
+        keys = [{"row_id": 3}, {"row_id": 90}, {"row_id": 1},
+                {"row_id": 3}, {"row_id": 0}]
+        requested = [(ids[0], keys), (ids[1], keys),
+                     (ids[2], keys), (ids[3], None)]
+        provider = TeALGeCoProvider(project)
+        expected = [provider.read_artifact(*request) for request in requested]
+        original_dense = dense.get_matrix().copy()
+        original_sparse = sparse_matrix.get_matrix().copy()
+        original_argmax = argmax.query(
+            key_columns=False, data_columns=True,
+            metadata_columns=False, form="table",
+            order_by="_position",
+        )
+        opens, closes = [], []
+        real_session = provider._project_session
+
+        @contextmanager
+        def counted_session():
+            session = None
+            try:
+                with real_session() as session:
+                    opens.append(session)
+                    yield session
+            finally:
+                if session is not None:
+                    closes.append(session)
+
+        # Count only this provider's sessions, not unrelated Project closures
+        # performed by Python garbage collection during the test.
+        monkeypatch.setattr(provider, "_project_session", counted_session)
+        got = provider.read_artifacts(requested)
+        assert len(opens) == len(closes) == 1
+        assert opens[0] is closes[0]
+        assert [packet.kind for packet in got] == [
+            "matrix", "matrix", "table", "matrix"
+        ]
+        for actual, old in zip(got, expected, strict=True):
+            assert actual.kind == old.kind
+            assert actual.columns == old.columns
+            assert actual.positions == old.positions
+            assert actual.row_ids == old.row_ids
+            if actual.kind == "table":
+                pd.testing.assert_frame_equal(actual.values, old.values)
+            else:
+                a = actual.values.toarray() if sparse.issparse(actual.values) else actual.values
+                b = old.values.toarray() if sparse.issparse(old.values) else old.values
+                np.testing.assert_array_equal(a, b)
+        for packet in got[:3]:
+            assert packet.positions == [0, 2, 3, 4]
+        np.testing.assert_array_equal(
+            got[0].values,
+            original_dense[[3, 1, 3, 0]],
+        )
+        assert sparse.issparse(got[1].values)
+        np.testing.assert_array_equal(
+            got[1].values.toarray(), original_sparse[[3, 1, 3, 0]].toarray()
+        )
+        assert got[2].values["max_feature"].tolist() == (
+            original_argmax.iloc[[3, 1, 3, 0]]["max_feature"].tolist()
+        )
+        assert got[3].row_ids == [0, 1]
+        np.testing.assert_array_equal(
+            got[3].values, np.array([[0.6, 0.4], [0.2, 0.8]])
+        )
+
+    # Results remain readable and independently mutable after closure.
+    got[0].values[0, 0] = -1
+    assert got[0].values[0, 0] == -1
+    assert expected[0].values[0, 0] == 40
+    got[1].values.data[:] = -7
+    assert expected[1].values.data.min() >= 0
+    got[2].values.iloc[0, 0] = "changed"
+    assert expected[2].values.iloc[0, 0] != "changed"
+    assert got[3].values.shape == (2, 2)
+
+
+def test_topic_batch_concurrent_sessions_and_error_parity(tmp_path: Path, monkeypatch):
+    from contextlib import contextmanager
+    from text_analysis_lab.translators.argmax import ArgMax
+    from threading import get_ident
+    from collections import Counter
+
+    path = tmp_path / "topic_parallel"
+    with teal.Project.create(path, name="topic_parallel") as project:
+        membership = _seed_matrix(
+            project, "parallel_membership", "parallel_membership",
+            sparse.csr_matrix(np.array([[2., 0.], [0., 5.], [6., 1.]])),
+            columns=["topic_a", "topic_b"],
+        )
+        argmax = project.translate(ArgMax(), membership)["output"]
+        provider = TeALGeCoProvider(project)
+        requests = [
+            (membership.artifact_id, [{"row_id": 2}, {"row_id": 0}]),
+            (argmax.artifact_id, [{"row_id": 1}, {"row_id": 2}]),
+        ]
+        for read in (
+            lambda: provider.read_artifact("does-not-exist", []),
+            lambda: provider.read_artifacts([("does-not-exist", [])]),
+        ):
+            with pytest.raises(GeCoIntegrationError, match="not available"):
+                read()
+        for read in (
+            lambda: provider.read_artifact(argmax.artifact_id, None),
+            lambda: provider.read_artifacts([(argmax.artifact_id, None)]),
+        ):
+            with pytest.raises(GeCoIntegrationError, match="must be matrices"):
+                read()
+        for read in (
+            lambda: provider.read_artifact(membership.artifact_id, [{}]),
+            lambda: provider.read_artifacts([(membership.artifact_id, [{}])]),
+        ):
+            with pytest.raises(GeCoIntegrationError, match="missing TeAL primary-key"):
+                read()
+
+        events = []
+        real_session = provider._project_session
+
+        @contextmanager
+        def counted_session():
+            session = None
+            try:
+                with real_session() as session:
+                    events.append(("open", get_ident(), session))
+                    yield session
+            finally:
+                if session is not None:
+                    events.append(("close", get_ident(), session))
+
+        monkeypatch.setattr(provider, "_project_session", counted_session)
+
+        def fetch_one(_):
+            packets = provider.read_artifacts(requests)
+            assert [packet.positions for packet in packets] == [[0, 1], [0, 1]]
+            return packets[0].values.toarray(), packets[1].values["max_feature"].tolist()
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(fetch_one, range(8)))
+        assert len(events) == 16
+        opens = Counter((thread, project_id) for kind, thread, project_id in events
+                        if kind == "open")
+        closes = Counter((thread, project_id) for kind, thread, project_id in events
+                         if kind == "close")
+        assert opens == closes
+        assert sum(opens.values()) == 8
+        for matrix, labels in results:
+            np.testing.assert_array_equal(matrix, np.array([[6., 1.], [2., 0.]]))
+            assert len(labels) == 2
