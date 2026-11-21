@@ -224,3 +224,92 @@ def test_geco_contract_gate_accepts_per_geometry_text_capability(monkeypatch):
         SimpleNamespace(__version__="0.next", GeometricCoder=CurrentGeometricCoder),
     )
     assert bridge._load_geometric_coder() is CurrentGeometricCoder
+
+
+def test_batch_empty_request_does_not_open_session(monkeypatch):
+    from contextlib import contextmanager
+
+    provider = TeALGeCoProvider(_FakeProject([]))
+
+    @contextmanager
+    def forbidden_session():
+        pytest.fail("Empty batches must not open a TeAL session")
+        yield
+
+    monkeypatch.setattr(provider, "_project_session", forbidden_session)
+    assert provider.read_artifacts([]) == []
+
+
+def test_batch_reads_share_one_session_and_preserve_request_order(monkeypatch):
+    from contextlib import contextmanager
+
+    provider = TeALGeCoProvider(_FakeProject([]))
+    events = []
+    requested = []
+
+    @contextmanager
+    def counted_session():
+        events.append("open")
+        try:
+            yield provider.project
+        finally:
+            events.append("close")
+
+    def read_one(project, artifact_id, keys):
+        assert project is provider.project
+        requested.append((artifact_id, keys))
+        return artifact_id
+
+    monkeypatch.setattr(provider, "_project_session", counted_session)
+    monkeypatch.setattr(provider, "_read_artifact_in_session", read_one)
+    keys = [{"row_id": 2}]
+    requests = [
+        ("membership", keys),
+        ("argmax", keys),
+        ("description", None),
+        ("membership", [{"row_id": 1}]),
+    ]
+    assert provider.read_artifacts(requests) == [
+        "membership", "argmax", "description", "membership"
+    ]
+    assert requested == requests
+    assert events == ["open", "close"]
+
+    assert provider.read_artifact("membership", keys) == "membership"
+    assert events == ["open", "close", "open", "close"]
+
+
+def test_batch_failure_closes_session_and_does_not_swallow_error(monkeypatch):
+    from contextlib import contextmanager
+
+    provider = TeALGeCoProvider(_FakeProject([]))
+    events = []
+
+    @contextmanager
+    def counted_session():
+        events.append("open")
+        try:
+            yield provider.project
+        finally:
+            events.append("close")
+
+    def read_one(project, artifact_id, keys):
+        events.append(artifact_id)
+        if artifact_id == "broken":
+            raise sqlite3.ProgrammingError("wrong thread")
+        return artifact_id
+
+    monkeypatch.setattr(provider, "_project_session", counted_session)
+    monkeypatch.setattr(provider, "_read_artifact_in_session", read_one)
+    with pytest.raises(sqlite3.ProgrammingError, match="wrong thread"):
+        provider.read_artifacts([("first", []), ("broken", []), ("never", [])])
+    assert events == ["open", "first", "broken", "close"]
+
+
+@pytest.mark.parametrize("bad_id", ["", "   ", None, 12])
+def test_batch_rejects_invalid_id_with_original_message(bad_id):
+    provider = TeALGeCoProvider(_FakeProject([]))
+    with pytest.raises(GeCoIntegrationError, match="nonempty string"):
+        provider.read_artifact(bad_id, [])
+    with pytest.raises(GeCoIntegrationError, match="nonempty string"):
+        provider.read_artifacts([(bad_id, [])])
