@@ -38,14 +38,14 @@ def test_new_freeze_omits_placement_and_replays_gpu_origin_on_cpu(cls, tmp_path,
 
 
 @pytest.mark.parametrize("cls", LINGUISTIC)
-def test_explicit_freeze_device_is_concrete_strict_and_separate(cls, tmp_path, monkeypatch):
+def test_explicit_freeze_device_is_backend_strict_and_separate(cls, tmp_path, monkeypatch):
     monkeypatch.setattr(device_module, "_torch_capabilities", lambda: (True, 1, False))
     operator = cls(device="auto")
     directory = operator.save_to_dir(
         tmp_path / "frozen", operator_id="operator-1", freeze_device=True
     )
     descriptor = json.loads((directory / "operator.json").read_text())
-    assert descriptor["device_lock"] == {"device": "cuda:0"}
+    assert descriptor["device_lock"] == {"device": "cuda"}
     assert "device" not in descriptor["json_state"]
     frozen = BaseOperator.load_from_dir(directory)
     assert frozen.resolve_execution_device(None) == "cuda:0"
@@ -54,6 +54,76 @@ def test_explicit_freeze_device_is_concrete_strict_and_separate(cls, tmp_path, m
     monkeypatch.setattr(device_module, "_torch_capabilities", lambda: (False, 0, False))
     with pytest.raises(OperatorError, match="unavailable"):
         frozen.resolve_execution_device(None)
+
+
+@pytest.mark.parametrize("cls", LINGUISTIC)
+def test_cuda_family_lock_is_portable_across_gpu_indices(cls, tmp_path, monkeypatch):
+    # Simulate two devices at freeze time; a different host has only GPU 0.
+    monkeypatch.setattr(device_module, "_torch_capabilities", lambda: (True, 2, False))
+    folder = cls(device="cuda:1").save_to_dir(
+        tmp_path / "cuda-family", operator_id="cuda-family", freeze_device=True
+    )
+    descriptor = json.loads((folder / "operator.json").read_text())
+    assert descriptor["device_lock"] == {"device": "cuda"}
+    assert "device" not in descriptor["json_state"]
+    frozen = BaseOperator.load_from_dir(folder)
+    assert frozen.resolve_execution_device("cuda:1") == "cuda:1"
+    assert frozen.resolve_execution_device("cuda:0") == "cuda:0"
+
+    monkeypatch.setattr(device_module, "_torch_capabilities", lambda: (True, 1, False))
+    assert frozen.resolve_execution_device("cuda:0") == "cuda:0"
+    assert frozen.resolve_execution_device("cuda") == "cuda:0"
+    assert frozen.resolve_execution_device("auto") == "cuda:0"
+    assert frozen.resolve_execution_device(None) == "cuda:0"
+    with pytest.raises(OperatorError, match="unavailable or invalid"):
+        frozen.resolve_execution_device("cuda:1")
+    for incompatible in ("cpu", "mps"):
+        with pytest.raises(OperatorError, match="Frozen device lock"):
+            frozen.resolve_execution_device(incompatible)
+
+    monkeypatch.setattr(device_module, "_torch_capabilities", lambda: (False, 0, True))
+    with pytest.raises(OperatorError, match="unavailable"):
+        frozen.resolve_execution_device("auto")
+    with pytest.raises(OperatorError, match="Frozen device lock"):
+        frozen.resolve_execution_device("mps")
+
+
+@pytest.mark.parametrize("cls", LINGUISTIC)
+def test_historical_exact_cuda_lock_remains_loadable(cls, tmp_path, monkeypatch):
+    monkeypatch.setattr(device_module, "_torch_capabilities", lambda: (True, 2, False))
+    folder = cls(device="cuda:1").save_to_dir(
+        tmp_path / "historical-concrete", operator_id="old-lock"
+    )
+    path = folder / "operator.json"
+    descriptor = json.loads(path.read_text())
+    descriptor["device_lock"] = {"device": "cuda:1"}
+    path.write_text(json.dumps(descriptor))
+    frozen = BaseOperator.load_from_dir(folder)
+    assert frozen.resolve_execution_device(None) == "cuda:1"
+    assert frozen.resolve_execution_device("cuda:1") == "cuda:1"
+    with pytest.raises(OperatorError, match="Frozen device lock"):
+        frozen.resolve_execution_device("cuda:0")
+    monkeypatch.setattr(device_module, "_torch_capabilities", lambda: (True, 1, False))
+    with pytest.raises(OperatorError, match="unavailable"):
+        frozen.resolve_execution_device(None)
+
+
+@pytest.mark.parametrize("backend, capabilities", [
+    ("cpu", (False, 0, False)), ("mps", (False, 0, True)),
+])
+def test_cpu_and_mps_frozen_families_require_matching_backend(
+    backend, capabilities, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(device_module, "_torch_capabilities", lambda: capabilities)
+    folder = CoreferenceResolver(device=backend).save_to_dir(
+        tmp_path / backend, operator_id=backend, freeze_device=True
+    )
+    frozen = BaseOperator.load_from_dir(folder)
+    assert frozen._frozen_device_lock == backend
+    assert frozen.resolve_execution_device("auto") == backend
+    other = "mps" if backend == "cpu" else "cpu"
+    with pytest.raises(OperatorError, match="Frozen device lock"):
+        frozen.resolve_execution_device(other)
 
 
 @pytest.mark.parametrize("cls", LINGUISTIC)
