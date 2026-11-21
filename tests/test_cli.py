@@ -164,3 +164,45 @@ def test_geco_cli_reports_selection_errors_and_closes_project(
     assert exc.value.code == 2
     assert message in capsys.readouterr().err
     assert calls == ["project_close"]
+
+
+def test_geco_cli_no_warmup_passes_explicit_opt_out(tmp_path, monkeypatch):
+    path = tmp_path / "project"
+    path.mkdir()
+    events = []
+
+    class Server:
+        def wait(self):
+            events.append("wait")
+
+        def close(self):
+            events.append("server_close")
+
+    class Workspace:
+        is_focus_coder = False
+
+        def launch(self, **kwargs):
+            events.append(("launch", kwargs))
+            return Server()
+
+    class Bridge:
+        def list(self):
+            return [{"name": "sample"}]
+
+        def open(self, name):
+            assert name == "sample"
+            return Workspace()
+
+    class Project:
+        geco = Bridge()
+
+        def close(self):
+            events.append("project_close")
+
+    monkeypatch.setattr(
+        cli.Project, "open", classmethod(lambda _cls, _path: Project())
+    )
+    assert cli.main(["geco", str(path), "sample", "--no-warmup"]) == 0
+    assert events == [
+        ("launch", {"warmup": False}), "wait", "server_close", "project_close",
+    ]
