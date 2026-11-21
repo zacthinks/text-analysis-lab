@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
+from text_analysis_lab.linguistics.device import resolve_devices
 from text_analysis_lab.linguistics.cache import active_hf_cache_path, user_cache_paths
 
 DEFAULT_WSL_READER_MODEL = "Babelscape/wsl-reader-deberta-v3-base"
@@ -515,7 +516,11 @@ class WordSenseDisambiguator(BaseTranslator):
         _ = mode, request
 
     def device_request_for_freeze(self) -> str:
-        return self.device
+        # Capture the effective placement of this constructor's legacy policy,
+        # including its documented permissive accelerator fallback.
+        return resolve_devices(
+            self.device, strict=False
+        ).primary
 
     def to_json_state(self) -> dict[str, Any]:
         state = {
