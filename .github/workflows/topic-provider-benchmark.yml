@@ -1,20 +1,14 @@
 name: Topic provider persisted benchmark (opt-in)
 
+# Deliberately manual. The benchmark is not part of ordinary push/PR CI.
 on:
   workflow_dispatch:
-  # One-time scoped PR validation when this benchmark workflow is introduced.
-  # No ordinary PR code change, push or scheduled event runs this benchmark.
-  pull_request:
-    branches: [main]
-    paths:
-      - .github/workflows/topic-provider-benchmark.yml
 
 permissions:
   contents: read
 
 jobs:
   topic-provider-benchmark:
-    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'perf/geco-topic-session-batching-current-main'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
