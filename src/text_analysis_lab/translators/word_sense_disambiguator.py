@@ -101,6 +101,7 @@ class WordSenseDisambiguator(BaseTranslator):
     """
 
     operation_type = "translate"
+    execution_device_capable = True
 
     def __init__(
         self,
@@ -146,6 +147,7 @@ class WordSenseDisambiguator(BaseTranslator):
         tokens: pd.DataFrame,
         *,
         token_keys: Sequence[str],
+        device: str | None = None,
     ) -> dict[str, pd.DataFrame]:
         """Disambiguate an ordinary annotated token table."""
         if not isinstance(tokens, pd.DataFrame):
@@ -161,6 +163,7 @@ class WordSenseDisambiguator(BaseTranslator):
         outputs = self._translate_frame(
             tokens.reset_index(drop=True),
             token_keys=keys,
+            device=device,
         )
         return {
             label: pd.concat(
@@ -207,6 +210,7 @@ class WordSenseDisambiguator(BaseTranslator):
         tokens: pd.DataFrame,
         *,
         token_keys: Sequence[str],
+        device: str | None = None,
     ) -> dict[str, Mapping[str, Any]]:
         token_keys = [str(value) for value in token_keys]
         required = [*token_keys, "text", "lemma", "pos", "ent_type"]
@@ -311,10 +315,11 @@ class WordSenseDisambiguator(BaseTranslator):
             lexicon=self.lexicon,
             include_multiword_candidates=self.include_multiword_candidates,
         )
+        selected = self.resolve_execution_device(device)
         backend = _make_backend(
             model_name=self.model_name,
             model_revision=self.model_revision,
-            device=self.device,
+            device=self.device if selected is None else selected,
             precision=self.precision,
             local_files_only=self.local_files_only,
         )
@@ -450,11 +455,12 @@ class WordSenseDisambiguator(BaseTranslator):
 
     def validate_operation_params(self, params, *, sources, mode):
         _ = sources, mode
-        if params:
+        if set(params) - {"device"}:
             raise OperatorError(
-                f"WordSenseDisambiguator does not accept operation parameters; got {sorted(params)}."
+                f"WordSenseDisambiguator does not accept operation parameters; got {sorted(set(params) - {'device'})}."
             )
-        return {}
+        selected = self.resolve_execution_device(params.get("device"))
+        return {} if selected is None else {"device": selected}
 
     def input_request(self, *, sources, mode, request):
         _ = mode, request
@@ -477,7 +483,7 @@ class WordSenseDisambiguator(BaseTranslator):
         }
 
     def translate_batch(self, inputs, *, mode, request):
-        _ = mode, request
+        _ = mode
         if set(inputs) != {TOKENS}:
             raise OperatorError(
                 f"WordSenseDisambiguator expects one input under {TOKENS!r}."
@@ -497,6 +503,7 @@ class WordSenseDisambiguator(BaseTranslator):
             outputs=self._translate_frame(
                 tokens,
                 token_keys=token_keys,
+                device=request.params.get("device"),
             )
         )
 
@@ -507,8 +514,11 @@ class WordSenseDisambiguator(BaseTranslator):
     def finalize_translation(self, *, mode, request):
         _ = mode, request
 
+    def device_request_for_freeze(self) -> str:
+        return self.device
+
     def to_json_state(self) -> dict[str, Any]:
-        return {
+        state = {
             "lexicon": self.lexicon,
             "model_name": self.model_name,
             "model_revision": self.model_revision,
@@ -521,9 +531,16 @@ class WordSenseDisambiguator(BaseTranslator):
             "local_files_only": self.local_files_only,
         }
 
+        result = dict(state)
+        if not self._legacy_device_binding:
+            result.pop("device", None)
+        return result
+
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> WordSenseDisambiguator:
-        return cls(**cast(dict[str, Any], dict(state)))
+        obj = cls(**cast(dict[str, Any], dict(state)))
+        obj._legacy_device_binding = "device" in state
+        return obj
 
 
 def _make_ontology(*, lexicon: str, include_multiword_candidates: bool):
