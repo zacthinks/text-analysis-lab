@@ -1023,6 +1023,11 @@ class Project:
         if not isinstance(translator, BaseTranslator):
             from text_analysis_lab.core.fitted_sklearn_adapter import adapt_fitted_predictor
             translator = adapt_fitted_predictor(translator)
+        if freeze_device and translator.is_frozen:
+            raise OperatorError(
+                "freeze_device=True requires a new operator snapshot; an existing "
+                "frozen operator cannot be re-frozen or given a new device lock."
+            )
         if freeze_device and not translator.supports_execution_device():
             raise OperatorError(
                 f"{translator.__class__.__name__} does not support freeze_device=True."
