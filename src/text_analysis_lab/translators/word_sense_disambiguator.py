@@ -311,16 +311,21 @@ class WordSenseDisambiguator(BaseTranslator):
                 },
             }
 
+        selected = self.resolve_execution_device(device)
+        effective_device = self.device if selected is None else selected
+        if self.precision.lower().replace("-mixed", "") in {"16", "fp16", "float16"}:
+            actual = resolve_devices(effective_device).primary
+            if not actual.startswith("cuda"):
+                raise ValueError("WSL float16 inference is supported only on CUDA devices.")
         cache = user_cache_paths()
         ontology = _make_ontology(
             lexicon=self.lexicon,
             include_multiword_candidates=self.include_multiword_candidates,
         )
-        selected = self.resolve_execution_device(device)
         backend = _make_backend(
             model_name=self.model_name,
             model_revision=self.model_revision,
-            device=self.device if selected is None else selected,
+            device=effective_device,
             precision=self.precision,
             local_files_only=self.local_files_only,
         )
