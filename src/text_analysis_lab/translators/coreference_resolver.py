@@ -298,7 +298,11 @@ class CoreferenceResolver(BaseTranslator):
         _ = mode, request
 
     def device_request_for_freeze(self) -> str:
-        return self.device
+        # Capture the effective placement of this constructor's legacy policy,
+        # including its documented permissive accelerator fallback.
+        return resolve_devices(
+            self.device, strict=self.strict_device
+        ).primary
 
     def to_json_state(self) -> dict[str, Any]:
         state = {
