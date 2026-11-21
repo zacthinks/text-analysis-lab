@@ -1135,7 +1135,7 @@ def test_topic_batch_persisted_sparse_dense_argmax_and_detached_results(
     tmp_path: Path, monkeypatch,
 ):
     """The same keyed packets are returned after the batched session closes."""
-    from text_analysis_lab.core.project import Project
+    from contextlib import contextmanager
     from text_analysis_lab.translators.argmax import ArgMax
 
     path = tmp_path / "topic_batch"
@@ -1175,20 +1175,22 @@ def test_topic_batch_persisted_sparse_dense_argmax_and_detached_results(
             order_by="_position",
         )
         opens, closes = [], []
-        real_open = Project.open
-        real_close = Project.close
+        real_session = provider._project_session
 
-        def tracked_open(project_path, *args, **kwargs):
-            opened = real_open(project_path, *args, **kwargs)
-            opens.append(opened)
-            return opened
+        @contextmanager
+        def counted_session():
+            session = None
+            try:
+                with real_session() as session:
+                    opens.append(session)
+                    yield session
+            finally:
+                if session is not None:
+                    closes.append(session)
 
-        def tracked_close(self, *args, **kwargs):
-            closes.append(self)
-            return real_close(self, *args, **kwargs)
-
-        monkeypatch.setattr(Project, "open", tracked_open)
-        monkeypatch.setattr(Project, "close", tracked_close)
+        # Count only this provider's sessions, not unrelated Project closures
+        # performed by Python garbage collection during the test.
+        monkeypatch.setattr(provider, "_project_session", counted_session)
         got = provider.read_artifacts(requested)
         assert len(opens) == len(closes) == 1
         assert opens[0] is closes[0]
@@ -1236,7 +1238,7 @@ def test_topic_batch_persisted_sparse_dense_argmax_and_detached_results(
 
 
 def test_topic_batch_concurrent_sessions_and_error_parity(tmp_path: Path, monkeypatch):
-    from text_analysis_lab.core.project import Project
+    from contextlib import contextmanager
     from text_analysis_lab.translators.argmax import ArgMax
     from threading import get_ident
     from collections import Counter
@@ -1274,20 +1276,21 @@ def test_topic_batch_concurrent_sessions_and_error_parity(tmp_path: Path, monkey
                 read()
 
         events = []
-        real_open = Project.open
-        real_close = Project.close
+        real_session = provider._project_session
 
-        def tracked_open(project_path, *args, **kwargs):
-            opened = real_open(project_path, *args, **kwargs)
-            events.append(("open", get_ident(), id(opened)))
-            return opened
+        @contextmanager
+        def counted_session():
+            session = None
+            try:
+                with real_session() as session:
+                    events.append(("open", get_ident(), session))
+                    yield session
+            finally:
+                if session is not None:
+                    events.append(("close", get_ident(), session))
 
-        def tracked_close(self, *args, **kwargs):
-            events.append(("close", get_ident(), id(self)))
-            return real_close(self, *args, **kwargs)
+        monkeypatch.setattr(provider, "_project_session", counted_session)
 
-        monkeypatch.setattr(Project, "open", tracked_open)
-        monkeypatch.setattr(Project, "close", tracked_close)
         def fetch_one(_):
             packets = provider.read_artifacts(requests)
             assert [packet.positions for packet in packets] == [[0, 1], [0, 1]]
