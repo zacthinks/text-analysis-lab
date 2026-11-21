@@ -55,6 +55,15 @@ def resolve_device(value: str) -> str:
         raise OperatorError(
             "device must be 'auto', 'cpu', 'cuda', 'mps', or an explicit CUDA device such as 'cuda:1'."
         )
+    if requested.startswith("cuda:"):
+        index = int(requested.partition(":")[2])
+        available = bool(torch.cuda.is_available())
+        count = int(torch.cuda.device_count()) if available else 0
+        if index >= count:
+            raise TransformerResourceError(
+                f"device={requested!r} was requested but CUDA device index {index} "
+                f"is unavailable (detected {count} CUDA device(s))."
+            )
     return requested
 
 
