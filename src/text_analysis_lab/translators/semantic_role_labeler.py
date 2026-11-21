@@ -60,6 +60,7 @@ class SemanticRoleLabeler(BaseTranslator):
     """
 
     operation_type = "translate"
+    execution_device_capable = True
 
     def __init__(
         self,
@@ -101,6 +102,7 @@ class SemanticRoleLabeler(BaseTranslator):
         tokens: pd.DataFrame,
         *,
         sentence_keys: Sequence[str],
+        device: str | None = None,
     ) -> dict[str, pd.DataFrame]:
         """Label semantic roles from ordinary sentence and token tables."""
         if not isinstance(sentences, pd.DataFrame) or not isinstance(tokens, pd.DataFrame):
@@ -117,6 +119,7 @@ class SemanticRoleLabeler(BaseTranslator):
             sentences.reset_index(drop=True),
             tokens.reset_index(drop=True),
             sentence_keys=keys,
+            device=device,
         )
         return {
             label: pd.concat(
@@ -165,6 +168,7 @@ class SemanticRoleLabeler(BaseTranslator):
         tokens: pd.DataFrame,
         *,
         sentence_keys: Sequence[str],
+        device: str | None = None,
     ) -> dict[str, Mapping[str, Any]]:
         sentence_keys = [str(value) for value in sentence_keys]
         expected_token_keys = [*sentence_keys, self.token_key]
@@ -186,9 +190,10 @@ class SemanticRoleLabeler(BaseTranslator):
                 f"SemanticRoleLabeler missing sentence columns {missing_sentence} and token columns {missing_token}."
             )
 
+        selected = self.resolve_execution_device(device)
         runtime = _make_runtime(
-            device=self.device,
-            strict_device=self.strict_device,
+            device=self.device if selected is None else selected,
+            strict_device=self.strict_device if selected is None else True,
             mixed_precision=self.mixed_precision,
             max_length=self.max_length,
             show_progress=self.show_progress,
@@ -401,11 +406,12 @@ class SemanticRoleLabeler(BaseTranslator):
 
     def validate_operation_params(self, params, *, sources, mode):
         _ = sources, mode
-        if params:
+        if set(params) - {"device"}:
             raise OperatorError(
-                f"SemanticRoleLabeler does not accept operation parameters; got {sorted(params)}."
+                f"SemanticRoleLabeler does not accept operation parameters; got {sorted(set(params) - {'device'})}."
             )
-        return {}
+        selected = self.resolve_execution_device(params.get("device"))
+        return {} if selected is None else {"device": selected}
 
     def input_request(self, *, sources, mode, request):
         _ = mode, request
@@ -446,7 +452,7 @@ class SemanticRoleLabeler(BaseTranslator):
         }
 
     def translate_batch(self, inputs, *, mode, request):
-        _ = mode, request
+        _ = mode
         if set(inputs) != {SENTENCES, TOKENS}:
             raise OperatorError(
                 f"SemanticRoleLabeler expects inputs {SENTENCES!r} and {TOKENS!r}."
@@ -467,6 +473,7 @@ class SemanticRoleLabeler(BaseTranslator):
                 sentences,
                 tokens,
                 sentence_keys=sentence_keys,
+                device=request.params.get("device"),
             )
         )
 
@@ -477,8 +484,11 @@ class SemanticRoleLabeler(BaseTranslator):
     def finalize_translation(self, *, mode, request):
         _ = mode, request
 
+    def device_request_for_freeze(self) -> str:
+        return self.device
+
     def to_json_state(self) -> dict[str, Any]:
-        return {
+        state = {
             "sentence_key": self.sentence_key,
             "token_key": self.token_key,
             "device": self.device,
@@ -489,9 +499,17 @@ class SemanticRoleLabeler(BaseTranslator):
             "show_progress": self.show_progress,
         }
 
+        result = dict(state)
+        if not self._legacy_device_binding:
+            result.pop("device", None)
+            result.pop("strict_device", None)
+        return result
+
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> SemanticRoleLabeler:
-        return cls(**cast(dict[str, Any], dict(state)))
+        obj = cls(**cast(dict[str, Any], dict(state)))
+        obj._legacy_device_binding = "device" in state
+        return obj
 
 
 def _make_runtime(*, device, strict_device, mixed_precision, max_length, show_progress):
