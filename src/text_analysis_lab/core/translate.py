@@ -421,6 +421,7 @@ def translate(
     memo: str | None = None,
     alias: AliasSpec = None,
     overwrite: bool = False,
+    freeze_device: bool = False,
     **params: Any,
 ) -> Mapping[str, BaseArtifact]:
     """Run a new TeAL translation operation and return output artifacts by label."""
@@ -500,6 +501,7 @@ def translate(
             effective_workers=effective_workers,
             request=translation_request,
             serialized_operation_params=serialized_operation_params,
+            freeze_device=freeze_device,
             input_request=input_request,
             sources=source_bindings,
             output_specs=output_specs,
@@ -533,7 +535,10 @@ def translate(
             route=route,
         )
         if mode == "translate":
-            _serialize_pending_operator_snapshot(project, translator, runtime)
+            _serialize_pending_operator_snapshot(
+                project, translator, runtime, freeze_device=freeze_device,
+                device=translation_request.params.get("device"),
+            )
         _run_repeated_plan(
             translator=translator,
             runtime=runtime,
@@ -551,7 +556,10 @@ def translate(
             mode=mode, route=route, request=translation_request,
         )
 
-        _serialize_pending_operator_snapshot(project, translator, runtime)
+        _serialize_pending_operator_snapshot(
+            project, translator, runtime, freeze_device=freeze_device,
+            device=translation_request.params.get("device"),
+        )
 
         _complete_runtime(project, runtime)
         outputs = _load_output_artifacts(project, runtime)
@@ -646,7 +654,11 @@ def resume_translate(
 
     try:
         if mode == "translate":
-            _serialize_pending_operator_snapshot(project, translator, runtime)
+            _serialize_pending_operator_snapshot(
+                project, translator, runtime,
+                freeze_device=bool(metadata.get("freeze_device", False)),
+                device=request.params.get("device"),
+            )
         _run_repeated_plan(
             translator=translator,
             runtime=runtime,
@@ -662,7 +674,11 @@ def resume_translate(
             translator=translator, runtime=runtime, plan=plan,
             mode=mode, route=route, request=request,
         )
-        _serialize_pending_operator_snapshot(project, translator, runtime)
+        _serialize_pending_operator_snapshot(
+            project, translator, runtime,
+            freeze_device=bool(metadata.get("freeze_device", False)),
+            device=request.params.get("device"),
+        )
         _complete_runtime(project, runtime)
         outputs = _load_output_artifacts(project, runtime)
         raw_alias_plan = metadata.get("alias_plan")
@@ -1875,10 +1891,14 @@ def _serialize_pending_operator_snapshot(
     project: Project,
     translator: BaseTranslator,
     runtime: _Runtime,
+    *, freeze_device: bool = False, device: str | None = None,
 ) -> None:
     if not runtime.operator_snapshot_pending:
         return
-    _save_operator(project, translator, runtime.operator_id)
+    _save_operator(
+        project, translator, runtime.operator_id,
+        freeze_device=freeze_device, device=device,
+    )
     project.catalog.mark_operator_serialized(runtime.operator_id)
     caps = translator.execution_capabilities(project=project)
     if caps.reusable:
@@ -1889,10 +1909,12 @@ def _serialize_pending_operator_snapshot(
 
 
 def _save_operator(
-    project: Project, translator: BaseTranslator, operator_id: str
+    project: Project, translator: BaseTranslator, operator_id: str,
+    *, freeze_device: bool = False, device: str | None = None,
 ) -> None:
     translator.save_to_dir(
-        project.storage.operator_dir(operator_id), operator_id=operator_id
+        project.storage.operator_dir(operator_id), operator_id=operator_id,
+        freeze_device=freeze_device, device=device,
     )
 
 
@@ -2534,6 +2556,7 @@ def _save_operation_metadata(
     effective_workers: int,
     request: TranslationRequest,
     serialized_operation_params: Mapping[str, Any],
+    freeze_device: bool,
     input_request: InputRequest,
     sources: Mapping[str, BaseArtifact],
     output_specs: Mapping[str, OutputSpec],
@@ -2546,6 +2569,7 @@ def _save_operation_metadata(
         "operation_type": translator.operation_type,
         "operator_id": runtime.operator_id,
         "operator_snapshot_pending": runtime.operator_snapshot_pending,
+        "freeze_device": freeze_device,
         "translator_class": {
             "module": translator.__class__.__module__,
             "qualname": translator.__class__.__qualname__,
