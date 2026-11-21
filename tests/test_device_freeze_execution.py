@@ -107,3 +107,110 @@ def test_explicit_device_lock_rejects_unsupported_operator(tmp_path):
         RegexCleaner().save_to_dir(
             tmp_path / "invalid", operator_id="invalid", freeze_device=True
         )
+
+
+def test_wsd_fp16_refuses_cpu_before_loading_any_ontology_or_model(monkeypatch):
+    """Explicit CPU cannot silently downgrade a frozen FP16 scientific choice."""
+    import pandas as pd
+    import text_analysis_lab.translators.word_sense_disambiguator as module
+
+    monkeypatch.setattr(device_module, "_torch_capabilities", lambda: (False, 0, False))
+
+    def unwanted(**kwargs):
+        pytest.fail("CPU-incompatible FP16 must fail before resource preparation")
+
+    monkeypatch.setattr(module, "_make_ontology", unwanted)
+    monkeypatch.setattr(module, "_make_backend", unwanted)
+    tokens = pd.DataFrame({
+        "row_id": [1], "sentence_id": [0], "token_id": [0],
+        "text": ["Dogs"], "lemma": ["dog"], "pos": ["NOUN"], "ent_type": [""],
+    })
+    frozen = WordSenseDisambiguator(device="cpu", precision=16)
+    with pytest.raises(ValueError, match="float16.*CUDA"):
+        frozen.translate(
+            tokens, token_keys=["row_id", "sentence_id", "token_id"], device="cpu"
+        )
+
+
+def test_srl_autocast_only_on_cuda_and_retains_mixed_precision_choice(monkeypatch, tmp_path):
+    """Exercise the actual SRL conditional autocast path with CPU-backed fake tensors."""
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    torch = pytest.importorskip("torch")
+    from text_analysis_lab.linguistics.srl.runtime import (
+        AllenNlpSrlRuntime, EncodedSrlSentence,
+    )
+
+    observed = []
+    old_full, old_zeros, old_tensor = torch.full, torch.zeros, torch.tensor
+
+    def wrap(creator):
+        def create(*args, **kwargs):
+            kwargs.pop("device", None)
+            return creator(*args, **kwargs)
+        return create
+
+    def fake_autocast(*, device_type, dtype):
+        observed.append((device_type, dtype))
+        return nullcontext()
+
+    monkeypatch.setattr(torch, "full", wrap(old_full))
+    monkeypatch.setattr(torch, "zeros", wrap(old_zeros))
+    monkeypatch.setattr(torch, "tensor", wrap(old_tensor))
+    monkeypatch.setattr(torch, "autocast", fake_autocast)
+    encoded = EncodedSrlSentence(
+        tokens=("Alice", "runs"),
+        wordpieces=("Alice", "runs"),
+        input_ids=(101, 102),
+        wordpiece_starts=(0, 1),
+        wordpiece_ends=(1, 2),
+    )
+
+    for selected in ("cpu", "cuda:0"):
+        runtime = AllenNlpSrlRuntime(
+            tmp_path, device=selected, mixed_precision=True
+        )
+        def fake_model(input_ids, predicate_indicators, attention_mask):
+            return old_zeros((*input_ids.shape, 1), dtype=torch.float32)
+        monkeypatch.setattr(
+            runtime, "_load",
+            lambda selected=selected: (
+                torch, SimpleNamespace(pad_token_id=0), fake_model,
+                ("O",), {}, selected, 8,
+            ),
+        )
+        result = runtime.predict_encoded_batch(((encoded, 1),))
+        assert len(result) == 1
+        assert result[0].tokens == encoded.tokens
+        assert runtime.mixed_precision is True
+
+    assert observed == [("cuda", torch.float16)]
+
+
+def test_unlocked_hf_explicit_cuda_index_checked_before_model_load(monkeypatch):
+    from types import SimpleNamespace
+    import sys
+
+    from text_analysis_lab.translators._hf_utils import (
+        TransformerResourceError, resolve_device,
+    )
+
+    mock_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            device_count=lambda: 1,
+        ),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+    )
+    monkeypatch.setitem(sys.modules, "torch", mock_torch)
+    assert resolve_device("auto") == "cuda"
+    assert resolve_device("cuda") == "cuda"
+    assert resolve_device("cuda:0") == "cuda:0"
+    assert resolve_device("cpu") == "cpu"
+    with pytest.raises(TransformerResourceError, match="index 99.*unavailable"):
+        resolve_device("cuda:99")
+    mock_torch.cuda.is_available = lambda: False
+    assert resolve_device("auto") == "cpu"
+    with pytest.raises(TransformerResourceError, match="index 0.*unavailable"):
+        resolve_device("cuda:0")
