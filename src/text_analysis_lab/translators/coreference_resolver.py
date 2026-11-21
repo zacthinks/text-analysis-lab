@@ -60,6 +60,7 @@ class CoreferenceResolver(BaseTranslator):
     """
 
     operation_type = "translate"
+    execution_device_capable = True
 
     def __init__(
         self,
@@ -110,6 +111,7 @@ class CoreferenceResolver(BaseTranslator):
         tokens: pd.DataFrame,
         *,
         document_keys: Sequence[str],
+        device: str | None = None,
     ) -> dict[str, pd.DataFrame]:
         """Resolve coreference from ordinary document and token tables."""
         if not isinstance(documents, pd.DataFrame) or not isinstance(tokens, pd.DataFrame):
@@ -125,6 +127,7 @@ class CoreferenceResolver(BaseTranslator):
             documents.reset_index(drop=True),
             tokens.reset_index(drop=True),
             doc_keys=doc_keys,
+            device=device,
         )
         return {
             label: pd.concat(
@@ -215,11 +218,12 @@ class CoreferenceResolver(BaseTranslator):
 
     def validate_operation_params(self, params, *, sources, mode):
         _ = sources, mode
-        if params:
+        if set(params) - {"device"}:
             raise OperatorError(
-                f"CoreferenceResolver does not accept operation parameters; got {sorted(params)}."
+                f"CoreferenceResolver does not accept operation parameters; got {sorted(set(params) - {'device'})}."
             )
-        return {}
+        selected = self.resolve_execution_device(params.get("device"))
+        return {} if selected is None else {"device": selected}
 
     def input_request(self, *, sources, mode, request):
         _ = mode, request
@@ -260,7 +264,7 @@ class CoreferenceResolver(BaseTranslator):
 
 
     def translate_batch(self, inputs, *, mode, request):
-        _ = mode, request
+        _ = mode
         if set(inputs) != {DOCUMENTS, TOKENS}:
             raise OperatorError(
                 f"CoreferenceResolver expects inputs {DOCUMENTS!r} and {TOKENS!r}."
@@ -282,6 +286,7 @@ class CoreferenceResolver(BaseTranslator):
                 documents,
                 tokens,
                 doc_keys=doc_keys,
+                device=request.params.get("device"),
             )
         )
 
@@ -292,8 +297,15 @@ class CoreferenceResolver(BaseTranslator):
     def finalize_translation(self, *, mode, request):
         _ = mode, request
 
+    def device_request_for_freeze(self) -> str:
+        # Capture the effective placement of this constructor's legacy policy,
+        # including its documented permissive accelerator fallback.
+        return resolve_devices(
+            self.device, strict=self.strict_device
+        ).primary
+
     def to_json_state(self) -> dict[str, Any]:
-        return {
+        state = {
             "model": self.model,
             "text_field": self.text_field,
             "sentence_key": self.sentence_key,
@@ -306,13 +318,21 @@ class CoreferenceResolver(BaseTranslator):
             "head_rules": self.head_rules.to_dict(),
         }
 
+        result = dict(state)
+        if not self._legacy_device_binding:
+            result.pop("device", None)
+            result.pop("strict_device", None)
+        return result
+
     @classmethod
     def from_json_state(cls, state: Mapping[str, Any]) -> CoreferenceResolver:
         values = cast(dict[str, Any], dict(state))
         rules = values.get("head_rules")
         if rules is not None:
             values["head_rules"] = SemanticHeadRules.from_dict(rules)
-        return cls(**values)
+        obj = cls(**values)
+        obj._legacy_device_binding = "device" in state
+        return obj
 
 
 
@@ -322,6 +342,7 @@ def _translate_frames(
     tokens: pd.DataFrame,
     *,
     doc_keys: Sequence[str],
+    device: str | None = None,
 ) -> dict[str, Mapping[str, Any]]:
     doc_keys = [str(value) for value in doc_keys]
     expected_token_keys = [*doc_keys, translator.sentence_key, translator.token_key]
@@ -351,9 +372,11 @@ def _translate_frames(
             f"and token columns {missing_tokens}."
         )
 
-    resolved_device = resolve_devices(
-        translator.device, strict=translator.strict_device
-    ).primary
+    selected = translator.resolve_execution_device(device)
+    resolved_device = (
+        selected if selected is not None else
+        resolve_devices(translator.device, strict=translator.strict_device).primary
+    )
     runtime = _make_runtime(
         model=translator.model,
         device=resolved_device,

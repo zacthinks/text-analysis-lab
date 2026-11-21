@@ -480,6 +480,7 @@ class BaseOperator(ABC):
 
     operation_type: ClassVar[OperationType]
     frozen_runtime_fields: ClassVar[frozenset[str]] = frozenset()
+    execution_device_capable: ClassVar[bool] = False
 
     def __setattr__(self, name: str, value: Any) -> None:
         if getattr(self, "is_frozen", False):
@@ -497,6 +498,8 @@ class BaseOperator(ABC):
     def __init__(self, *, operator_id: str | None = None) -> None:
         self.operator_id = None if operator_id is None else str(operator_id)
         self.is_frozen = False
+        self._frozen_device_lock: str | None = None
+        self._legacy_device_binding = False
 
     @property
     def requires_source(self) -> bool:
@@ -586,6 +589,97 @@ class BaseOperator(ABC):
         """
         _ = context
 
+    def supports_execution_device(self) -> bool:
+        """Whether TeAL can route execution device requests to this operator."""
+        return self.execution_device_capable
+
+    def device_request_for_freeze(self) -> str:
+        """Placement to resolve when an explicit durable device lock is requested."""
+        raise OperatorError(
+            f"{self.__class__.__name__} has no TeAL-managed execution device to freeze."
+        )
+
+    def resolve_execution_device(self, device: str | None = None) -> str | None:
+        """Validate runtime placement without changing frozen scientific state.
+
+        New opt-in locks are strict. Historical linguistic state retains its
+        original device and strict_device fallback and rejects conflicting
+        explicit overrides. The default unlocked path imports no Torch.
+        """
+        locked = self._frozen_device_lock
+        if locked is not None:
+            requested = None
+            if device is not None and str(device).strip().lower() != "auto":
+                requested = str(device).strip().lower()
+                if locked == "cuda":
+                    # An opt-in CUDA lock specifies the backend, not the local GPU.
+                    compatible = requested == "cuda" or requested.startswith("cuda:")
+                else:
+                    # Preserve exact-index enforcement for already-written locks.
+                    if requested == "cuda":
+                        requested = "cuda:0"
+                    compatible = requested == locked
+                if not compatible:
+                    raise OperatorError(
+                        f"Frozen device lock requires {locked!r}, not {requested!r}. "
+                        "Use the locked backend or create a portable frozen operator."
+                    )
+            from text_analysis_lab.linguistics.device import resolve_devices
+
+            # Validate any explicit CUDA index against *this* machine. With
+            # auto/no override, select an available device within the lock.
+            target = requested if locked == "cuda" and requested is not None else locked
+            try:
+                return resolve_devices(target, strict=True).primary
+            except (RuntimeError, ValueError) as exc:
+                raise OperatorError(
+                    f"Frozen device lock requires {locked!r}, but {target!r} "
+                    "is unavailable or invalid on this machine."
+                ) from exc
+        if device is None:
+            return None
+        from text_analysis_lab.linguistics.device import resolve_devices
+
+        requested = resolve_devices(str(device), strict=True).primary
+        if self.is_frozen and self._legacy_device_binding:
+            historical = resolve_devices(
+                str(self.device), strict=bool(getattr(self, "strict_device", False))
+            ).primary
+            if requested != historical:
+                raise OperatorError(
+                    f"Legacy frozen operator requests {self.device!r} "
+                    f"(currently resolves to {historical!r}); an explicit "
+                    f"{requested!r} override would change its saved device behavior."
+                )
+        return requested
+
+    def execution_device_provenance(
+        self, device: str | None = None
+    ) -> dict[str, str] | None:
+        """Record requested/resolved run placement without freezing it.
+
+        Only device-configured translators use this default. Resolution here is
+        a start-of-operation observation, not a claim that an optional backend
+        has executed a kernel. Leave normal runtime fallback warnings to the
+        translator's execution path.
+        """
+        if not self.supports_execution_device() or not hasattr(self, "device"):
+            return None
+        requested = str(self.device if device is None else device)
+        resolved = self.resolve_execution_device(device)
+        if resolved is None:
+            import warnings
+
+            from text_analysis_lab.linguistics.device import resolve_devices
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                resolved = resolve_devices(
+                    requested,
+                    strict=bool(getattr(self, "strict_device", False)),
+                ).primary
+        return {"requested": requested, "resolved": resolved}
+
     def to_json_state(self) -> dict[str, Any]:
         """Return JSON-serializable state needed to reconstruct this operator."""
         return {}
@@ -632,7 +726,7 @@ class BaseOperator(ABC):
         json_state = _require_json_mapping(
             self.to_json_state(), name="operator json_state"
         )
-        return {
+        descriptor = {
             "schema_version": 2,
             "operator_id": self.operator_id,
             "operation_type": operation_type,
@@ -642,22 +736,44 @@ class BaseOperator(ABC):
             },
             "json_state": json_state,
         }
+        if self._frozen_device_lock is not None:
+            descriptor["device_lock"] = {"device": self._frozen_device_lock}
+        return descriptor
 
     def save_to_dir(
         self,
         operator_dir: str | Path,
         *,
         operator_id: str,
+        freeze_device: bool = False,
+        device: str | None = None,
     ) -> Path:
-        """Finalize and durably freeze this operator snapshot."""
+        """Freeze scientific state; optionally lock the execution backend family.
+
+        ``device`` selects the freeze-time placement only when
+        ``freeze_device=True``. It never becomes scientific JSON state.
+        """
         if self.is_frozen:
             raise FrozenOperatorError(
                 f"Frozen operator {self.operator_id or self.__class__.__name__} "
                 "cannot be re-serialized in place. Create a new operator instead."
             )
 
+        if not isinstance(freeze_device, bool):
+            raise TypeError("freeze_device must be a bool.")
+        if freeze_device and not self.supports_execution_device():
+            raise OperatorError(
+                f"{self.__class__.__name__} does not support freeze_device=True."
+            )
         self.assign_operator_id(operator_id)
         self.prepare_for_freeze()
+        if freeze_device:
+            requested = device if device is not None else self.device_request_for_freeze()
+            resolved = self.resolve_execution_device(requested)
+            if resolved is None:
+                raise OperatorError("Cannot freeze an unresolved execution backend.")
+            # CUDA ordinals are host-local; freeze only cpu/cuda/mps identity.
+            self._frozen_device_lock = resolved.split(":", 1)[0]
 
         path = Path(operator_dir)
         path.mkdir(parents=True, exist_ok=True)
@@ -727,6 +843,21 @@ class BaseOperator(ABC):
             raise OperatorError(
                 "from_json_state() must return a BaseOperator instance."
             )
+        device_lock = descriptor.get("device_lock")
+        if device_lock is not None:
+            if not isinstance(device_lock, Mapping) or not isinstance(device_lock.get("device"), str):
+                raise OperatorError("operator device_lock must include a device string.")
+            locked = str(device_lock["device"])
+            if locked not in {"cpu", "cuda", "mps"} and not (
+                locked.startswith("cuda:") and locked[5:].isdigit()
+            ):
+                raise OperatorError(
+                    "operator device_lock must name a backend family "
+                    "or a historical concrete CUDA device."
+                )
+            if not obj.supports_execution_device():
+                raise OperatorError("operator device_lock is unsupported for this translator.")
+            obj._frozen_device_lock = locked
 
         recorded_operation_type = descriptor.get("operation_type")
         if recorded_operation_type is not None:

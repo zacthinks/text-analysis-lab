@@ -555,6 +555,7 @@ class Pipeline:
         inputs: Mapping[str, Any] | None = None,
         outputs: Sequence[str] | None = None,
         project: Project | None = None,
+        device: str | None = None,
     ) -> Mapping[str, Any]:
         """Execute selected outputs through standalone translator.translate(...)."""
         external = self._normalize_external_values(values=values, inputs=inputs)
@@ -583,7 +584,7 @@ class Pipeline:
                 label: self._resolve_value(port, external, stage_values)
                 for label, port in stage.sources
             }
-            result = self._call_standalone(stage.translator, bound)
+            result = self._call_standalone(stage.translator, bound, device=device)
             labels = needed_labels.get(stage_name, {DEFAULT_OUTPUT_LABEL})
             if labels == {DEFAULT_OUTPUT_LABEL}:
                 stage_values[(stage_name, DEFAULT_OUTPUT_LABEL)] = result
@@ -615,6 +616,7 @@ class Pipeline:
         | Mapping[str, BaseArtifact | str],
         *,
         outputs: Sequence[str] | None = None,
+        device: str | None = None,
     ) -> Mapping[str, BaseArtifact]:
         """Execute selected outputs through ordinary Project.translate(...) calls."""
         external = self._normalize_artifact_sources(project, sources)
@@ -641,7 +643,12 @@ class Pipeline:
                     f"{stage.translator.__class__.__name__}; Pipelines are transform-only."
                 )
 
-            produced = project.translate(stage.translator, bound)
+            execution = (
+                {"device": device}
+                if device is not None and stage.translator.supports_execution_device()
+                else {}
+            )
+            produced = project.translate(stage.translator, bound, **execution)
             for label, artifact in produced.items():
                 stage_values[(stage_name, label)] = artifact
 
@@ -883,7 +890,13 @@ class Pipeline:
     def _call_standalone(
         translator: BaseTranslator,
         bound: Mapping[str, Any],
+        *, device: str | None = None,
     ) -> Any:
+        execution = (
+            {"device": device}
+            if device is not None and translator.supports_execution_device()
+            else {}
+        )
         signature = inspect.signature(translator.translate)
         params = signature.parameters
 
@@ -898,10 +911,10 @@ class Pipeline:
             }
         }
         if len(keyword_bound) == len(bound):
-            return translator.translate(**keyword_bound)
+            return translator.translate(**keyword_bound, **execution)
 
         if len(bound) == 1:
-            return translator.translate(next(iter(bound.values())))
+            return translator.translate(next(iter(bound.values())), **execution)
 
         unmatched = {
             label: value for label, value in bound.items() if label not in keyword_bound
@@ -992,7 +1005,7 @@ class Pipeline:
         for name, value in by_parameter.items():
             if params[name].kind != inspect.Parameter.POSITIONAL_ONLY:
                 kwargs[name] = value
-        return translator.translate(*args, **kwargs)
+        return translator.translate(*args, **kwargs, **execution)
 
     @staticmethod
     def _value_matches_annotation(value: Any, annotation: Any) -> bool:

@@ -1007,6 +1007,7 @@ class Project:
         memo: str | None = None,
         alias: AliasSpec = None,
         overwrite: bool = False,
+        freeze_device: bool = False,
         **params: Any,
     ) -> Mapping[str, BaseArtifact]:
         """Run a translation operation and return output artifacts by label.
@@ -1017,9 +1018,20 @@ class Project:
         delegates here.
         """
         from text_analysis_lab.translators.feature_matrix import FeatureMatrix
+        if not isinstance(freeze_device, bool):
+            raise TypeError("freeze_device must be a bool.")
         if not isinstance(translator, BaseTranslator):
             from text_analysis_lab.core.fitted_sklearn_adapter import adapt_fitted_predictor
             translator = adapt_fitted_predictor(translator)
+        if freeze_device and translator.is_frozen:
+            raise OperatorError(
+                "freeze_device=True requires a new operator snapshot; an existing "
+                "frozen operator cannot be re-frozen or given a new device lock."
+            )
+        if freeze_device and not translator.supports_execution_device():
+            raise OperatorError(
+                f"{translator.__class__.__name__} does not support freeze_device=True."
+            )
         if isinstance(translator, FeatureMatrix):
             from text_analysis_lab.core.feature_matrix import feature_matrix
             return feature_matrix(
@@ -1038,6 +1050,7 @@ class Project:
             memo=memo,
             alias=alias,
             overwrite=overwrite,
+            freeze_device=freeze_device,
             **params,
         )
 
@@ -1064,6 +1077,7 @@ class Project:
         | Mapping[str, BaseArtifact | str],
         *,
         outputs: Sequence[str] | None = None,
+        device: str | None = None,
     ) -> Mapping[str, BaseArtifact]:
         """Run a transform-only Pipeline through ordinary TeAL translations."""
         from text_analysis_lab.core.pipeline import Pipeline
@@ -1072,7 +1086,9 @@ class Project:
             raise PipelineError(
                 f"run_pipeline(...) requires a Pipeline; got {type(pipeline).__name__}."
             )
-        return pipeline.run_artifacts(self, sources, outputs=outputs)
+        if device is None:
+            return pipeline.run_artifacts(self, sources, outputs=outputs)
+        return pipeline.run_artifacts(self, sources, outputs=outputs, device=device)
 
     def resume_operation(
         self,

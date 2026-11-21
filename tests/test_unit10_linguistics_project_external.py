@@ -92,6 +92,13 @@ def test_unit10_translators_write_teal_native_lineage(
     from text_analysis_lab.linguistics.srl.runtime import SrlTokenPrediction
     from text_analysis_lab.linguistics.srl.structures import BioSpan
     from text_analysis_lab.linguistics.wsd.types import GlossPayload, SenseCandidate
+    from text_analysis_lab.linguistics import device as devices
+    import json
+
+    # Simulate a GPU-origin run without allocating a GPU model. Execution is
+    # mocked; availability resolution and durable provenance remain real.
+    monkeypatch.setattr(devices, "_torch_capabilities", lambda: (True, 1, False))
+    calls = {"coref": [], "srl": [], "wsd": []}
 
     class FakeCorefRuntime:
         def document_token_counts(self, texts):
@@ -196,13 +203,23 @@ def test_unit10_translators_write_teal_native_lineage(
                 for index, text in enumerate(candidate_texts)
             }
 
-    monkeypatch.setattr(
-        coref_module, "_make_runtime", lambda **kwargs: FakeCorefRuntime()
-    )
-    monkeypatch.setattr(srl_module, "_make_runtime", lambda **kwargs: FakeSrlRuntime())
+    def coref_runtime(**kwargs):
+        calls["coref"].append(kwargs["device"])
+        return FakeCorefRuntime()
+
+    def srl_runtime(**kwargs):
+        calls["srl"].append((kwargs["device"], kwargs["mixed_precision"]))
+        return FakeSrlRuntime()
+
+    def wsd_backend(**kwargs):
+        calls["wsd"].append((kwargs["device"], kwargs["precision"]))
+        return FakeBackend()
+
+    monkeypatch.setattr(coref_module, "_make_runtime", coref_runtime)
+    monkeypatch.setattr(srl_module, "_make_runtime", srl_runtime)
     monkeypatch.setattr(wsd_module, "user_cache_paths", lambda: cache)
     monkeypatch.setattr(wsd_module, "_make_ontology", lambda **kwargs: FakeOntology())
-    monkeypatch.setattr(wsd_module, "_make_backend", lambda **kwargs: FakeBackend())
+    monkeypatch.setattr(wsd_module, "_make_backend", wsd_backend)
 
     project = teal.Project.create(tmp_path / "project", name="unit10_artifacts")
     try:
@@ -257,7 +274,7 @@ def test_unit10_translators_write_teal_native_lineage(
         )
 
         coref = project.translate(
-            CoreferenceResolver(),
+            CoreferenceResolver(device="cuda:0"),
             {"documents": documents, "tokens": tokens},
         )
         assert coref["mentions"].descriptor["lineage"]["basis_artifact_ids"] == [
@@ -267,7 +284,7 @@ def test_unit10_translators_write_teal_native_lineage(
         assert _frame(coref["failures"]).empty
 
         srl = project.translate(
-            SemanticRoleLabeler(mixed_precision=False),
+            SemanticRoleLabeler(device="cuda:0", mixed_precision=False),
             {"sentences": sentences, "tokens": tokens},
         )
         assert srl["predicates"].descriptor["lineage"]["basis_artifact_ids"] == [
@@ -290,7 +307,7 @@ def test_unit10_translators_write_teal_native_lineage(
 
         wsd = project.translate(
             WordSenseDisambiguator(
-                include_multiword_candidates=False,
+                device="cuda:0", include_multiword_candidates=False,
             ),
             {"tokens": tokens},
         )
@@ -304,6 +321,78 @@ def test_unit10_translators_write_teal_native_lineage(
         assert set(sense_frame["surface_form"].tolist()) == {"Alice", "left", "slept"}
         assert "She" not in sense_frame["surface_form"].tolist()
         assert _frame(wsd["unresolved"]).empty
+
+        # Requested/resolved placement belongs to each operation, not to its
+        # frozen scientific operator (and never imposes a subsequent lock).
+        for output, kind in (
+            (coref["mentions"], "coref"),
+            (srl["predicates"], "srl"),
+            (wsd["senses"], "wsd"),
+        ):
+            operation = project.operation_for_artifact(output)
+            metadata = json.loads(
+                project.storage.operation_descriptor_path(operation["operation_id"]).read_text()
+            )
+            assert metadata["execution_device"] == {
+                "requested": "cuda:0", "resolved": "cuda:0"
+            }
+            operator = project.get_operator(operation["operator_id"])
+            assert "device" not in operator.to_json_state()
+            assert operator._frozen_device_lock is None
+
+        assert calls["coref"][-1] == "cuda:0"
+        assert calls["srl"][-1] == ("cuda:0", False)
+        assert calls["wsd"][-1] == ("cuda:0", "32")
+        monkeypatch.setattr(devices, "_torch_capabilities", lambda: (False, 0, False))
+
+        for output, kind, bindings, label in (
+            (coref["mentions"], "coref", {"documents": documents, "tokens": tokens}, "mentions"),
+            (srl["predicates"], "srl", {"sentences": sentences, "tokens": tokens}, "predicates"),
+            (wsd["senses"], "wsd", {"tokens": tokens}, "senses"),
+        ):
+            operation = project.operation_for_artifact(output)
+            frozen = project.get_operator(operation["operator_id"])
+            # Both fresh Project replay and artifact Pipeline routing must use
+            # CPU even though the original operation was GPU-origin.
+            fresh = project.translate(frozen, bindings, device="cpu")
+            assert label in fresh
+            pipeline = teal.Pipeline(inputs=tuple(bindings))
+            stage = pipeline.add(
+                kind, frozen,
+                sources={
+                    name: (
+                        pipeline.input if len(bindings) == 1 else pipeline.input[name]
+                    )
+                    for name in bindings
+                },
+            )
+            pipeline.output("output", stage[label])
+            assert "output" in project.run_pipeline(pipeline, bindings, device="cpu")
+            # Native multi-source binding also carries its required key list.
+            key_name = {
+                "coref": "document_keys",
+                "srl": "sentence_keys",
+                "wsd": "token_keys",
+            }[kind]
+            key_columns = {
+                "coref": ["row_id"],
+                "srl": ["row_id", "sentence_id"],
+                "wsd": ["row_id", "sentence_id", "token_id"],
+            }[kind]
+            native_pipeline = teal.Pipeline(inputs=(*bindings, key_name))
+            native = native_pipeline.add(
+                kind, frozen,
+                sources={name: native_pipeline.input[name] for name in (*bindings, key_name)},
+            )
+            native_pipeline.output("output", native[label])
+            values = {name: _frame(artifact) for name, artifact in bindings.items()}
+            values[key_name] = key_columns
+            native_result = native_pipeline.translate(inputs=values, device="cpu")
+            assert isinstance(native_result["output"], pd.DataFrame)
+
+        assert calls["coref"][-3:] == ["cpu"] * 3
+        assert calls["srl"][-3:] == [("cpu", False)] * 3
+        assert calls["wsd"][-3:] == [("cpu", "32")] * 3
 
         selector = SenseSelector(excluded_sense_ids=["alice-1"])
         reselected = project.translate(
