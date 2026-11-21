@@ -180,6 +180,35 @@ def test_provider_uses_same_recovered_pipeline_for_text_and_query():
     assert calls == [["room temperature"], ["a", "b"]]
 
 
+def test_provider_forwards_explicit_device_to_text_and_query_replay():
+    artifact = _FakeArtifact(
+        "art_geometry", ArtifactType.SPARSE_MATRIX, sparse.eye(2), [0, 1]
+    )
+    text = _FakeArtifact(
+        "art_documents", ArtifactType.DENSE_MATRIX, np.zeros((2, 1)), [0, 1]
+    )
+    calls = []
+
+    class FakePipeline:
+        def translate(self, texts, *, project=None, device=None):
+            assert project is project_obj
+            calls.append((list(texts), device))
+            return {"output": {"values": sparse.csr_matrix(np.ones((len(texts), 2)))}}
+
+    class PipelineProject(_FakeProject):
+        def pipeline(self, *, start, end, allow_looser_lineage=False):
+            assert start == "art_documents"
+            assert end is artifact
+            return FakePipeline()
+
+    project_obj = PipelineProject([artifact, text])
+    provider = TeALGeCoProvider(project_obj)
+    ref = {"artifact_id": "art_geometry", "text_artifact_id": "art_documents"}
+    provider.transform_texts(ref, ["first", "second"], device="cpu")
+    provider.transform_query(ref, "question", device="cpu")
+    assert calls == [(["first", "second"], "cpu"), (["question"], "cpu")]
+
+
 def test_geco_contract_gate_rejects_pre_capability_build(monkeypatch):
     import sys
     from types import SimpleNamespace
