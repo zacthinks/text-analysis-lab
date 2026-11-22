@@ -108,7 +108,7 @@ def test_unknown_or_noncurrent_selection_fails_without_persistent_mutation(tmp_p
             assert project.list_operations() == before_ops
             assert project.list_operators() == before_operators
             assert project.list_artifacts() == before_artifacts
-            assert "forbidden" not in project.catalog.list_artifact_aliases()
+            assert not any("forbidden" in str(row.get("aliases", ())) for row in project.list_artifacts())
 
         project.environments.set_default(other)
         with pytest.raises(EnvironmentRegistryError, match="Cross-interpreter"):
