@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -267,8 +268,14 @@ def test_real_independent_venv_opening_is_a_distinct_observation(tmp_path, monke
         "p=Project.open(sys.argv[1]); "
         "print(p.environments.default['environment_id']); p.close()"
     )
+    child_env = os.environ.copy()
+    source_root = Path(__file__).resolve().parents[1] / "src"
+    child_env["PYTHONPATH"] = os.pathsep.join(
+        [str(source_root), child_env.get("PYTHONPATH", "")]
+    )
     result = subprocess.run(
         [str(python), "-c", script, str(project_path)],
+        env=child_env,
         capture_output=True,
         text=True,
         timeout=90,
