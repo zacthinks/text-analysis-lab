@@ -343,14 +343,20 @@ def _return_artifacts(
         row["output_label"]: row["artifact_id"]
         for row in project.catalog.operation_outputs(opid)
     }
-    if outputs != recorded:
-        raise SecondaryCoordinatorError("Returned output artifact IDs disagree with catalog.")
-    if result_kind == "reused":
-        if set(outputs) != {"output"} or (
-            project.resolve_artifact_id(requested_alias) != outputs["output"]
+    if result_kind == "executed":
+        if outputs != recorded:
+            raise SecondaryCoordinatorError("Returned output artifact IDs disagree with catalog.")
+    else:
+        # Idempotence can reuse any completed aliased artifact, including one
+        # whose original producer labeled it differently from TextLength's
+        # "output". Validate its durable producer edge and alias independently.
+        if (
+            set(outputs) != {"output"}
+            or outputs["output"] not in recorded.values()
+            or project.resolve_artifact_id(requested_alias) != outputs["output"]
         ):
             raise SecondaryCoordinatorError(
-                "Secondary alias reuse does not match the requested existing alias."
+                "Secondary alias reuse does not match an existing aliased artifact."
             )
     return {label: project.get_artifact(aid) for label, aid in outputs.items()}
 
