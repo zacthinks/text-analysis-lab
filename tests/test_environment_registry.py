@@ -244,6 +244,52 @@ def test_missing_historical_local_source_does_not_block_registry(tmp_path, simul
         assert len(project.environments.list()) == 2
 
 
+def test_source_digest_prunes_venvs_and_caches_safe_source_reads(tmp_path, monkeypatch):
+    root = tmp_path / "editable"
+    source = root / "src" / "unit.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = 1\\n", encoding="utf-8")
+    ignored = root / ".venv" / "lib" / "library.py"
+    ignored.parent.mkdir(parents=True)
+    ignored.write_text("giant package should not be touched\\n", encoding="utf-8")
+
+    original_scandir = os.scandir
+
+    def guard_scandir(path):
+        if Path(path) == root / ".venv":
+            raise AssertionError("source fingerprint traversed a virtual environment")
+        return original_scandir(path)
+
+    original_read_bytes = Path.read_bytes
+    reads = []
+
+    def tracking_read_bytes(path):
+        if path == source:
+            reads.append(path)
+        if path == ignored:
+            raise AssertionError("source fingerprint read an excluded dependency")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(os, "scandir", guard_scandir)
+    monkeypatch.setattr(Path, "read_bytes", tracking_read_bytes)
+
+    first = env_module._source_digest(root)
+    assert env_module._source_digest(root) == first
+    assert len(reads) == 1, "identical source should reuse the cached digest"
+
+    source.write_text("value = 2\\n", encoding="utf-8")
+    second = env_module._source_digest(root)
+    assert second != first
+    assert len(reads) == 2, "modified source must invalidate cached digest"
+
+    added = root / "src" / "new.py"
+    added.write_text("another = 1\\n", encoding="utf-8")
+    third = env_module._source_digest(root)
+    assert third != second, "adding source must invalidate the digest"
+    added.unlink()
+    assert env_module._source_digest(root) == second, "removing source must invalidate it"
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="separate-venv smoke is covered on POSIX CI")
 def test_real_independent_venv_opening_is_a_distinct_observation(tmp_path, monkeypatch):
     """Actual second interpreter, with inherited dependencies, not a mocked execution route."""
@@ -251,7 +297,10 @@ def test_real_independent_venv_opening_is_a_distinct_observation(tmp_path, monke
     with Project.create(project_path, "study") as project:
         parent_id = project.environments.default["environment_id"]
     venv_path = tmp_path / "independent"
-    venv.EnvBuilder(with_pip=False, system_site_packages=True).create(venv_path)
+    # CI's uv-created .venv is not a system site-package directory.
+    # Build a distinct interpreter environment and expose only the parent's
+    # installed distributions for this import-based integration smoke.
+    venv.EnvBuilder(with_pip=False, system_site_packages=False).create(venv_path)
     python = venv_path / "bin" / "python"
     site_result = subprocess.run(
         [str(python), "-c", "import site; print(site.getsitepackages()[0])"],
@@ -265,21 +314,35 @@ def test_real_independent_venv_opening_is_a_distinct_observation(tmp_path, monke
     )
     script = (
         "from text_analysis_lab import Project; import sys; "
+        "from importlib import metadata; "
+        "assert sys.prefix == sys.argv[2]; "
+        "assert metadata.version('r0a-probe') == '1.0'; "
         "p=Project.open(sys.argv[1]); "
         "print(p.environments.default['environment_id']); p.close()"
     )
     child_env = os.environ.copy()
     source_root = Path(__file__).resolve().parents[1] / "src"
+    parent_sites = [
+        entry for entry in sys.path
+        if entry
+        and Path(entry).is_dir()
+        and ("site-packages" in Path(entry).parts or "dist-packages" in Path(entry).parts)
+    ]
+    assert parent_sites, "Cannot locate the test runner's installed dependencies."
     child_env["PYTHONPATH"] = os.pathsep.join(
-        [str(source_root), child_env.get("PYTHONPATH", "")]
+        [str(source_root), *parent_sites, child_env.get("PYTHONPATH", "")]
     )
     result = subprocess.run(
-        [str(python), "-c", script, str(project_path)],
+        [str(python), "-c", script, str(project_path), str(venv_path)],
         env=child_env,
         capture_output=True,
         text=True,
         timeout=90,
-        check=True,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"Child interpreter failed (exit {result.returncode}):\n"
+        f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     )
     child_id = result.stdout.strip().splitlines()[-1]
     # The child really has a distinct distribution inventory.
