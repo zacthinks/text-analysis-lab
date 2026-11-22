@@ -8,6 +8,42 @@ A TeAL `Project` owns durable, keyed `Artifacts` and records the lineage, operat
 
 For the broader motivation, architecture, and current project overview, see the [TeAL website](https://zacthinks.github.io/teal/).
 
+## Observed Python environments (R0a)
+
+Each TeAL project records an immutable, fingerprinted observation of the
+interpreter and installed packages that created or opened it. The first entry is
+kept as history; reopening from a changed Python/package environment appends a
+new entry instead of overwriting previous observations. Existing projects gain
+this registry automatically when opened.
+
+```python
+project = Project.open("my-project")
+history = project.environments.list()  # oldest first
+current = project.environments.default
+entry = project.environments.get(current["environment_id"])
+project.environments.set_default(history[0]["environment_id"])
+```
+
+Each entry includes `environment_id`, `fingerprint`, `registered_at`,
+`observation`, and `readiness`. The versioned observation includes Python
+implementation/version, platform/architecture, the installed TeAL version,
+and a normalized installed-Python-distribution name/version inventory (including
+package-installed models such as spaCy model distributions), with limited sanitized
+editable/local/VCS and archive metadata. Fingerprints describe the installed
+software, **not** source-file contents or exact build lockfiles. Downloaded model
+assets and scientific JSON rule/configuration files are not inventoried here;
+their identities belong to model management and scientific operation provenance.
+`readiness="current_interpreter"` indicates the entry matched the interpreter
+that opened this Project; `"unverified"` means historical membership only.
+Even a currently matching record is not a guarantee that every package/model
+can run successfully.
+
+`set_default()` only changes the active default of that *open Project
+instance*. Reopening always selects the actual opening interpreter again.
+It does not launch, switch, install or verify another Python interpreter.
+Execution routing and operation-level environment provenance are not part of
+this registry-only API.
+
 ## What TeAL supports
 
 TeAL currently includes:
