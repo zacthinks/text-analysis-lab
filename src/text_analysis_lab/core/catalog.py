@@ -101,6 +101,7 @@ class ProjectCatalog:
                     created_at TEXT NOT NULL,
                     completed_at TEXT,
                     error TEXT,
+                    environment_id TEXT REFERENCES project_environments(environment_id),
                     FOREIGN KEY (operator_id) REFERENCES operators(operator_id)
                 );
 
@@ -253,6 +254,12 @@ class ProjectCatalog:
                 table="operators",
                 column="reuse_status",
                 definition="TEXT NOT NULL DEFAULT 'legacy_unknown'",
+            )
+            self._ensure_column(
+                con,
+                table="operations",
+                column="environment_id",
+                definition="TEXT REFERENCES project_environments(environment_id)",
             )
 
     # ------------------------------------------------------------------
@@ -795,8 +802,9 @@ class ProjectCatalog:
         operator_id: str,
         status: OperationStatus | str = "incomplete",
         created_at: str | None = None,
+        environment_id: str | None = None,
     ) -> None:
-        """Register one operation execution record."""
+        """Register execution provenance, or NULL for historical/unknown executors."""
         operation_type_value = self._validate_operation_type(str(operation_type))
         status_value = self._validate_operation_status(str(status))
         with self.con as con:
@@ -809,8 +817,9 @@ class ProjectCatalog:
                     status,
                     created_at,
                     completed_at,
-                    error
-                ) VALUES (?, ?, ?, ?, ?, NULL, NULL)
+                    error,
+                    environment_id
+                ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?)
                 """,
                 (
                     str(operation_id),
@@ -818,6 +827,7 @@ class ProjectCatalog:
                     str(operator_id),
                     status_value,
                     created_at or utc_now_iso(),
+                    None if environment_id is None else str(environment_id),
                 ),
             )
 
