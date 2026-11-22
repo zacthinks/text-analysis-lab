@@ -130,6 +130,96 @@ def test_secondary_sequential_translation_correct_artifact_and_provenance(two_in
         ] == output.artifact_id
 
 
+
+def test_remote_alias_reuse_and_overwrite_preserve_idempotence(two_interpreters):
+    """A reused alias is not a new coordinator request or scientific operation."""
+    _, source_id, _, a, b, _ = two_interpreters
+    with _open_bound(two_interpreters) as project:
+        before = len(project.list_operations())
+        first = project.translate(
+            TextLength({"text": "words"}), source_id,
+            environment=b, alias="lengths",
+        )["output"]
+        original_operation = project.operation_for_artifact(first)
+        assert original_operation["environment_id"] == b
+        assert original_operation["coordinator_request_id"]
+        assert len(project.list_operations()) == before + 1
+
+        # Existing TeAL semantics ignore new scientific parameters on reuse.
+        # The new request must NOT be misidentified as a new operation.
+        reused = project.translate(
+            TextLength({"text": "characters"}), source_id,
+            environment=b, alias="lengths", overwrite=False,
+        )["output"]
+        assert reused.artifact_id == first.artifact_id
+        assert project.resolve_artifact_id("lengths") == first.artifact_id
+        assert len(project.list_operations()) == before + 1
+        assert project.get_operation(original_operation["operation_id"]) == original_operation
+        assert reused.query(
+            data_columns=False, metadata_columns=["text_words"],
+            metadata_mode="local", form="table",
+        )["text_words"].tolist() == [2, 3, 1, 2, 1]
+
+        replacement = project.translate(
+            TextLength({"text": "characters"}), source_id,
+            environment=b, alias="lengths", overwrite=True,
+        )["output"]
+        assert replacement.artifact_id != first.artifact_id
+        assert project.resolve_artifact_id("lengths") == replacement.artifact_id
+        assert len(project.list_operations()) == before + 2
+        replacement_operation = project.operation_for_artifact(replacement)
+        assert replacement_operation["operation_id"] != original_operation["operation_id"]
+        assert replacement_operation["coordinator_request_id"] != (
+            original_operation["coordinator_request_id"]
+        )
+        assert replacement_operation["environment_id"] == b
+        assert project.get_artifact(first.artifact_id, include_deleted=True).artifact_id == first.artifact_id
+        assert any(
+            row["artifact_id"] == first.artifact_id and row["deleted"]
+            for row in project.list_artifacts(include_deleted=True)
+        )
+        assert replacement.query(
+            data_columns=False, metadata_columns=["text_characters"],
+            metadata_mode="local", form="table",
+        )["text_characters"].tolist() == [10, 13, 4, 8, 5]
+        assert project.environments.default["environment_id"] == a
+
+
+def test_remote_alias_reuse_may_return_existing_local_artifact(two_interpreters):
+    """Alias reuse is about existing artifacts, not the prior executor identity."""
+    _, source_id, _, a, b, _ = two_interpreters
+    with _open_bound(two_interpreters) as project:
+        local = project.translate(
+            TextLength({"text": "words"}), source_id,
+            environment=a, alias="local_lengths",
+        )["output"]
+        before = len(project.list_operations())
+        remote_reuse = project.translate(
+            TextLength({"text": "characters"}), source_id,
+            environment=b, alias="local_lengths",
+        )["output"]
+        assert remote_reuse.artifact_id == local.artifact_id
+        assert len(project.list_operations()) == before
+        assert project.operation_for_artifact(remote_reuse)["environment_id"] == a
+
+
+def test_remote_alias_mapping_is_rejected_before_dispatch(two_interpreters, monkeypatch):
+    from text_analysis_lab.core import secondary_coordinator as coordinator
+
+    _, source_id, _, _, b, _ = two_interpreters
+    with _open_bound(two_interpreters) as project:
+        before = project.list_operations()
+        def no_process(*args, **kwargs):
+            raise AssertionError("Invalid alias must not launch a subprocess.")
+        monkeypatch.setattr(coordinator, "_verified_executable", no_process)
+        with pytest.raises(SecondaryCoordinatorError, match="nonempty string alias"):
+            project.translate(
+                TextLength({"text": "words"}), source_id,
+                environment=b, alias={"output": "lengths"},
+            )
+        assert project.list_operations() == before
+
+
 def test_unbound_missing_fingerprint_drift_and_unsupported_requests(two_interpreters):
     _, source_id, executable, a, b, site_dir = two_interpreters
     with Project.open(two_interpreters[0]) as project:
