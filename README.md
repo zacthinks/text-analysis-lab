@@ -8,7 +8,7 @@ A TeAL `Project` owns durable, keyed `Artifacts` and records the lineage, operat
 
 For the broader motivation, architecture, and current project overview, see the [TeAL website](https://zacthinks.github.io/teal/).
 
-## Observed Python environments (R0a)
+## Project environments
 
 Each TeAL project records an immutable, fingerprinted observation of the
 interpreter and installed packages that created or opened it. The first entry is

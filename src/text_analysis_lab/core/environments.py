@@ -198,11 +198,22 @@ def observe_environment() -> dict[str, Any]:
         ) from exc
 
 
-def fingerprint_observation(observation: dict[str, Any]) -> str:
-    """SHA-256 of canonical, versioned environment observation JSON."""
+def fingerprint_observation(
+    observation: dict[str, Any], *, require_current_schema: bool = True
+) -> str:
+    """SHA-256 of canonical versioned observation JSON.
+
+    Historical verification accepts a previously stored positive integer
+    schema version; only new observations require the current producer schema.
+    No historical record is migrated or reinterpreted.
+    """
+    if not isinstance(observation, dict):
+        raise EnvironmentRegistryError("Invalid environment observation.")
+    version = observation.get("schema_version")
     if (
-        not isinstance(observation, dict)
-        or observation.get("schema_version") != OBSERVATION_SCHEMA_VERSION
+        type(version) is not int
+        or version < 1
+        or (require_current_schema and version != OBSERVATION_SCHEMA_VERSION)
         or not all(key in observation for key in ("python", "platform", "teal", "distributions"))
     ):
         raise EnvironmentRegistryError("Unsupported or incomplete environment observation.")
@@ -236,10 +247,34 @@ class EnvironmentRegistry:
         )
         self._default_id = self._opening_id
 
+    @property
+    def opening_id(self) -> str:
+        """Registered identity of the interpreter running this Project instance."""
+        return self._opening_id
+
+    def require_local_execution(self, environment_id: str | None = None) -> str:
+        """Resolve the selector; fail before scientific work when it is not local.
+
+        Setting a default or supplying an override never starts another
+        interpreter. That execution route is not yet implemented.
+        """
+        selected = (
+            self._default_id if environment_id is None
+            else self.get(environment_id)["environment_id"]
+        )
+        if selected != self._opening_id:
+            raise EnvironmentRegistryError(
+                f"Selected environment {selected!r} is registered but is not "
+                "the current Python interpreter. Cross-interpreter execution "
+                "is not yet available; reopen the project under that environment "
+                "or select the current interpreter."
+            )
+        return selected
+
     def _public_row(self, row: dict[str, Any]) -> dict[str, Any]:
         try:
             observation = json.loads(row["observation_json"])
-            if fingerprint_observation(observation) != row["fingerprint"]:
+            if fingerprint_observation(observation, require_current_schema=False) != row["fingerprint"]:
                 raise EnvironmentRegistryError("Fingerprint mismatch in environment registry.")
             if row["environment_id"] != "env_" + row["fingerprint"]:
                 raise EnvironmentRegistryError("Environment identity mismatch in registry.")

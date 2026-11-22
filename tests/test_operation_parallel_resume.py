@@ -460,6 +460,98 @@ def test_sequential_resume_retries_first_failed_unit_without_redoing_completed_w
         project.close()
 
 
+
+def test_legacy_resumable_operation_obeys_active_default_without_backfilling(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A real checkpointed legacy operation cannot bypass a B default in A."""
+    import json
+    import text_analysis_lab as teal
+    from text_analysis_lab.core.environments import fingerprint_observation
+    from text_analysis_lab.core.errors import OperatorError
+    _install_pickle_parquet(monkeypatch)
+    rows = pd.DataFrame({"id": list(range(6))})
+    _install_fake_source_queries(monkeypatch, rows)
+    project = teal.Project.create(tmp_path / "project", name="legacy_resume_default")
+    try:
+        source = _seed_source_artifact(project, rows)
+        opener = project.environments.opening_id
+        translator = _TransientResumableTranslator(
+            str(tmp_path / "legacy-fail-once"), fail_unit=0
+        )
+        with pytest.raises(RuntimeError, match="transient unit 0"):
+            project.translate(translator, source, batch_size=2, workers=1)
+
+        operation = project.list_operations()[-1]
+        operation_id = str(operation["operation_id"])
+        assert operation["status"] == "failed"
+        assert operation["environment_id"] == opener
+        temp_dir = project.storage.operation_temp_dir(operation_id)
+        assert temp_dir.exists()
+
+        # Emulate a genuine pre-provenance operation: preserve its real plan,
+        # writer checkpoints and frozen operator, but remove the new field.
+        descriptor_path = project.storage.operation_descriptor_path(operation_id)
+        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+        descriptor.pop("environment_id")
+        descriptor_path.write_text(
+            json.dumps(descriptor, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        with project.catalog.con as con:
+            con.execute(
+                "UPDATE operations SET environment_id = NULL WHERE operation_id = ?",
+                (operation_id,),
+            )
+        assert project.get_operation(operation_id)["environment_id"] is None
+
+        observed = dict(project.environments.default["observation"])
+        observed["distributions"] = [
+            *observed["distributions"],
+            {"name": "legacy-resume-alternate", "version": "1"},
+        ]
+        fingerprint = fingerprint_observation(observed)
+        alternate = project.catalog.register_environment(
+            fingerprint=fingerprint,
+            schema_version=observed["schema_version"],
+            observation_json=json.dumps(
+                observed, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ),
+        )
+        project.environments.set_default(alternate)
+
+        before_catalog = project.get_operation(operation_id)
+        before_descriptor = descriptor_path.read_bytes()
+        checkpoint_before = {
+            str(p.relative_to(temp_dir)): p.read_bytes()
+            for p in temp_dir.rglob("*") if p.is_file()
+        }
+        manifest_before = project.storage.manifest_path.read_bytes()
+        with pytest.raises(
+            OperatorError,
+            match="active default environment.*Cross-interpreter resume",
+        ):
+            project.resume_operation(operation_id)
+        assert project.get_operation(operation_id) == before_catalog
+        assert descriptor_path.read_bytes() == before_descriptor
+        assert project.storage.manifest_path.read_bytes() == manifest_before
+        assert {
+            str(p.relative_to(temp_dir)): p.read_bytes()
+            for p in temp_dir.rglob("*") if p.is_file()
+        } == checkpoint_before
+
+        # Reset only the per-instance preference and finish the original plan.
+        project.environments.set_default(opener)
+        output = project.resume_operation(operation_id)["output"]
+        assert output.status == "complete"
+        assert output.n_rows == len(rows)
+        assert project.get_operation(operation_id)["environment_id"] is None
+        assert "environment_id" not in json.loads(
+            descriptor_path.read_text(encoding="utf-8")
+        )
+    finally:
+        project.close()
+
+
 def test_parallel_resume_preserves_canonical_output_order_and_completed_units(
     tmp_path: Path, monkeypatch
 ) -> None:

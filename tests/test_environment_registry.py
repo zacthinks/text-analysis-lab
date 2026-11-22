@@ -127,7 +127,7 @@ def test_legacy_project_operations_remain_unassigned(tmp_path, simulated):
     with Project.open(path) as project:
         assert len(project.environments.list()) == 1
         assert project.get_operation("run_000001") is not None
-        assert "environment_id" not in project.get_operation("run_000001")
+        assert project.get_operation("run_000001")["environment_id"] is None
     with sqlite3.connect(db) as con:
         assert con.execute("SELECT * FROM operations").fetchall() == before
 

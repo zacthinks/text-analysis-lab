@@ -131,6 +131,7 @@ class _Runtime:
     writers_temp_dir: Path
     resumable: bool
     operator_snapshot_pending: bool
+    environment_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -589,6 +590,28 @@ def resume_translate(
     state. It does not call ``initialize_translation(...)``, which is reserved for
     new operations.
     """
+    # Existing operations keep their recorded execution identity. Historical
+    # operations with no provenance use the instance's active default for
+    # execution selection, without assigning a historical environment ID.
+    # Reject unsupported routing before restoring scientific state/checkpoints.
+    recorded = project.catalog.get_operation(operation_id).get("environment_id")
+    effective = (
+        recorded
+        if recorded is not None
+        else project.environments.default["environment_id"]
+    )
+    if effective != project.environments.opening_id:
+        origin = (
+            "its recorded execution environment"
+            if recorded is not None
+            else "the Project's active default environment"
+        )
+        raise OperatorError(
+            f"Operation {operation_id!r} requires {origin} {effective!r}, "
+            "not the current Python interpreter. Cross-interpreter resume is "
+            "not yet supported; reopen the project under the selected "
+            "environment or select the opening interpreter."
+        )
     metadata = _load_operation_metadata(project, operation_id)
     translator = _load_translator_for_resume(project, operation_id, metadata)
     mode = _validate_translation_mode(str(metadata["mode"]))
@@ -1568,6 +1591,7 @@ def _prepare_runtime(
         operation_type=translator.operation_type,
         operator_id=prepared_operator.operator_id,
         status="incomplete",
+        environment_id=project.environments.opening_id,
     )
 
     for label, artifact in sources.items():
@@ -1668,6 +1692,7 @@ def _prepare_runtime(
         writers_temp_dir=writers_temp_dir,
         resumable=translator.supports_resume(mode=mode, route=route),
         operator_snapshot_pending=prepared_operator.snapshot_pending,
+        environment_id=project.environments.opening_id,
     )
 
 
@@ -1712,6 +1737,7 @@ def _runtime_from_metadata(
             project.catalog.operator_snapshot_status(str(metadata["operator_id"]))
             == "pending"
         ),
+        environment_id=project.catalog.get_operation(operation_id).get("environment_id"),
     )
 
 
@@ -2585,6 +2611,7 @@ def _save_operation_metadata(
         "operation_id": runtime.operation_id,
         "operation_type": translator.operation_type,
         "operator_id": runtime.operator_id,
+        "environment_id": runtime.environment_id,
         "operator_snapshot_pending": runtime.operator_snapshot_pending,
         "freeze_device": freeze_device,
         "translator_class": {

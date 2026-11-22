@@ -1014,6 +1014,7 @@ class Project:
         alias: AliasSpec = None,
         overwrite: bool = False,
         freeze_device: bool = False,
+        environment: str | None = None,
         **params: Any,
     ) -> Mapping[str, BaseArtifact]:
         """Run a translation operation and return output artifacts by label.
@@ -1023,6 +1024,9 @@ class Project:
         expose a typed ``translate(project, ...)`` convenience method that
         delegates here.
         """
+        # Check selection before adapting, fitting, allocating IDs or modifying
+        # persistent operation/alias state (including the FeatureMatrix path).
+        self.environments.require_local_execution(environment)
         from text_analysis_lab.translators.feature_matrix import FeatureMatrix
         if not isinstance(freeze_device, bool):
             raise TypeError("freeze_device must be a bool.")
