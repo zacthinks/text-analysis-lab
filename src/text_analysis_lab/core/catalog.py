@@ -102,6 +102,7 @@ class ProjectCatalog:
                     completed_at TEXT,
                     error TEXT,
                     environment_id TEXT REFERENCES project_environments(environment_id),
+                    coordinator_request_id TEXT UNIQUE,
                     FOREIGN KEY (operator_id) REFERENCES operators(operator_id)
                 );
 
@@ -260,6 +261,17 @@ class ProjectCatalog:
                 table="operations",
                 column="environment_id",
                 definition="TEXT REFERENCES project_environments(environment_id)",
+            )
+            self._ensure_column(
+                con,
+                table="operations",
+                column="coordinator_request_id",
+                definition="TEXT",
+            )
+            con.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "idx_operations_coordinator_request "
+                "ON operations(coordinator_request_id)"
             )
 
     # ------------------------------------------------------------------
@@ -803,6 +815,7 @@ class ProjectCatalog:
         status: OperationStatus | str = "incomplete",
         created_at: str | None = None,
         environment_id: str | None = None,
+        coordinator_request_id: str | None = None,
     ) -> None:
         """Register execution provenance, or NULL for historical/unknown executors."""
         operation_type_value = self._validate_operation_type(str(operation_type))
@@ -818,8 +831,9 @@ class ProjectCatalog:
                     created_at,
                     completed_at,
                     error,
-                    environment_id
-                ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?)
+                    environment_id,
+                    coordinator_request_id
+                ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)
                 """,
                 (
                     str(operation_id),
@@ -828,8 +842,19 @@ class ProjectCatalog:
                     status_value,
                     created_at or utc_now_iso(),
                     None if environment_id is None else str(environment_id),
+                    coordinator_request_id,
                 ),
             )
+
+    def operation_for_coordinator_request(
+        self, request_id: str
+    ) -> dict[str, Any] | None:
+        """Find the single operation owned by a secondary coordinator request."""
+        row = self.con.execute(
+            "SELECT * FROM operations WHERE coordinator_request_id = ?",
+            (str(request_id),),
+        ).fetchone()
+        return self._dict(row)
 
     def get_operation(self, operation_id: str) -> dict[str, Any]:
         """Return one operation record."""

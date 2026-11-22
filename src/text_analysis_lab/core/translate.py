@@ -132,6 +132,7 @@ class _Runtime:
     resumable: bool
     operator_snapshot_pending: bool
     environment_id: str | None = None
+    coordinator_request_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -423,6 +424,7 @@ def translate(
     alias: AliasSpec = None,
     overwrite: bool = False,
     freeze_device: bool = False,
+    coordinator_request_id: str | None = None,
     **params: Any,
 ) -> Mapping[str, BaseArtifact]:
     """Run a new TeAL translation operation and return output artifacts by label."""
@@ -494,6 +496,7 @@ def translate(
         mode=mode,
         route=route,
         output_specs=output_specs,
+        coordinator_request_id=coordinator_request_id,
     )
     plan: _ExecutionPlan | None = None
     try:
@@ -1569,6 +1572,7 @@ def _prepare_runtime(
     mode: TranslationMode,
     route: RunRoute,
     output_specs: Mapping[str, OutputSpec],
+    coordinator_request_id: str | None = None,
 ) -> _Runtime:
     prepared_operator = _prepare_operator_snapshot(
         project=project,
@@ -1592,6 +1596,7 @@ def _prepare_runtime(
         operator_id=prepared_operator.operator_id,
         status="incomplete",
         environment_id=project.environments.opening_id,
+        coordinator_request_id=coordinator_request_id,
     )
 
     for label, artifact in sources.items():
@@ -1693,6 +1698,7 @@ def _prepare_runtime(
         resumable=translator.supports_resume(mode=mode, route=route),
         operator_snapshot_pending=prepared_operator.snapshot_pending,
         environment_id=project.environments.opening_id,
+        coordinator_request_id=coordinator_request_id,
     )
 
 
@@ -1738,6 +1744,9 @@ def _runtime_from_metadata(
             == "pending"
         ),
         environment_id=project.catalog.get_operation(operation_id).get("environment_id"),
+        coordinator_request_id=project.catalog.get_operation(operation_id).get(
+            "coordinator_request_id"
+        ),
     )
 
 
@@ -2612,6 +2621,7 @@ def _save_operation_metadata(
         "operation_type": translator.operation_type,
         "operator_id": runtime.operator_id,
         "environment_id": runtime.environment_id,
+        "coordinator_request_id": runtime.coordinator_request_id,
         "operator_snapshot_pending": runtime.operator_snapshot_pending,
         "freeze_device": freeze_device,
         "translator_class": {
