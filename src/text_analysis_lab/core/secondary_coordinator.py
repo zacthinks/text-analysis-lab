@@ -421,7 +421,16 @@ def delegate_resume(
     if descriptor.get("translator_class") != {
         "module": TRANSLATOR_MODULE, "qualname": TRANSLATOR_TYPE
     }:
-        raise SecondaryCoordinatorError("Remote resume supports built-in TextLength only.")
+        origin = (
+            "its recorded execution environment"
+            if row["environment_id"] is not None
+            else "the Project's active default environment"
+        )
+        raise SecondaryCoordinatorError(
+            f"Operation {operation_id!r} requires {origin} {selected!r}. "
+            "Cross-interpreter resume is not yet supported for this translator; "
+            "reopen the project under the selected environment."
+        )
     message = {
         "protocol_version": PROTOCOL_VERSION,
         "kind": "resume", "request_id": uuid4().hex,
