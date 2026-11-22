@@ -35,6 +35,7 @@ from text_analysis_lab.core.errors import (
     OperatorNotFoundError,
     PipelineError,
 )
+from text_analysis_lab.core.environments import EnvironmentRegistry
 from text_analysis_lab.core.feature_subset import (
     FeatureSubsetFunction,
 )
@@ -156,7 +157,12 @@ class Project:
     def __init__(self, storage: ProjectStorage) -> None:
         self.storage = storage
         self.catalog = ProjectCatalog(self.storage.catalog_dir)
-        self.query = QueryEngine(self)
+        try:
+            self.environments = EnvironmentRegistry(self.catalog)
+            self.query = QueryEngine(self)
+        except Exception:
+            self.catalog.close()
+            raise
         self._geco_manager = None
         self._project_centers: list[ProjectCenterServer] = []
         self._closed = False
