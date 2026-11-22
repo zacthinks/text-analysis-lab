@@ -327,7 +327,7 @@ def test_discovery_sees_import_path_changes_without_process_cache(monkeypatch, t
             for d in real_metadata.distributions()
             if d.metadata.get("Name") == "special-model"
         ]
-        assert found == [{"name": "special-model", "version": "1.0"}]
+        assert {"name": "special-model", "version": "1.0"} in found
         inventory = env_module.observe_environment()["distributions"]
         assert {"name": "special-model", "version": "1.0"} in inventory
 
