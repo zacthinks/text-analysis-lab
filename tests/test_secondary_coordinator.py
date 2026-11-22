@@ -184,7 +184,7 @@ def test_protocol_and_teal_version_mismatch_rejected_before_execution(two_interp
         assert project.list_operations() == before
 
 
-def test_pre_operation_failure_and_child_registered_failure(two_interpreters):
+def test_pre_operation_failure_and_child_registered_failure(two_interpreters, tmp_path, monkeypatch):
     project_path, source_id, _, a, b, _ = two_interpreters
     with _open_bound(two_interpreters) as project:
         count = len(project.list_operations())
@@ -194,24 +194,39 @@ def test_pre_operation_failure_and_child_registered_failure(two_interpreters):
         assert error.value.operation_id is None
         assert len(project.list_operations()) == count
 
-        # Delete a source payload part while preserving its valid descriptor;
-        # input planning/reading fails within the owning secondary operation.
-        source = project.get_artifact(source_id)
-        assert source.data_dir is not None
-        part = next(source.data_dir.glob("part-*.parquet"))
-        original_data = part.read_bytes()
-        part.unlink()
+        # Fault injection lives *only* in the independent child's test
+        # interpreter startup. It fails inside the ordinary translation runner,
+        # after catalog registration and initial durable writer checkpoint.
+        # Unlike corrupting source files, this cannot fail during preflight.
+        hook_dir = tmp_path / "fault-injection"
+        hook_dir.mkdir()
+        (hook_dir / "sitecustomize.py").write_text(
+            "import os\n"
+            "if os.environ.get('TEAL_R1_TEST_FAIL_AFTER_REGISTRATION') == '1':\n"
+            "    import text_analysis_lab.core.translate as execution\n"
+            "    def fail_registered_operation(**kwargs):\n"
+            "        raise RuntimeError('R1 injected post-registration failure')\n"
+            "    execution._run_repeated_plan = fail_registered_operation\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv(
+            "PYTHONPATH",
+            os.pathsep.join([str(hook_dir), os.environ["PYTHONPATH"]]),
+        )
+        monkeypatch.setenv("TEAL_R1_TEST_FAIL_AFTER_REGISTRATION", "1")
         try:
             with pytest.raises(SecondaryOperationError) as error:
-                project.translate(TextLength({"text": "words"}), source_id, environment=b)
-            assert error.value.request_id
-            failed = project.catalog.operation_for_coordinator_request(error.value.request_id)
-            assert failed is not None
-            assert failed["environment_id"] == b
-            assert failed["status"] in {"failed", "incomplete"}
-            assert len(project.list_operations()) == count + 1
+                project.translate(
+                    TextLength({"text": "words"}), source_id, environment=b,
+                )
         finally:
-            part.write_bytes(original_data)
+            monkeypatch.delenv("TEAL_R1_TEST_FAIL_AFTER_REGISTRATION")
+        assert error.value.request_id
+        failed = project.catalog.operation_for_coordinator_request(error.value.request_id)
+        assert failed is not None
+        assert failed["environment_id"] == b
+        assert failed["status"] in {"failed", "incomplete"}
+        assert len(project.list_operations()) == count + 1
 
         # Explicit recovery goes to B, based on recorded provenance.
         restored = project.resume_operation(failed["operation_id"])["output"]
