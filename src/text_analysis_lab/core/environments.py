@@ -8,16 +8,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import platform
 import re
 import sys
 import sysconfig
 from importlib import metadata
-from pathlib import Path
-from threading import RLock
-from urllib.parse import unquote, urlsplit
-from urllib.request import url2pathname
+from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, Any
 
 from text_analysis_lab.core.errors import TeALError
@@ -28,12 +24,6 @@ if TYPE_CHECKING:
 OBSERVATION_SCHEMA_VERSION = 1
 _NAME_SEPARATOR = re.compile(r"[-_.]+")
 _SAFE_COMMIT = re.compile(r"^[a-fA-F0-9]{7,64}$")
-_SOURCE_EXTENSIONS = {".py", ".toml", ".cfg"}
-_SOURCE_FILES = {"uv.lock", "poetry.lock", "pdm.lock", "setup.py"}
-_EXCLUDED_DIRS = {
-    ".git", ".hg", ".svn", ".venv", "venv", "__pycache__",
-    ".tox", ".mypy_cache", ".pytest_cache", "node_modules", "build", "dist",
-}
 
 
 class EnvironmentRegistryError(TeALError):
@@ -46,89 +36,6 @@ class EnvironmentNotFoundError(EnvironmentRegistryError, LookupError):
 
 def _canonical_json(value: dict[str, Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-
-
-# Cache content digests only while all observed files and parent directories
-# have unchanged metadata. File stats catch in-place edits; directory stats
-# catch added/removed files. No time-based expiry or blind process-wide snapshot.
-_SOURCE_DIGEST_CACHE: dict[
-    Path, tuple[dict[Path, tuple[int, int]], dict[Path, tuple[int, int, int]], str]
-] = {}
-_SOURCE_DIGEST_LOCK = RLock()
-
-
-def _source_digest(root: Path) -> str:
-    """Hash relevant source by relative names/bytes, pruning ignored trees.
-
-    A previous digest is reused only after validating directory and file
-    metadata. This avoids repeatedly reading source contents for every Project
-    open without missing ordinary edits, additions, or deletions.
-    """
-    root = Path(root).resolve()
-    with _SOURCE_DIGEST_LOCK:
-        cached = _SOURCE_DIGEST_CACHE.get(root)
-        if cached is not None:
-            directories, files, previous_digest = cached
-            try:
-                if all(
-                    (st.st_mtime_ns, st.st_ctime_ns) == signature
-                    for path, signature in directories.items()
-                    for st in (path.stat(),)
-                ) and all(
-                    (st.st_mtime_ns, st.st_ctime_ns, st.st_size) == signature
-                    for path, signature in files.items()
-                    for st in (path.stat(),)
-                ):
-                    return previous_digest
-            except OSError:
-                pass
-
-        digest = hashlib.sha256()
-        directories = {}
-        files = {}
-        paths: list[Path] = []
-        # rglob("*") traverses .venv before rejecting its contents. os.walk
-        # allows top-down pruning of dependencies and VCS metadata instead.
-        for directory, subdirs, filenames in os.walk(root, topdown=True):
-            subdirs[:] = sorted(
-                name for name in subdirs
-                if name not in _EXCLUDED_DIRS
-                and not (Path(directory) / name).is_symlink()
-            )
-            directory_path = Path(directory)
-            directory_stat = directory_path.stat()
-            directories[directory_path] = (
-                directory_stat.st_mtime_ns,
-                directory_stat.st_ctime_ns,
-            )
-            for filename in filenames:
-                candidate = directory_path / filename
-                if (
-                    not candidate.is_symlink()
-                    and (candidate.suffix in _SOURCE_EXTENSIONS or filename in _SOURCE_FILES)
-                ):
-                    paths.append(candidate)
-
-        for path in sorted(paths, key=lambda item: item.relative_to(root).as_posix()):
-            st = path.stat()
-            files[path] = (st.st_mtime_ns, st.st_ctime_ns, st.st_size)
-            relative = path.relative_to(root).as_posix().encode("utf-8")
-            digest.update(len(relative).to_bytes(8, "big"))
-            digest.update(relative)
-            blob = path.read_bytes()
-            digest.update(len(blob).to_bytes(8, "big"))
-            digest.update(blob)
-        value = digest.hexdigest()
-        _SOURCE_DIGEST_CACHE[root] = (directories, files, value)
-        return value
-
-
-def _local_source_path(url: str) -> Path | None:
-    """Use a local direct_url only for hashing; never persist the URL/path."""
-    parsed = urlsplit(url)
-    if parsed.scheme != "file" or parsed.netloc not in ("", "localhost"):
-        return None
-    return Path(url2pathname(unquote(parsed.path)))
 
 
 def _distribution_record(dist: metadata.Distribution) -> dict[str, Any]:
@@ -174,105 +81,12 @@ def _distribution_record(dist: metadata.Distribution) -> dict[str, Any]:
             if re.fullmatch(r"[a-fA-F0-9]{64}", hashes["sha256"]):
                 record["archive_sha256"] = hashes["sha256"].lower()
 
-    local_path = _local_source_path(str(direct.get("url", "")))
-    if local_path is not None:
+    # A file:// origin indicates a local installation; do not store or inspect
+    # the host-specific path, which is not portable project identity.
+    origin = direct.get("url")
+    if isinstance(origin, str) and urlsplit(origin).scheme == "file":
         record["local_install"] = True
-        if local_path.is_dir():
-            try:
-                record["local_source_sha256"] = _source_digest(local_path)
-            except OSError as exc:
-                raise EnvironmentRegistryError(
-                    f"Cannot fingerprint local source for {name!r}."
-                ) from exc
-        else:
-            # Historical installation metadata can point at a removed source.
-            record["local_source_available"] = False
     return record
-
-
-# Reuse installed-distribution metadata while the environment's metadata
-# files are unchanged. Unlike caching a whole observation, this still checks
-# editable/local source digests on every Project opening.
-_DISTRIBUTION_CACHE: tuple[
-    tuple[Any, ...], list[tuple[dict[str, Any], Path | None]]
-] | None = None
-_DISTRIBUTION_LOCK = RLock()
-
-
-def _distribution_metadata_signature() -> tuple[Any, ...]:
-    """Metadata-only filesystem signature for the interpreter's sys.path.
-
-    Detect installed/removed packages, version-file edits, and changes to
-    direct_url.json without reading all distribution metadata repeatedly.
-    """
-    roots: list[tuple[Any, ...]] = []
-    for entry in sys.path:
-        if not entry:
-            continue
-        base = Path(entry)
-        if not base.exists():
-            roots.append((str(base), "missing"))
-            continue
-        if not base.is_dir():
-            st = base.stat()
-            roots.append((str(base), st.st_mtime_ns, st.st_ctime_ns, st.st_size))
-            continue
-
-        st = base.stat()
-        items = []
-        with os.scandir(base) as scan:
-            for item in scan:
-                if not item.name.endswith((".dist-info", ".egg-info")):
-                    continue
-                path = Path(item.path)
-                pst = path.stat()
-                key = [item.name, pst.st_mtime_ns, pst.st_ctime_ns, pst.st_size]
-                if item.is_dir(follow_symlinks=False):
-                    for filename in ("METADATA", "PKG-INFO", "direct_url.json"):
-                        candidate = path / filename
-                        try:
-                            fst = candidate.stat()
-                            key.append((filename, fst.st_mtime_ns, fst.st_ctime_ns, fst.st_size))
-                        except FileNotFoundError:
-                            key.append((filename, None))
-                items.append(tuple(key))
-        roots.append(
-            (str(base), st.st_mtime_ns, st.st_ctime_ns, tuple(sorted(items)))
-        )
-    return tuple(roots)
-
-
-def _installed_distributions() -> list[dict[str, Any]]:
-    """Refresh only modified installation metadata and local source content."""
-    global _DISTRIBUTION_CACHE
-    with _DISTRIBUTION_LOCK:
-        signature = _distribution_metadata_signature()
-        if _DISTRIBUTION_CACHE is None or _DISTRIBUTION_CACHE[0] != signature:
-            records = []
-            for dist in metadata.distributions():
-                record = _distribution_record(dist)
-                source_path = None
-                direct_text = dist.read_text("direct_url.json")
-                if direct_text is not None:
-                    direct = json.loads(direct_text)
-                    source_path = _local_source_path(str(direct.get("url", "")))
-                records.append((record, source_path))
-            _DISTRIBUTION_CACHE = (signature, records)
-
-        # Source-tree edits must invalidate observations even when the dist-info
-        # metadata in site-packages remains unchanged.
-        refreshed = []
-        for record, source_path in _DISTRIBUTION_CACHE[1]:
-            current = record.copy()
-            if source_path is not None:
-                if source_path.is_dir():
-                    current["local_source_sha256"] = _source_digest(source_path)
-                    current.pop("local_source_available", None)
-                else:
-                    current.pop("local_source_sha256", None)
-                    current["local_source_available"] = False
-            refreshed.append(current)
-        return sorted(refreshed, key=_canonical_json)
 
 
 def observe_environment() -> dict[str, Any]:
@@ -283,9 +97,12 @@ def observe_environment() -> dict[str, Any]:
     fingerprints are portable software/platform observations, not lockfiles.
     """
     try:
-        distributions = _installed_distributions()
-        package_root = Path(__file__).resolve().parents[1]
-        teal_source_sha = _source_digest(package_root)
+        # Observe current installed software on every open. No process-global
+        # cache or directory scan: additions/removals/version drift remain visible.
+        distributions = sorted(
+            (_distribution_record(dist) for dist in metadata.distributions()),
+            key=_canonical_json,
+        )
         try:
             teal_version = metadata.version("text-analysis-lab")
         except metadata.PackageNotFoundError:
@@ -306,7 +123,6 @@ def observe_environment() -> dict[str, Any]:
             },
             "teal": {
                 "version": teal_version,
-                "source_sha256": teal_source_sha,
             },
             "distributions": distributions,
         }
