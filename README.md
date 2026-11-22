@@ -26,9 +26,13 @@ project.environments.set_default(history[0]["environment_id"])
 
 Each entry includes `environment_id`, `fingerprint`, `registered_at`,
 `observation`, and `readiness`. The versioned observation includes Python
-implementation/version, platform/architecture, TeAL source/version and an
-installed-distribution inventory with sanitized editable/local/VCS details.
-Fingerprints are portable metadata hashes, **not** exact build lockfiles.
+implementation/version, platform/architecture, the installed TeAL version,
+and a normalized installed-Python-distribution name/version inventory (including
+package-installed models such as spaCy model distributions), with limited sanitized
+editable/local/VCS and archive metadata. Fingerprints describe the installed
+software, **not** source-file contents or exact build lockfiles. Downloaded model
+assets and scientific JSON rule/configuration files are not inventoried here;
+their identities belong to model management and scientific operation provenance.
 `readiness="current_interpreter"` indicates the entry matched the interpreter
 that opened this Project; `"unverified"` means historical membership only.
 Even a currently matching record is not a guarantee that every package/model
