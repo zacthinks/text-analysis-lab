@@ -280,7 +280,9 @@ def test_secondary_abrupt_termination_is_correlated_and_does_not_auto_retry(
         pd.DataFrame({"text": [f"sample row {i}" for i in range(150)]}).to_csv(
             csv_path, index=False
         )
-        source_id = project.read_csv(csv_path, text_fields="text").artifact_id
+        source_id = project.read_csv(
+            csv_path, text_fields="text", metadata_fields=None,
+        ).artifact_id
         # This is the public request contract exercised directly so the test
         # can deliberately terminate the process after it registers an op.
         from text_analysis_lab.core.secondary_coordinator import _validate_request
