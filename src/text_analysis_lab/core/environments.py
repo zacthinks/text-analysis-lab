@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import re
 import sys
 import sysconfig
 from importlib import metadata
 from pathlib import Path
+from threading import RLock
 from urllib.parse import unquote, urlsplit
 from urllib.request import url2pathname
 from typing import TYPE_CHECKING, Any
@@ -46,23 +48,79 @@ def _canonical_json(value: dict[str, Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+# Cache content digests only while all observed files and parent directories
+# have unchanged metadata. File stats catch in-place edits; directory stats
+# catch added/removed files. No time-based expiry or blind process-wide snapshot.
+_SOURCE_DIGEST_CACHE: dict[
+    Path, tuple[dict[Path, tuple[int, int]], dict[Path, tuple[int, int, int]], str]
+] = {}
+_SOURCE_DIGEST_LOCK = RLock()
+
+
 def _source_digest(root: Path) -> str:
-    """Hash relevant source files by relative name and bytes, never by host path."""
-    digest = hashlib.sha256()
-    files = (
-        path for path in root.rglob("*")
-        if path.is_file()
-        and not any(part in _EXCLUDED_DIRS for part in path.relative_to(root).parts)
-        and (path.suffix in _SOURCE_EXTENSIONS or path.name in _SOURCE_FILES)
-    )
-    for path in sorted(files, key=lambda item: item.relative_to(root).as_posix()):
-        relative = path.relative_to(root).as_posix().encode("utf-8")
-        digest.update(len(relative).to_bytes(8, "big"))
-        digest.update(relative)
-        content = path.read_bytes()
-        digest.update(len(content).to_bytes(8, "big"))
-        digest.update(content)
-    return digest.hexdigest()
+    """Hash relevant source by relative names/bytes, pruning ignored trees.
+
+    A previous digest is reused only after validating directory and file
+    metadata. This avoids repeatedly reading source contents for every Project
+    open without missing ordinary edits, additions, or deletions.
+    """
+    root = Path(root).resolve()
+    with _SOURCE_DIGEST_LOCK:
+        cached = _SOURCE_DIGEST_CACHE.get(root)
+        if cached is not None:
+            directories, files, previous_digest = cached
+            try:
+                if all(
+                    (st.st_mtime_ns, st.st_ctime_ns) == signature
+                    for path, signature in directories.items()
+                    for st in (path.stat(),)
+                ) and all(
+                    (st.st_mtime_ns, st.st_ctime_ns, st.st_size) == signature
+                    for path, signature in files.items()
+                    for st in (path.stat(),)
+                ):
+                    return previous_digest
+            except OSError:
+                pass
+
+        digest = hashlib.sha256()
+        directories = {}
+        files = {}
+        paths: list[Path] = []
+        # rglob("*") traverses .venv before rejecting its contents. os.walk
+        # allows top-down pruning of dependencies and VCS metadata instead.
+        for directory, subdirs, filenames in os.walk(root, topdown=True):
+            subdirs[:] = sorted(
+                name for name in subdirs
+                if name not in _EXCLUDED_DIRS
+                and not (Path(directory) / name).is_symlink()
+            )
+            directory_path = Path(directory)
+            directory_stat = directory_path.stat()
+            directories[directory_path] = (
+                directory_stat.st_mtime_ns,
+                directory_stat.st_ctime_ns,
+            )
+            for filename in filenames:
+                candidate = directory_path / filename
+                if (
+                    not candidate.is_symlink()
+                    and (candidate.suffix in _SOURCE_EXTENSIONS or filename in _SOURCE_FILES)
+                ):
+                    paths.append(candidate)
+
+        for path in sorted(paths, key=lambda item: item.relative_to(root).as_posix()):
+            st = path.stat()
+            files[path] = (st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+            relative = path.relative_to(root).as_posix().encode("utf-8")
+            digest.update(len(relative).to_bytes(8, "big"))
+            digest.update(relative)
+            blob = path.read_bytes()
+            digest.update(len(blob).to_bytes(8, "big"))
+            digest.update(blob)
+        value = digest.hexdigest()
+        _SOURCE_DIGEST_CACHE[root] = (directories, files, value)
+        return value
 
 
 def _local_source_path(url: str) -> Path | None:
