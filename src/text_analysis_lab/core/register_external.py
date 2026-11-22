@@ -248,6 +248,7 @@ def register_external(
         operation_type="register",
         operator_id=operator_id,
         status="incomplete",
+        environment_id=project.environments.opening_id,
     )
     for source_label, artifact in resolved_sources.items():
         project.catalog.add_operation_source(
@@ -284,6 +285,7 @@ def register_external(
     descriptor: dict[str, Any] = {
         "schema_version": 1,
         "operation_id": operation_id,
+        "environment_id": project.environments.opening_id,
         "operation_type": "register",
         "operator_id": operator_id,
         "kind": "register_external",
