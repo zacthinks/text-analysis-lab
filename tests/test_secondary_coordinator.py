@@ -274,6 +274,13 @@ def test_secondary_abrupt_termination_is_correlated_and_does_not_auto_retry(
 ):
     project_path, source_id, executable, _, b, _ = two_interpreters
     with _open_bound(two_interpreters) as project:
+        # Enough small batches to reliably interrupt *after* the first
+        # checkpoint, not just during secondary process startup.
+        csv_path = tmp_path / "interrupt_source.csv"
+        pd.DataFrame({"text": [f"sample row {i}" for i in range(150)]}).to_csv(
+            csv_path, index=False
+        )
+        source_id = project.read_csv(csv_path, text_fields="text").artifact_id
         # This is the public request contract exercised directly so the test
         # can deliberately terminate the process after it registers an op.
         from text_analysis_lab.core.secondary_coordinator import _validate_request
@@ -304,14 +311,20 @@ def test_secondary_abrupt_termination_is_correlated_and_does_not_auto_retry(
             child.stdin.write(_json(request))
             child.stdin.close()
             operation = None
-            deadline = time.monotonic() + 30
+            ready = False
+            deadline = time.monotonic() + 45
             while time.monotonic() < deadline and child.poll() is None:
                 operation = project.catalog.operation_for_coordinator_request(request_id)
                 if operation is not None:
-                    break
+                    checkpoint = (
+                        project.storage.operation_temp_dir(operation["operation_id"])
+                        / "pass.json"
+                    )
+                    if checkpoint.exists():
+                        ready = True
+                        break
                 time.sleep(0.005)
-            if operation is None:
-                pytest.skip("Child completed before interrupt could be exercised")
+            assert ready, "Child never exposed a recoverable operation checkpoint."
             child.kill()
             child.wait(timeout=15)
             operation_id = operation["operation_id"]
@@ -319,12 +332,13 @@ def test_secondary_abrupt_termination_is_correlated_and_does_not_auto_retry(
             assert observed["coordinator_request_id"] == request_id
             assert observed["environment_id"] == b
             assert observed["status"] != "complete"
-            # No automatic retry. If incomplete state has a plan/checkpoint,
-            # researchers can resume explicitly under recorded B.
-            if project.storage.operation_plan_path(operation_id).exists():
+            with Project.open(project_path) as different:
                 with pytest.raises(EnvironmentRegistryError, match="no bound"):
-                    with Project.open(project_path) as different:
-                        different.resume_operation(operation_id)
+                    different.resume_operation(operation_id)
+            output = project.resume_operation(operation_id)["output"]
+            assert output.status == "complete"
+            assert output.n_rows == 150
+            assert project.get_operation(operation_id)["environment_id"] == b
         finally:
             if child.poll() is None:
                 child.kill()
