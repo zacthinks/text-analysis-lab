@@ -469,8 +469,6 @@ def test_legacy_resumable_operation_obeys_active_default_without_backfilling(
     import text_analysis_lab as teal
     from text_analysis_lab.core.environments import fingerprint_observation
     from text_analysis_lab.core.errors import OperatorError
-    from text_analysis_lab.core.translate import _ExecutionPlan
-
     _install_pickle_parquet(monkeypatch)
     rows = pd.DataFrame({"id": list(range(6))})
     _install_fake_source_queries(monkeypatch, rows)
