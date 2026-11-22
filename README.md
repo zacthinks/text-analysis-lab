@@ -40,9 +40,41 @@ can run successfully.
 
 `set_default()` only changes the active default of that *open Project
 instance*. Reopening always selects the actual opening interpreter again.
-It does not launch, switch, install or verify another Python interpreter.
-Execution routing and operation-level environment provenance are not part of
-this registry-only API.
+Registered operation provenance records the interpreter that actually executed
+each new scientific operation; historical operations without provenance are
+left unassigned.
+
+For the narrow cross-interpreter TextLength pilot, explicitly bind a registered
+environment to a locally installed executable in the current Project session:
+
+```python
+project = Project.open("my-project")
+# B must already have been registered by opening this project under B.
+project.environments.bind_interpreter(environment_b_id, "/path/to/B/bin/python")
+lengths = project.translate(
+    TextLength({"text": "words"}), documents,
+    environment=environment_b_id, workers=1,
+)["output"]
+```
+
+The executable binding is **not stored** in project history. TeAL probes the
+bound interpreter's complete installed-distribution fingerprint and requires
+matching registry identity and compatible protocol/TeAL versions. If B is
+unavailable or changed, execution rejects explicitly rather than running in A.
+B runs a single, separate TeAL coordinator process that owns the complete
+operation, its artifacts, checkpoints, and environment provenance. Its ordinary
+Dask workers may be used with `workers>1` when supported; no batches run
+under the parent interpreter. A completed operation returns normal artifact
+handles that can be queried from the original Project instance.
+
+This pilot supports **only new built-in `TextLength` translations** with a
+single artifact source and supported batching/alias settings, plus resume of
+recorded TextLength operations under their verified interpreter. Other
+translators, custom callables, cross-interpreter Pipelines, GPU provisioning,
+automatic environment creation, and general remote scheduling are not included.
+Remote failures include a request ID and, when the child registered an operation,
+an operation ID to support explicit diagnosis/resume; uncertain outcomes are
+never automatically retried.
 
 ## What TeAL supports
 
