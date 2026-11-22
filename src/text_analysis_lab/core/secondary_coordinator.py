@@ -325,7 +325,7 @@ def _return_artifacts(
     ):
         raise SecondaryCoordinatorError("Invalid secondary artifact IDs.")
     recorded = {
-        row["output_label"]: row["output_artifact_id"]
+        row["output_label"]: row["artifact_id"]
         for row in project.catalog.operation_outputs(opid)
     }
     if outputs != recorded:
