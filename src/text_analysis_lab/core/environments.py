@@ -246,6 +246,8 @@ class EnvironmentRegistry:
             observation_json=_canonical_json(observed),
         )
         self._default_id = self._opening_id
+        # Machine-local, per-Project references; never written to SQLite.
+        self._interpreter_bindings: dict[str, Path] = {}
 
     @property
     def opening_id(self) -> str:
@@ -270,6 +272,43 @@ class EnvironmentRegistry:
                 "or select the current interpreter."
             )
         return selected
+
+    def resolve(self, environment_id: str | None = None) -> str:
+        """Resolve an explicit registered ID or this instance's active default."""
+        if environment_id is None:
+            return self._default_id
+        return self.get(environment_id)["environment_id"]
+
+    def bind_interpreter(
+        self, environment_id: str, executable: str | Path
+    ) -> None:
+        """Bind a registered observation to a local Python executable for this session.
+
+        Binding is not proof of readiness: each remote execution probes the
+        executable's actual observation before any scientific work.
+        """
+        self.get(environment_id)
+        path = Path(executable).expanduser().absolute()
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise EnvironmentRegistryError(
+                f"Interpreter {str(path)!r} does not exist or is not executable."
+            )
+        self._interpreter_bindings[environment_id] = path
+
+    def bound_interpreter(self, environment_id: str) -> Path:
+        """Return this session's executable, or reject an unbound/missing one."""
+        self.get(environment_id)
+        path = self._interpreter_bindings.get(environment_id)
+        if path is None:
+            raise EnvironmentRegistryError(
+                f"Environment {environment_id!r} has no bound Python interpreter. "
+                "Call project.environments.bind_interpreter(...)."
+            )
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise EnvironmentRegistryError(
+                f"Bound interpreter {str(path)!r} is missing or not executable."
+            )
+        return path
 
     def _public_row(self, row: dict[str, Any]) -> dict[str, Any]:
         try:
