@@ -26,7 +26,7 @@ from text_analysis_lab.core.errors import OperatorError
 if TYPE_CHECKING:
     from text_analysis_lab.core.project import Project
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 TRANSLATOR_TYPE = "TextLength"
 TRANSLATOR_MODULE = "text_analysis_lab.translators.text_length"
 
@@ -184,19 +184,12 @@ def _execution_settings(
         raise SecondaryCoordinatorError("Pilot memo must be a string or None.")
     if type(overwrite) is not bool:
         raise SecondaryCoordinatorError("Pilot overwrite must be a bool.")
-    if alias is not None:
-        if isinstance(alias, str):
-            if not alias:
-                raise SecondaryCoordinatorError("Pilot alias must be nonempty.")
-        elif isinstance(alias, Mapping) and all(
-            isinstance(k, str) and k == "output" and isinstance(v, str) and v
-            for k, v in alias.items()
-        ) and len(alias) == 1:
-            alias = dict(alias)
-        else:
-            raise SecondaryCoordinatorError(
-                "Pilot accepts one output alias string or {'output': alias}."
-            )
+    # TextLength has a single output. Preserve the existing public alias
+    # contract rather than accepting mapping forms its local engine rejects.
+    if alias is not None and (not isinstance(alias, str) or not alias):
+        raise SecondaryCoordinatorError(
+            "Secondary TextLength pilot requires a nonempty string alias."
+        )
     return {
         "workers": workers, "batch_size": batch_size,
         "max_outstanding_units": max_outstanding_units, "memo": memo,
@@ -298,26 +291,48 @@ def _refresh_parent(project: Project) -> None:
 def _return_artifacts(
     project: Project, selected: str, response: dict[str, Any],
     request_id: str, *, expected_operation_id: str | None = None,
+    requested_alias: str | None = None, overwrite: bool = False,
 ) -> Mapping[str, Any]:
     _keys(response, {
         "protocol_version", "kind", "request_id", "status", "operation_id",
-        "output_artifact_ids", "environment_id",
+        "output_artifact_ids", "environment_id", "result_kind",
     })
     _version(response)
     if response["kind"] != "result" or response["request_id"] != request_id:
         raise SecondaryCoordinatorError("Mismatched secondary response.")
+    if response["status"] != "complete" or response["environment_id"] != selected:
+        raise SecondaryCoordinatorError("Secondary returned incompatible status or environment.")
+    result_kind = response["result_kind"]
+    if result_kind not in {"executed", "reused"}:
+        raise SecondaryCoordinatorError("Invalid secondary result kind.")
     opid = response["operation_id"]
     if not isinstance(opid, str) or not opid:
         raise SecondaryCoordinatorError("Secondary response omitted operation ID.")
     if expected_operation_id is not None and opid != expected_operation_id:
         raise SecondaryCoordinatorError("Secondary resumed the wrong operation.")
+
     operation = project.catalog.get_operation(opid)
-    if operation["environment_id"] != selected or operation["status"] != "complete":
-        raise SecondaryCoordinatorError("Secondary operation is not complete under selected environment.")
-    if expected_operation_id is None and operation["coordinator_request_id"] != request_id:
-        raise SecondaryCoordinatorError("Secondary operation request correlation mismatch.")
-    if response["status"] != "complete" or response["environment_id"] != selected:
-        raise SecondaryCoordinatorError("Secondary returned incompatible status or environment.")
+    if operation["status"] != "complete":
+        raise SecondaryCoordinatorError("Secondary result references an incomplete operation.")
+    if result_kind == "executed":
+        # Only the selected child may create an operation for this request.
+        # A resume executes an existing B operation, not a new one.
+        if operation["environment_id"] != selected:
+            raise SecondaryCoordinatorError(
+                "Executed operation has incorrect environment provenance."
+            )
+        if expected_operation_id is None and operation["coordinator_request_id"] != request_id:
+            raise SecondaryCoordinatorError("Secondary operation request correlation mismatch.")
+    else:
+        # Alias reuse legitimately returns an earlier artifact: there is *no*
+        # operation belonging to this request, and its historical executor need
+        # not be B. Check the actual alias and durable output edges instead.
+        if (
+            expected_operation_id is not None or not requested_alias or overwrite
+            or project.catalog.operation_for_coordinator_request(request_id) is not None
+        ):
+            raise SecondaryCoordinatorError("Invalid secondary alias-reuse claim.")
+
     outputs = response["output_artifact_ids"]
     if not isinstance(outputs, dict) or not outputs or not all(
         isinstance(label, str) and label and isinstance(aid, str) and aid
@@ -330,8 +345,14 @@ def _return_artifacts(
     }
     if outputs != recorded:
         raise SecondaryCoordinatorError("Returned output artifact IDs disagree with catalog.")
+    if result_kind == "reused":
+        if set(outputs) != {"output"} or (
+            project.resolve_artifact_id(requested_alias) != outputs["output"]
+        ):
+            raise SecondaryCoordinatorError(
+                "Secondary alias reuse does not match the requested existing alias."
+            )
     return {label: project.get_artifact(aid) for label, aid in outputs.items()}
-
 
 def _delegate(
     project: Project, selected: str, message: dict[str, Any],
@@ -370,9 +391,12 @@ def _delegate(
             request_id=request_id,
             operation_id=operation_id,
         )
+    settings = message["settings"] if message["kind"] == "translate" else None
     return _return_artifacts(
         project, selected, response, request_id,
         expected_operation_id=expected_operation_id,
+        requested_alias=None if settings is None else settings["alias"],
+        overwrite=False if settings is None else settings["overwrite"],
     )
 
 
@@ -478,12 +502,37 @@ def _child_run(message: dict[str, Any]) -> dict[str, Any]:
             )
             opid = next(iter(outputs.values())).descriptor["operation_id"]
         operation = project.catalog.get_operation(opid)
-        if operation["status"] != "complete" or operation["environment_id"] != project.environments.opening_id:
-            raise SecondaryCoordinatorError("Child operation did not complete with its executor provenance.")
+        result_kind = "executed"
+        if message["kind"] == "translate" and (
+            operation["coordinator_request_id"] != message["request_id"]
+        ):
+            # The normal TeAL engine can return an existing alias without
+            # allocating a new operation. Accept that *only* when its durable
+            # alias matches the returned artifact and overwrite was disabled.
+            alias = message["settings"]["alias"]
+            if (
+                not isinstance(alias, str) or message["settings"]["overwrite"]
+                or set(outputs) != {"output"}
+                or project.resolve_artifact_id(alias) != outputs["output"].artifact_id
+                or project.catalog.operation_for_coordinator_request(message["request_id"])
+                is not None
+            ):
+                raise SecondaryCoordinatorError(
+                    "Child returned an operation without matching request correlation."
+                )
+            result_kind = "reused"
+        if operation["status"] != "complete" or (
+            result_kind == "executed"
+            and operation["environment_id"] != project.environments.opening_id
+        ):
+            raise SecondaryCoordinatorError(
+                "Child operation did not complete with its executor provenance."
+            )
         return {
             "protocol_version": PROTOCOL_VERSION, "kind": "result",
             "request_id": message["request_id"], "status": "complete",
             "operation_id": opid, "environment_id": project.environments.opening_id,
+            "result_kind": result_kind,
             "output_artifact_ids": {k: v.artifact_id for k, v in outputs.items()},
         }
 
