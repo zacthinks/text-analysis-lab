@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import re
 import sys
 import sysconfig
 from importlib import metadata
+from pathlib import Path
+from threading import RLock
 from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, Any
 
@@ -89,6 +92,72 @@ def _distribution_record(dist: metadata.Distribution) -> dict[str, Any]:
     return record
 
 
+# Installation metadata is much cheaper to stat than to reparse on every
+# Project.open(). This cache never contains package source or model contents.
+_DISTRIBUTION_LOCK = RLock()
+_DISTRIBUTION_CACHE: tuple[tuple[Any, ...], list[dict[str, Any]]] | None = None
+
+
+def _distribution_metadata_signature() -> tuple[Any, ...]:
+    """Notice installed package changes, metadata edits and sys.path drift.
+
+    Resolve empty sys.path entries to the *current* working directory. Watch
+    the metadata files themselves: updating an existing METADATA/direct_url.json
+    need not change its containing directory's timestamp.
+    """
+    roots: list[tuple[Any, ...]] = []
+    for entry in sys.path:
+        base = Path(entry or os.getcwd()).absolute()
+        try:
+            st = base.stat()
+        except FileNotFoundError:
+            roots.append((str(base), "missing"))
+            continue
+
+        if not base.is_dir():
+            roots.append((str(base), st.st_mtime_ns, st.st_ctime_ns, st.st_size))
+            continue
+
+        distributions = []
+        with os.scandir(base) as scan:
+            for child in scan:
+                if not child.name.endswith((".dist-info", ".egg-info")):
+                    continue
+                directory = Path(child.path)
+                info = directory.stat()
+                files = []
+                if child.is_dir():
+                    for name in ("METADATA", "PKG-INFO", "direct_url.json"):
+                        try:
+                            part = (directory / name).stat()
+                            files.append((name, part.st_mtime_ns, part.st_ctime_ns, part.st_size))
+                        except FileNotFoundError:
+                            files.append((name, None))
+                distributions.append(
+                    (child.name, info.st_mtime_ns, info.st_ctime_ns,
+                     info.st_size, tuple(files))
+                )
+        roots.append(
+            (str(base), st.st_mtime_ns, st.st_ctime_ns,
+             tuple(sorted(distributions)))
+        )
+    return tuple(roots)
+
+
+def _installed_distributions() -> list[dict[str, Any]]:
+    """Reuse parsed inventory only while installation metadata is unchanged."""
+    global _DISTRIBUTION_CACHE
+    with _DISTRIBUTION_LOCK:
+        signature = _distribution_metadata_signature()
+        if _DISTRIBUTION_CACHE is None or _DISTRIBUTION_CACHE[0] != signature:
+            records = sorted(
+                (_distribution_record(dist) for dist in metadata.distributions()),
+                key=_canonical_json,
+            )
+            _DISTRIBUTION_CACHE = (signature, records)
+        return [record.copy() for record in _DISTRIBUTION_CACHE[1]]
+
+
 def observe_environment() -> dict[str, Any]:
     """Observe the current interpreter without reading unrelated environment vars.
 
@@ -97,12 +166,7 @@ def observe_environment() -> dict[str, Any]:
     fingerprints are portable software/platform observations, not lockfiles.
     """
     try:
-        # Observe current installed software on every open. No process-global
-        # cache or directory scan: additions/removals/version drift remain visible.
-        distributions = sorted(
-            (_distribution_record(dist) for dist in metadata.distributions()),
-            key=_canonical_json,
-        )
+        distributions = _installed_distributions()
         try:
             teal_version = metadata.version("text-analysis-lab")
         except metadata.PackageNotFoundError:
