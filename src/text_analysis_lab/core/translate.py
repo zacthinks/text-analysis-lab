@@ -590,14 +590,27 @@ def resume_translate(
     state. It does not call ``initialize_translation(...)``, which is reserved for
     new operations.
     """
-    # Enforce recorded executor before restoring operator state or touching
-    # checkpoints; legacy NULL provenance retains historical resume behavior.
+    # Existing operations keep their recorded execution identity. Historical
+    # operations with no provenance use the instance's active default for
+    # execution selection, without assigning a historical environment ID.
+    # Reject unsupported routing before restoring scientific state/checkpoints.
     recorded = project.catalog.get_operation(operation_id).get("environment_id")
-    if recorded is not None and recorded != project.environments.opening_id:
+    effective = (
+        recorded
+        if recorded is not None
+        else project.environments.default["environment_id"]
+    )
+    if effective != project.environments.opening_id:
+        origin = (
+            "its recorded execution environment"
+            if recorded is not None
+            else "the Project's active default environment"
+        )
         raise OperatorError(
-            f"Operation {operation_id!r} ran in environment {recorded!r}, "
-            "not the current interpreter. Cross-interpreter resume is not "
-            "yet supported; reopen the project under the recorded environment."
+            f"Operation {operation_id!r} requires {origin} {effective!r}, "
+            "not the current Python interpreter. Cross-interpreter resume is "
+            "not yet supported; reopen the project under the selected "
+            "environment or select the opening interpreter."
         )
     metadata = _load_operation_metadata(project, operation_id)
     translator = _load_translator_for_resume(project, operation_id, metadata)
