@@ -97,7 +97,7 @@ def test_unknown_or_noncurrent_selection_fails_without_persistent_mutation(tmp_p
 
         for selector, expected_error, message in (
             ("env_not_registered", EnvironmentNotFoundError, "registered"),
-            (other, EnvironmentRegistryError, "Cross-interpreter"),
+            (other, EnvironmentRegistryError, "no bound Python interpreter"),
         ):
             with pytest.raises(expected_error, match=message):
                 project.translate(
@@ -111,7 +111,7 @@ def test_unknown_or_noncurrent_selection_fails_without_persistent_mutation(tmp_p
             assert not any("forbidden" in str(row.get("aliases", ())) for row in project.list_artifacts())
 
         project.environments.set_default(other)
-        with pytest.raises(EnvironmentRegistryError, match="Cross-interpreter"):
+        with pytest.raises(EnvironmentRegistryError, match="no bound Python interpreter"):
             project.translate(TextLength({"text": "words"}), source)
         assert project.storage.manifest_path.read_bytes() == baseline
         assert project.list_operations() == before_ops
@@ -124,7 +124,7 @@ def test_feature_matrix_alternate_selection_fails_before_fit_or_ids(tmp_path):
         other = _alternate_environment(project)
         translator = FeatureMatrix(data_columns=False, metadata_columns=False)
         before = project.storage.manifest_path.read_bytes()
-        with pytest.raises(EnvironmentRegistryError, match="Cross-interpreter"):
+        with pytest.raises(OperatorError, match="only a new built-in TextLength"):
             project.translate(translator, source, environment=other)
         assert translator.operator_id is None
         assert project.storage.manifest_path.read_bytes() == before
@@ -186,7 +186,7 @@ def test_resume_rejects_mismatched_registered_executor_and_preserves_history(tmp
             operator_id="optr_test_resume", environment_id=b,
         )
         before = project.get_operation("oper_test_mismatch")
-        with pytest.raises(OperatorError, match="Cross-interpreter resume"):
+        with pytest.raises(OperatorError, match="requires an existing operation descriptor"):
             project.resume_operation("oper_test_mismatch")
         assert project.get_operation("oper_test_mismatch") == before
 
