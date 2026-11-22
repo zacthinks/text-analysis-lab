@@ -1015,6 +1015,7 @@ class Project:
         overwrite: bool = False,
         freeze_device: bool = False,
         environment: str | None = None,
+        _coordinator_request_id: str | None = None,
         **params: Any,
     ) -> Mapping[str, BaseArtifact]:
         """Run a translation operation and return output artifacts by label.
@@ -1024,9 +1025,21 @@ class Project:
         expose a typed ``translate(project, ...)`` convenience method that
         delegates here.
         """
-        # Check selection before adapting, fitting, allocating IDs or modifying
-        # persistent operation/alias state (including the FeatureMatrix path).
-        self.environments.require_local_execution(environment)
+        # R1: unsupported cross-interpreter requests are checked and delegated
+        # before any local scientific work, ID allocation, or alias changes.
+        selected = self.environments.resolve(environment)
+        if selected != self.environments.opening_id:
+            if _coordinator_request_id is not None:
+                raise OperatorError("Nested secondary coordination is unsupported.")
+            from text_analysis_lab.core.secondary_coordinator import delegate_translate
+
+            return delegate_translate(
+                self, selected, translator, sources, workers=workers,
+                batch_size=batch_size, batch_by=batch_by,
+                max_outstanding_units=max_outstanding_units, memo=memo,
+                alias=alias, overwrite=overwrite, freeze_device=freeze_device,
+                params=params,
+            )
         from text_analysis_lab.translators.feature_matrix import FeatureMatrix
         if not isinstance(freeze_device, bool):
             raise TypeError("freeze_device must be a bool.")
@@ -1061,6 +1074,7 @@ class Project:
             alias=alias,
             overwrite=overwrite,
             freeze_device=freeze_device,
+            coordinator_request_id=_coordinator_request_id,
             **params,
         )
 
@@ -1107,6 +1121,15 @@ class Project:
         """Resume a previously recorded resumable operation as configured."""
         operation = self.catalog.get_operation(str(operation_id))
         operation_type = str(operation["operation_type"])
+        selected = (
+            operation["environment_id"]
+            if operation["environment_id"] is not None
+            else self.environments.resolve()
+        )
+        if selected != self.environments.opening_id:
+            from text_analysis_lab.core.secondary_coordinator import delegate_resume
+
+            return delegate_resume(self, selected, str(operation_id))
         if operation_type in {"translate", "subset"}:
             return _resume_translate(self, str(operation_id))
         raise OperatorError(
