@@ -131,6 +131,7 @@ class _Runtime:
     writers_temp_dir: Path
     resumable: bool
     operator_snapshot_pending: bool
+    environment_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -589,6 +590,15 @@ def resume_translate(
     state. It does not call ``initialize_translation(...)``, which is reserved for
     new operations.
     """
+    # Enforce recorded executor before restoring operator state or touching
+    # checkpoints; legacy NULL provenance retains historical resume behavior.
+    recorded = project.catalog.get_operation(operation_id).get("environment_id")
+    if recorded is not None and recorded != project.environments.opening_id:
+        raise OperatorError(
+            f"Operation {operation_id!r} ran in environment {recorded!r}, "
+            "not the current interpreter. Cross-interpreter resume is not "
+            "yet supported; reopen the project under the recorded environment."
+        )
     metadata = _load_operation_metadata(project, operation_id)
     translator = _load_translator_for_resume(project, operation_id, metadata)
     mode = _validate_translation_mode(str(metadata["mode"]))
@@ -1568,6 +1578,7 @@ def _prepare_runtime(
         operation_type=translator.operation_type,
         operator_id=prepared_operator.operator_id,
         status="incomplete",
+        environment_id=project.environments.opening_id,
     )
 
     for label, artifact in sources.items():
@@ -1668,6 +1679,7 @@ def _prepare_runtime(
         writers_temp_dir=writers_temp_dir,
         resumable=translator.supports_resume(mode=mode, route=route),
         operator_snapshot_pending=prepared_operator.snapshot_pending,
+        environment_id=project.environments.opening_id,
     )
 
 
@@ -1712,6 +1724,7 @@ def _runtime_from_metadata(
             project.catalog.operator_snapshot_status(str(metadata["operator_id"]))
             == "pending"
         ),
+        environment_id=project.catalog.get_operation(operation_id).get("environment_id"),
     )
 
 
@@ -2585,6 +2598,7 @@ def _save_operation_metadata(
         "operation_id": runtime.operation_id,
         "operation_type": translator.operation_type,
         "operator_id": runtime.operator_id,
+        "environment_id": runtime.environment_id,
         "operator_snapshot_pending": runtime.operator_snapshot_pending,
         "freeze_device": freeze_device,
         "translator_class": {
