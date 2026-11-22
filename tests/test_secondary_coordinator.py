@@ -197,16 +197,29 @@ def test_pre_operation_failure_and_child_registered_failure(two_interpreters):
         # Delete a source payload part while preserving its valid descriptor;
         # input planning/reading fails within the owning secondary operation.
         source = project.get_artifact(source_id)
-        part = next(source.keys_dir.glob("part-*.parquet"))
+        assert source.data_dir is not None
+        part = next(source.data_dir.glob("part-*.parquet"))
+        original_data = part.read_bytes()
         part.unlink()
-        with pytest.raises(SecondaryOperationError) as error:
-            project.translate(TextLength({"text": "words"}), source_id, environment=b)
-        assert error.value.request_id
-        failed = project.catalog.operation_for_coordinator_request(error.value.request_id)
-        assert failed is not None
-        assert failed["environment_id"] == b
-        assert failed["status"] in {"failed", "incomplete"}
-        assert len(project.list_operations()) == count + 1
+        try:
+            with pytest.raises(SecondaryOperationError) as error:
+                project.translate(TextLength({"text": "words"}), source_id, environment=b)
+            assert error.value.request_id
+            failed = project.catalog.operation_for_coordinator_request(error.value.request_id)
+            assert failed is not None
+            assert failed["environment_id"] == b
+            assert failed["status"] in {"failed", "incomplete"}
+            assert len(project.list_operations()) == count + 1
+        finally:
+            part.write_bytes(original_data)
+
+        # Explicit recovery goes to B, based on recorded provenance.
+        restored = project.resume_operation(failed["operation_id"])["output"]
+        assert restored.status == "complete"
+        assert project.operation_for_artifact(restored)["environment_id"] == b
+        with Project.open(project_path) as unbound:
+            with pytest.raises(EnvironmentRegistryError, match="no bound"):
+                unbound.resume_operation(failed["operation_id"])
 
 
 @pytest.mark.acceptance
