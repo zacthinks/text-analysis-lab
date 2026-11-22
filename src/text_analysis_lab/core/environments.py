@@ -190,6 +190,91 @@ def _distribution_record(dist: metadata.Distribution) -> dict[str, Any]:
     return record
 
 
+# Reuse installed-distribution metadata while the environment's metadata
+# files are unchanged. Unlike caching a whole observation, this still checks
+# editable/local source digests on every Project opening.
+_DISTRIBUTION_CACHE: tuple[
+    tuple[Any, ...], list[tuple[dict[str, Any], Path | None]]
+] | None = None
+_DISTRIBUTION_LOCK = RLock()
+
+
+def _distribution_metadata_signature() -> tuple[Any, ...]:
+    """Metadata-only filesystem signature for the interpreter's sys.path.
+
+    Detect installed/removed packages, version-file edits, and changes to
+    direct_url.json without reading all distribution metadata repeatedly.
+    """
+    roots: list[tuple[Any, ...]] = []
+    for entry in sys.path:
+        if not entry:
+            continue
+        base = Path(entry)
+        if not base.exists():
+            roots.append((str(base), "missing"))
+            continue
+        if not base.is_dir():
+            st = base.stat()
+            roots.append((str(base), st.st_mtime_ns, st.st_ctime_ns, st.st_size))
+            continue
+
+        st = base.stat()
+        items = []
+        with os.scandir(base) as scan:
+            for item in scan:
+                if not item.name.endswith((".dist-info", ".egg-info")):
+                    continue
+                path = Path(item.path)
+                pst = path.stat()
+                key = [item.name, pst.st_mtime_ns, pst.st_ctime_ns, pst.st_size]
+                if item.is_dir(follow_symlinks=False):
+                    for filename in ("METADATA", "PKG-INFO", "direct_url.json"):
+                        candidate = path / filename
+                        try:
+                            fst = candidate.stat()
+                            key.append((filename, fst.st_mtime_ns, fst.st_ctime_ns, fst.st_size))
+                        except FileNotFoundError:
+                            key.append((filename, None))
+                items.append(tuple(key))
+        roots.append(
+            (str(base), st.st_mtime_ns, st.st_ctime_ns, tuple(sorted(items)))
+        )
+    return tuple(roots)
+
+
+def _installed_distributions() -> list[dict[str, Any]]:
+    """Refresh only modified installation metadata and local source content."""
+    global _DISTRIBUTION_CACHE
+    with _DISTRIBUTION_LOCK:
+        signature = _distribution_metadata_signature()
+        if _DISTRIBUTION_CACHE is None or _DISTRIBUTION_CACHE[0] != signature:
+            records = []
+            for dist in metadata.distributions():
+                record = _distribution_record(dist)
+                source_path = None
+                direct_text = dist.read_text("direct_url.json")
+                if direct_text is not None:
+                    direct = json.loads(direct_text)
+                    source_path = _local_source_path(str(direct.get("url", "")))
+                records.append((record, source_path))
+            _DISTRIBUTION_CACHE = (signature, records)
+
+        # Source-tree edits must invalidate observations even when the dist-info
+        # metadata in site-packages remains unchanged.
+        refreshed = []
+        for record, source_path in _DISTRIBUTION_CACHE[1]:
+            current = record.copy()
+            if source_path is not None:
+                if source_path.is_dir():
+                    current["local_source_sha256"] = _source_digest(source_path)
+                    current.pop("local_source_available", None)
+                else:
+                    current.pop("local_source_sha256", None)
+                    current["local_source_available"] = False
+            refreshed.append(current)
+        return sorted(refreshed, key=_canonical_json)
+
+
 def observe_environment() -> dict[str, Any]:
     """Observe the current interpreter without reading unrelated environment vars.
 
@@ -198,8 +283,7 @@ def observe_environment() -> dict[str, Any]:
     fingerprints are portable software/platform observations, not lockfiles.
     """
     try:
-        distributions = [_distribution_record(dist) for dist in metadata.distributions()]
-        distributions.sort(key=lambda item: _canonical_json(item))
+        distributions = _installed_distributions()
         package_root = Path(__file__).resolve().parents[1]
         teal_source_sha = _source_digest(package_root)
         try:
