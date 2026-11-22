@@ -267,13 +267,19 @@ def test_observe_installed_inventory_and_ignore_model_and_json_files(
             })())
         return entries
 
+    signature = {"value": "initial"}
+    monkeypatch.setattr(env_module, "_DISTRIBUTION_CACHE", None)
+    monkeypatch.setattr(
+        env_module, "_distribution_metadata_signature",
+        lambda: (signature["value"],),
+    )
     monkeypatch.setattr(env_module.metadata, "distributions", installed)
     first = env_module.observe_environment()
     packages = first["distributions"]
     assert {"name": "en-core-web-sm", "version": "3.8.0"} in packages
     assert "source_sha256" not in first["teal"]
     assert env_module.observe_environment() == first
-    assert calls["count"] == 2, "each observation must rediscover installed packages"
+    assert calls["count"] == 1, "unchanged metadata should reuse the inventory"
 
     # Changes to downloaded model assets and scientific JSON files are not
     # changes to the installed Python-distribution inventory.
@@ -291,20 +297,23 @@ def test_observe_installed_inventory_and_ignore_model_and_json_files(
     assert env_module.fingerprint_observation(env_module.observe_environment()) == baseline
 
     versions["model"] = "3.9.0"
+    signature["value"] = "model-version-changed"
     changed = env_module.observe_environment()
     assert env_module.fingerprint_observation(changed) != baseline
     assert {"name": "en-core-web-sm", "version": "3.9.0"} in changed["distributions"]
 
     versions["extra"] = True
+    signature["value"] = "package-added"
     added = env_module.observe_environment()
     assert env_module.fingerprint_observation(added) != env_module.fingerprint_observation(changed)
     assert {"name": "new-package", "version": "2.0"} in added["distributions"]
 
     versions["extra"] = False
+    signature["value"] = "package-removed"
     assert env_module.observe_environment() == changed
 
 
-def test_discovery_sees_import_path_changes_without_process_cache(monkeypatch, tmp_path):
+def test_discovery_sees_import_path_and_current_directory_changes(monkeypatch, tmp_path):
     """Standard metadata discovery, including sys.path's empty current-dir entry."""
     import importlib
     from importlib import metadata as real_metadata
@@ -330,6 +339,21 @@ def test_discovery_sees_import_path_changes_without_process_cache(monkeypatch, t
         assert {"name": "special-model", "version": "1.0"} in found
         inventory = env_module.observe_environment()["distributions"]
         assert {"name": "special-model", "version": "1.0"} in inventory
+
+        # Moving the cwd changes what an empty sys.path entry means.
+        other_dir = tmp_path / "another-project"
+        other_dir.mkdir()
+        other_info = other_dir / "second-model-2.0.dist-info"
+        other_info.mkdir()
+        (other_info / "METADATA").write_text(
+            "Metadata-Version: 2.1\\nName: second-model\\nVersion: 2.0\\n",
+            encoding="utf-8",
+        )
+        patch.chdir(other_dir)
+        importlib.invalidate_caches()
+        other_inventory = env_module.observe_environment()["distributions"]
+        assert {"name": "second-model", "version": "2.0"} in other_inventory
+        assert {"name": "special-model", "version": "1.0"} not in other_inventory
 
 
 def test_missing_historical_local_source_does_not_block_registry(tmp_path, simulated):
