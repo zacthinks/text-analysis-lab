@@ -28,7 +28,7 @@ def observation(label: str, *, package_version: str = "1", name: str = "sample")
         "schema_version": 1,
         "python": {"implementation": "cpython", "version": "3.11.0"},
         "platform": {"system": "Test", "machine": "testing"},
-        "teal": {"version": "0.12.2", "source_sha256": "a" * 64},
+        "teal": {"version": "0.12.2"},
         "distributions": [{"name": name, "version": package_version}, {"name": "teal", "version": label}],
     }
 
@@ -199,7 +199,7 @@ def test_versioned_fingerprint_changes_with_relevant_details():
         fingerprint_observation({"schema_version": 99})
 
 
-def test_direct_urls_are_sanitized_and_local_source_drift_is_detected(tmp_path):
+def test_direct_urls_are_sanitized_without_reading_local_sources(tmp_path):
     class FakeDistribution:
         version = "1.0"
         metadata = {"Name": "local-test"}
@@ -211,27 +211,125 @@ def test_direct_urls_are_sanitized_and_local_source_drift_is_detected(tmp_path):
             assert name == "direct_url.json"
             return self.url
 
-    url = json.dumps({
-        "url": (tmp_path / "source").as_uri(),
-        "dir_info": {"editable": True},
-    })
     source = tmp_path / "source"
     source.mkdir()
-    (source / "module.py").write_text("x = 1\n", encoding="utf-8")
-    first = env_module._distribution_record(FakeDistribution(url))
-    assert first["editable"] is True
-    assert first["local_install"] is True
-    assert str(source) not in json.dumps(first)
-    (source / "module.py").write_text("x = 2\n", encoding="utf-8")
-    second = env_module._distribution_record(FakeDistribution(url))
-    assert first["local_source_sha256"] != second["local_source_sha256"]
+    local = FakeDistribution(json.dumps({
+        "url": source.as_uri(), "dir_info": {"editable": True},
+    }))
+    first = env_module._distribution_record(local)
+    assert first == {
+        "name": "local-test",
+        "version": "1.0",
+        "direct_install": True,
+        "editable": True,
+        "local_install": True,
+    }
+    (source / "module.py").write_text("x = 2\\n", encoding="utf-8")
+    assert env_module._distribution_record(local) == first
     remote = env_module._distribution_record(FakeDistribution(json.dumps({
         "url": "https://user:secret@example.test/archive.whl?token=private",
         "archive_info": {"hashes": {"sha256": "b" * 64}},
+        "vcs_info": {"vcs": "git", "commit_id": "a" * 40},
     })))
     assert "secret" not in json.dumps(remote)
     assert "token" not in json.dumps(remote)
     assert remote["archive_sha256"] == "b" * 64
+    assert remote["vcs_commit"] == "a" * 40
+
+
+def test_observe_installed_inventory_and_ignore_model_and_json_files(
+    tmp_path, monkeypatch
+):
+    """A package-installed spaCy model is ordinary distribution metadata.
+
+    Downloaded model assets and scientific rules are not part of the registry.
+    """
+    class FakeDistribution:
+        metadata = {"Name": "en_core_web_sm"}
+
+        def __init__(self, version):
+            self.version = version
+
+        def read_text(self, name):
+            return None
+
+    versions = {"model": "3.8.0", "extra": False}
+    calls = {"count": 0}
+
+    def installed():
+        calls["count"] += 1
+        entries = [FakeDistribution(versions["model"])]
+        if versions["extra"]:
+            entries.append(type("OtherDistribution", (), {
+                "metadata": {"Name": "New-Package"},
+                "version": "2.0",
+                "read_text": lambda self, name: None,
+            })())
+        return entries
+
+    monkeypatch.setattr(env_module.metadata, "distributions", installed)
+    first = env_module.observe_environment()
+    packages = first["distributions"]
+    assert {"name": "en-core-web-sm", "version": "3.8.0"} in packages
+    assert "source_sha256" not in first["teal"]
+    assert env_module.observe_environment() == first
+    assert calls["count"] == 2, "each observation must rediscover installed packages"
+
+    # Changes to downloaded model assets and scientific JSON files are not
+    # changes to the installed Python-distribution inventory.
+    model = tmp_path / "model-download" / "weights.bin"
+    model.parent.mkdir()
+    model.write_bytes(b"old weights")
+    rules = tmp_path / "linguistic-rules.json"
+    rules.write_text('{"rule": 1}', encoding="utf-8")
+    source = tmp_path / "module.py"
+    source.write_text("value = 1", encoding="utf-8")
+    baseline = env_module.fingerprint_observation(first)
+    model.write_bytes(b"new weights")
+    rules.write_text('{"rule": 2}', encoding="utf-8")
+    source.write_text("value = 2", encoding="utf-8")
+    assert env_module.fingerprint_observation(env_module.observe_environment()) == baseline
+
+    versions["model"] = "3.9.0"
+    changed = env_module.observe_environment()
+    assert env_module.fingerprint_observation(changed) != baseline
+    assert {"name": "en-core-web-sm", "version": "3.9.0"} in changed["distributions"]
+
+    versions["extra"] = True
+    added = env_module.observe_environment()
+    assert env_module.fingerprint_observation(added) != env_module.fingerprint_observation(changed)
+    assert {"name": "new-package", "version": "2.0"} in added["distributions"]
+
+    versions["extra"] = False
+    assert env_module.observe_environment() == changed
+
+
+def test_discovery_sees_import_path_changes_without_process_cache(monkeypatch, tmp_path):
+    """Standard metadata discovery, including sys.path's empty current-dir entry."""
+    import importlib
+    from importlib import metadata as real_metadata
+
+    pkg_dir = tmp_path / "project"
+    pkg_dir.mkdir()
+    info = pkg_dir / "special-model-1.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text(
+        "Metadata-Version: 2.1\\nName: special-model\\nVersion: 1.0\\n",
+        encoding="utf-8",
+    )
+    # Do not monkeypatch metadata.distributions here: exercise real discovery.
+    with monkeypatch.context() as patch:
+        patch.chdir(pkg_dir)
+        patch.syspath_prepend("")
+        importlib.invalidate_caches()
+        found = [
+            {"name": d.metadata.get("Name"), "version": d.version}
+            for d in real_metadata.distributions()
+            if d.metadata.get("Name") == "special-model"
+        ]
+        assert found == [{"name": "special-model", "version": "1.0"}]
+        inventory = env_module.observe_environment()["distributions"]
+        assert {"name": "special-model", "version": "1.0"} in inventory
 
 
 def test_missing_historical_local_source_does_not_block_registry(tmp_path, simulated):
@@ -244,103 +342,6 @@ def test_missing_historical_local_source_does_not_block_registry(tmp_path, simul
         assert len(project.environments.list()) == 2
 
 
-def test_distribution_metadata_cache_detects_version_drift_and_local_source_edits(
-    tmp_path, monkeypatch
-):
-    source = tmp_path / "editable"
-    source.mkdir()
-    module = source / "module.py"
-    module.write_text("version = 1\\n", encoding="utf-8")
-    version = {"value": "1"}
-    signature = {"value": "a"}
-    calls = {"count": 0}
-
-    class DummyDistribution:
-        metadata = {"Name": "local-test"}
-
-        @property
-        def version(self):
-            return version["value"]
-
-        def read_text(self, name):
-            if name == "direct_url.json":
-                return json.dumps({
-                    "url": source.as_uri(), "dir_info": {"editable": True},
-                })
-            return None
-
-    def fake_distributions():
-        calls["count"] += 1
-        return [DummyDistribution()]
-
-    monkeypatch.setattr(env_module, "_DISTRIBUTION_CACHE", None)
-    monkeypatch.setattr(
-        env_module, "_distribution_metadata_signature",
-        lambda: (signature["value"],),
-    )
-    monkeypatch.setattr(env_module.metadata, "distributions", fake_distributions)
-
-    first = env_module._installed_distributions()
-    assert calls["count"] == 1
-    assert env_module._installed_distributions() == first
-    assert calls["count"] == 1, "stable site metadata should not be re-parsed"
-
-    module.write_text("version = 2\\n", encoding="utf-8")
-    edited = env_module._installed_distributions()
-    assert edited[0]["local_source_sha256"] != first[0]["local_source_sha256"]
-    assert calls["count"] == 1, "source changes do not require inventory re-enumeration"
-
-    version["value"] = "2"
-    signature["value"] = "b"
-    drifted = env_module._installed_distributions()
-    assert calls["count"] == 2
-    assert drifted[0]["version"] == "2"
-
-
-def test_source_digest_prunes_venvs_and_caches_safe_source_reads(tmp_path, monkeypatch):
-    root = tmp_path / "editable"
-    source = root / "src" / "unit.py"
-    source.parent.mkdir(parents=True)
-    source.write_text("value = 1\\n", encoding="utf-8")
-    ignored = root / ".venv" / "lib" / "library.py"
-    ignored.parent.mkdir(parents=True)
-    ignored.write_text("giant package should not be touched\\n", encoding="utf-8")
-
-    original_scandir = os.scandir
-
-    def guard_scandir(path):
-        if Path(path) == root / ".venv":
-            raise AssertionError("source fingerprint traversed a virtual environment")
-        return original_scandir(path)
-
-    original_read_bytes = Path.read_bytes
-    reads = []
-
-    def tracking_read_bytes(path):
-        if path == source:
-            reads.append(path)
-        if path == ignored:
-            raise AssertionError("source fingerprint read an excluded dependency")
-        return original_read_bytes(path)
-
-    monkeypatch.setattr(os, "scandir", guard_scandir)
-    monkeypatch.setattr(Path, "read_bytes", tracking_read_bytes)
-
-    first = env_module._source_digest(root)
-    assert env_module._source_digest(root) == first
-    assert len(reads) == 1, "identical source should reuse the cached digest"
-
-    source.write_text("value = 2\\n", encoding="utf-8")
-    second = env_module._source_digest(root)
-    assert second != first
-    assert len(reads) == 2, "modified source must invalidate cached digest"
-
-    added = root / "src" / "new.py"
-    added.write_text("another = 1\\n", encoding="utf-8")
-    third = env_module._source_digest(root)
-    assert third != second, "adding source must invalidate the digest"
-    added.unlink()
-    assert env_module._source_digest(root) == second, "removing source must invalidate it"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="separate-venv smoke is covered on POSIX CI")
