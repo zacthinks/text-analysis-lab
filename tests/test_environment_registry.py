@@ -244,6 +244,59 @@ def test_missing_historical_local_source_does_not_block_registry(tmp_path, simul
         assert len(project.environments.list()) == 2
 
 
+def test_distribution_metadata_cache_detects_version_drift_and_local_source_edits(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "editable"
+    source.mkdir()
+    module = source / "module.py"
+    module.write_text("version = 1\\n", encoding="utf-8")
+    version = {"value": "1"}
+    signature = {"value": "a"}
+    calls = {"count": 0}
+
+    class DummyDistribution:
+        metadata = {"Name": "local-test"}
+
+        @property
+        def version(self):
+            return version["value"]
+
+        def read_text(self, name):
+            if name == "direct_url.json":
+                return json.dumps({
+                    "url": source.as_uri(), "dir_info": {"editable": True},
+                })
+            return None
+
+    def fake_distributions():
+        calls["count"] += 1
+        return [DummyDistribution()]
+
+    monkeypatch.setattr(env_module, "_DISTRIBUTION_CACHE", None)
+    monkeypatch.setattr(
+        env_module, "_distribution_metadata_signature",
+        lambda: (signature["value"],),
+    )
+    monkeypatch.setattr(env_module.metadata, "distributions", fake_distributions)
+
+    first = env_module._installed_distributions()
+    assert calls["count"] == 1
+    assert env_module._installed_distributions() == first
+    assert calls["count"] == 1, "stable site metadata should not be re-parsed"
+
+    module.write_text("version = 2\\n", encoding="utf-8")
+    edited = env_module._installed_distributions()
+    assert edited[0]["local_source_sha256"] != first[0]["local_source_sha256"]
+    assert calls["count"] == 1, "source changes do not require inventory re-enumeration"
+
+    version["value"] = "2"
+    signature["value"] = "b"
+    drifted = env_module._installed_distributions()
+    assert calls["count"] == 2
+    assert drifted[0]["version"] == "2"
+
+
 def test_source_digest_prunes_venvs_and_caches_safe_source_reads(tmp_path, monkeypatch):
     root = tmp_path / "editable"
     source = root / "src" / "unit.py"
