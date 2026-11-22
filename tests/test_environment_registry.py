@@ -151,18 +151,12 @@ def test_concurrent_open_reuses_single_registry_identity(tmp_path, simulated):
 
 
 def test_registration_failure_rolls_back_without_changing_existing_records(
-    tmp_path, simulated, monkeypatch
+    tmp_path, simulated
 ):
     path = tmp_path / "project"
     with Project.create(path, "project") as project:
         first = project.environments.default
     simulated["value"] = observation("D")
-    original = env_module.EnvironmentRegistry._public_row
-
-    def fail_registration(self, row):
-        return original(self, row)
-
-    monkeypatch.setattr(env_module.EnvironmentRegistry, "_public_row", fail_registration)
     # SQL trigger simulates a write failure before INSERT completion.
     db = path / ".teal" / "catalog" / "catalog.sqlite"
     with sqlite3.connect(db) as con:
@@ -252,13 +246,22 @@ def test_missing_historical_local_source_does_not_block_registry(tmp_path, simul
 @pytest.mark.skipif(sys.platform == "win32", reason="separate-venv smoke is covered on POSIX CI")
 def test_real_independent_venv_opening_is_a_distinct_observation(tmp_path, monkeypatch):
     """Actual second interpreter, with inherited dependencies, not a mocked execution route."""
-    monkeypatch.undo()
     project_path = tmp_path / "study"
     with Project.create(project_path, "study") as project:
         parent_id = project.environments.default["environment_id"]
     venv_path = tmp_path / "independent"
     venv.EnvBuilder(with_pip=False, system_site_packages=True).create(venv_path)
     python = venv_path / "bin" / "python"
+    site_result = subprocess.run(
+        [str(python), "-c", "import site; print(site.getsitepackages()[0])"],
+        capture_output=True, text=True, timeout=30, check=True,
+    )
+    dist_info = Path(site_result.stdout.strip()) / "r0a_probe-1.0.dist-info"
+    dist_info.mkdir(parents=True)
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: r0a-probe\nVersion: 1.0\n",
+        encoding="utf-8",
+    )
     script = (
         "from text_analysis_lab import Project; import sys; "
         "p=Project.open(sys.argv[1]); "
@@ -272,8 +275,9 @@ def test_real_independent_venv_opening_is_a_distinct_observation(tmp_path, monke
         check=True,
     )
     child_id = result.stdout.strip().splitlines()[-1]
-    # Same package inventory/platform can legitimately result in identical identities.
+    # The child really has a distinct distribution inventory.
     assert child_id.startswith("env_")
+    assert child_id != parent_id
     with Project.open(project_path) as project:
         assert project.environments.get(child_id)["environment_id"] == child_id
         assert project.environments.default["environment_id"] == parent_id
