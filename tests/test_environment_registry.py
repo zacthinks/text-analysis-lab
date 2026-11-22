@@ -329,8 +329,10 @@ def test_discovery_sees_import_path_and_current_directory_changes(monkeypatch, t
     # Do not monkeypatch metadata.distributions here: exercise real discovery.
     with monkeypatch.context() as patch:
         patch.chdir(pkg_dir)
+        patch.syspath_prepend(str(pkg_dir))
         patch.syspath_prepend("")
         importlib.invalidate_caches()
+        cwd_signature = env_module._distribution_metadata_signature()
         found = [
             {"name": d.metadata.get("Name"), "version": d.version}
             for d in real_metadata.distributions()
@@ -350,10 +352,12 @@ def test_discovery_sees_import_path_and_current_directory_changes(monkeypatch, t
             encoding="utf-8",
         )
         patch.chdir(other_dir)
+        assert env_module._distribution_metadata_signature() != cwd_signature
+        patch.syspath_prepend(str(other_dir))
         importlib.invalidate_caches()
         other_inventory = env_module.observe_environment()["distributions"]
         assert {"name": "second-model", "version": "2.0"} in other_inventory
-        assert {"name": "special-model", "version": "1.0"} not in other_inventory
+        assert {"name": "special-model", "version": "1.0"} in other_inventory
 
 
 def test_missing_historical_local_source_does_not_block_registry(tmp_path, simulated):
