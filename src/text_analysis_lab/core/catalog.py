@@ -218,6 +218,14 @@ class ProjectCatalog:
                 CREATE INDEX IF NOT EXISTS idx_legacy_operation_rebinds_sync
                 ON legacy_operation_rebinds(descriptor_synced, operation_id);
 
+                CREATE TABLE IF NOT EXISTS project_environments (
+                    environment_id TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    schema_version INTEGER NOT NULL,
+                    observation_json TEXT NOT NULL,
+                    registered_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS memos (
                     memo_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     target_type TEXT NOT NULL,
@@ -246,6 +254,76 @@ class ProjectCatalog:
                 column="reuse_status",
                 definition="TEXT NOT NULL DEFAULT 'legacy_unknown'",
             )
+
+    # ------------------------------------------------------------------
+    # Immutable environment observations (project history, not executors)
+    # ------------------------------------------------------------------
+
+    def register_environment(
+        self,
+        *,
+        fingerprint: str,
+        schema_version: int,
+        observation_json: str,
+    ) -> str:
+        """Atomically reuse identical observations or append a new identity.
+
+        The fingerprint uniqueness constraint handles overlapping Project.open()
+        calls in different processes. Never update an existing observation.
+        """
+        environment_id = "env_" + fingerprint
+        con = self.con
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            existing = con.execute(
+                """
+                SELECT environment_id, schema_version, observation_json
+                FROM project_environments WHERE fingerprint = ?
+                """,
+                (fingerprint,),
+            ).fetchone()
+            if existing is None:
+                con.execute(
+                    """
+                    INSERT INTO project_environments
+                        (environment_id, fingerprint, schema_version,
+                         observation_json, registered_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        environment_id,
+                        fingerprint,
+                        schema_version,
+                        observation_json,
+                        utc_now_iso(),
+                    ),
+                )
+            elif (
+                existing["environment_id"] != environment_id
+                or existing["schema_version"] != schema_version
+                or existing["observation_json"] != observation_json
+            ):
+                raise ValueError(
+                    "Stored environment fingerprint conflicts with the new observation."
+                )
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+        return environment_id
+
+    def get_environment(self, environment_id: str) -> dict[str, Any] | None:
+        row = self.con.execute(
+            "SELECT * FROM project_environments WHERE environment_id = ?",
+            (environment_id,),
+        ).fetchone()
+        return self._dict(row)
+
+    def list_environments(self) -> list[dict[str, Any]]:
+        rows = self.con.execute(
+            "SELECT * FROM project_environments ORDER BY registered_at, rowid"
+        ).fetchall()
+        return self._dicts(rows)
 
     # ------------------------------------------------------------------
     # Shared helpers
