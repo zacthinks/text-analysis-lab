@@ -224,7 +224,7 @@ def test_direct_urls_are_sanitized_without_reading_local_sources(tmp_path):
         "editable": True,
         "local_install": True,
     }
-    (source / "module.py").write_text("x = 2\\n", encoding="utf-8")
+    (source / "module.py").write_text("x = 2\n", encoding="utf-8")
     assert env_module._distribution_record(local) == first
     remote = env_module._distribution_record(FakeDistribution(json.dumps({
         "url": "https://user:secret@example.test/archive.whl?token=private",
@@ -323,7 +323,7 @@ def test_discovery_sees_import_path_and_current_directory_changes(monkeypatch, t
     info = pkg_dir / "special-model-1.0.dist-info"
     info.mkdir()
     (info / "METADATA").write_text(
-        "Metadata-Version: 2.1\\nName: special-model\\nVersion: 1.0\\n",
+        "Metadata-Version: 2.1\nName: special-model\nVersion: 1.0\n",
         encoding="utf-8",
     )
     # Do not monkeypatch metadata.distributions here: exercise real discovery.
@@ -348,7 +348,7 @@ def test_discovery_sees_import_path_and_current_directory_changes(monkeypatch, t
         other_info = other_dir / "second-model-2.0.dist-info"
         other_info.mkdir()
         (other_info / "METADATA").write_text(
-            "Metadata-Version: 2.1\\nName: second-model\\nVersion: 2.0\\n",
+            "Metadata-Version: 2.1\nName: second-model\nVersion: 2.0\n",
             encoding="utf-8",
         )
         patch.chdir(other_dir)
