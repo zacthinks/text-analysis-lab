@@ -538,6 +538,49 @@ class EnvironmentRegistry:
         """Registered identity of the interpreter running this Project instance."""
         return self._opening_id
 
+    def same_verified_realization(
+        self, first: str, second: str, *, observed_id: str,
+    ) -> bool:
+        """Recognize ONLY a verified observed/portable pair for one installation.
+
+        Equality never means arbitrary portable specifications or two observed
+        inventories are interchangeable. The R0 association must exist and its
+        locked realization must still match the registered observed inventory.
+        Passing an observed_id makes this usable by a parent validating the
+        independently probed *child*, not just its own opening interpreter.
+        """
+        if first == second:
+            return True
+        if observed_id not in {first, second}:
+            return False
+        portable_id = second if first == observed_id else first
+        observed = self.get(observed_id)["observation"]
+        if observed["kind"] != "observed_unlocked":
+            return False
+        if portable_id not in self._catalog.portable_realizations_for(observed_id):
+            return False
+        return self._matches_portable(portable_id, observed)
+
+    def is_current_interpreter(self, environment_id: str) -> bool:
+        """Whether a selector is the verified running interpreter.
+
+        The current portable logical ID and its original observed inventory
+        can both refer to this interpreter, but a different portable ID cannot
+        silently become the current choice. Re-observe before accepting that
+        alias so installed-package drift cannot exploit a historical mapping.
+        """
+        if environment_id == self._opening_id:
+            return True
+        if (environment_id != self._observed_id
+                or self._opening_id == self._observed_id):
+            return False
+        actual = normalize_environment(observe_environment())
+        if "env_" + fingerprint_observation(actual) != self._observed_id:
+            return False
+        return self.same_verified_realization(
+            environment_id, self._opening_id, observed_id=self._observed_id,
+        )
+
     def require_local_execution(self, environment_id: str | None = None) -> str:
         """Resolve the selector; fail before scientific work when it is not local.
 
@@ -548,7 +591,7 @@ class EnvironmentRegistry:
             self._default_id if environment_id is None
             else self.get(environment_id)["environment_id"]
         )
-        if selected != self._opening_id:
+        if not self.is_current_interpreter(selected):
             raise EnvironmentRegistryError(
                 f"Selected environment {selected!r} is registered but is not "
                 "the current Python interpreter. Cross-interpreter execution "
