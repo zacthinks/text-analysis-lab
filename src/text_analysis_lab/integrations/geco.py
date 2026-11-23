@@ -1507,6 +1507,9 @@ class GeCoManager:
                 f"Workspace {workspace_name!r} requires project.geco.{expected}(...)."
             )
         selected = self.project.environments.resolve(environment)
+        from text_analysis_lab.integrations.geco_process import assert_port_available
+
+        assert_port_available(host, port)
         if self.project.environments.is_current_interpreter(selected):
             linked = self.open(workspace_name)
             if focus:
