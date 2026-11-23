@@ -160,6 +160,9 @@ def test_matching_installed_exact_version_and_git_origin(monkeypatch):
     obs["distributions"][1]["version"] = "2.2.0"
     obs["distributions"].append({"name": "extra", "version": "1.0"})
     assert not locks.matches_installed(spec, obs)
+    obs["distributions"].pop()
+    obs["distributions"][1]["direct_install"] = True
+    assert not locks.matches_installed(spec, obs)
 
 
 @pytest.mark.acceptance
