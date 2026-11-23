@@ -115,6 +115,12 @@ def test_actual_child_exploratory_geometry_and_server(tmp_path, second_python, m
             encoding="utf-8",
         )
         monkeypatch.setenv("PYTHONPATH", str(hostile))
+        # Readiness is local even if the notebook routes all HTTP through
+        # an unreachable proxy and explicitly disables proxy bypass.
+        monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+        monkeypatch.setenv("no_proxy", "")
+        monkeypatch.setenv("NO_PROXY", "")
         server = project.geco.launch("coding", device="cpu", warmup=False)
         try:
             assert server.port > 0
@@ -140,6 +146,15 @@ def test_actual_child_exploratory_geometry_and_server(tmp_path, second_python, m
                 project.geco.launch(
                     "coding", environment=child_id, port=server.port,
                     device="cpu", warmup=False,
+                )
+            assert not server.closed
+
+            # "localhost" can resolve to IPv6 first, while Werkzeug binds
+            # IPv4. The preflight must reject the occupied actual IPv4 port.
+            with pytest.raises(Exception, match="port|use|start|launch"):
+                project.geco.launch(
+                    "coding", environment=child_id, host="localhost",
+                    port=server.port, device="cpu", warmup=False,
                 )
             assert not server.closed
 
