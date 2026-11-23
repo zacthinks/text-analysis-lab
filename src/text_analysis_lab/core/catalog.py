@@ -1005,6 +1005,22 @@ class ProjectCatalog:
                  str(operation_id)),
             )
 
+    def mark_execution_attempt_uncertain(
+        self, operation_id: str, *, request_id: str | None = None,
+    ) -> None:
+        """Mark an unconfirmed attempt uncertain after the coordinator exits.
+
+        An unsuccessful or missing subprocess response does not establish that
+        the scientific operation failed, or how far a checkpoint progressed.
+        """
+        with self.con as con:
+            con.execute(
+                "UPDATE operation_execution_attempts SET outcome = 'uncertain' "
+                "WHERE operation_id = ? AND outcome = 'running' "
+                "AND (? IS NULL OR coordinator_request_id = ?)",
+                (str(operation_id), request_id, request_id),
+            )
+
     def list_execution_attempts(self, operation_id: str) -> list[dict[str, Any]]:
         """Return append-only attempt contexts, including unknown prior outcomes."""
         return self._dicts(self.con.execute(
