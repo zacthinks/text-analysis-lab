@@ -444,6 +444,10 @@ def _delegate(
             project.catalog.operation_for_coordinator_request(request_id)
             or project.catalog.operation_for_attempt_request(request_id)
         )
+        if operation is not None:
+            project.catalog.mark_execution_attempt_uncertain(
+                operation["operation_id"], request_id=request_id,
+            )
         raise SecondaryOperationError(
             "Secondary coordinator outcome is uncertain; do not automatically retry. "
             f"Request {request_id}; operation "
@@ -464,6 +468,10 @@ def _delegate(
         )
         reason = response.get("error") if isinstance(response, dict) else None
         phase = response.get("phase") if isinstance(response, dict) else None
+        if operation_id is not None:
+            project.catalog.mark_execution_attempt_uncertain(
+                operation_id, request_id=request_id,
+            )
         raise SecondaryOperationError(
             f"Secondary {message['kind']} failed "
             f"({phase or 'uncertain'}, exit={exit_code}, request={request_id}, "
