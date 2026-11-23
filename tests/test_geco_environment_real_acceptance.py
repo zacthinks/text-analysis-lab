@@ -125,10 +125,29 @@ def test_actual_child_exploratory_geometry_and_server(tmp_path, second_python, m
 
             # One strict port collision must fail without killing the first
             # live child or the parent interpreter.
+            other = project.geco.launch(
+                "coding", environment=child_id, device="cpu", warmup=False,
+            )
+            try:
+                assert other.port != server.port
+                assert not other.closed and not server.closed
+            finally:
+                other.close()
+            assert other.wait(timeout=10)
+
             with pytest.raises(Exception, match="port|use|start|launch"):
                 project.geco.launch(
                     "coding", environment=child_id, port=server.port,
                     device="cpu", warmup=False,
+                )
+            assert not server.closed
+
+            # This cannot be a valid CUDA index on the runner, even when the
+            # host has an accelerator. No CPU fallback is permitted.
+            with pytest.raises(Exception, match="cuda|device|CUDA|launch"):
+                project.geco.launch(
+                    "coding", environment=child_id,
+                    device="cuda:9999", warmup=False,
                 )
             assert not server.closed
         finally:
