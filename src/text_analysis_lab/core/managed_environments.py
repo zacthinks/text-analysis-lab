@@ -58,6 +58,8 @@ def _run_command(args: list[str], *, timeout: int = 1800) -> str:
     try:
         completed = subprocess.run(
             args, capture_output=True, text=True, timeout=timeout, check=False,
+            # Installation builds must not import the parent's notebook paths.
+            env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ManagedEnvironmentError(f"Managed environment command could not finish: {args[0]}") from exc
