@@ -533,6 +533,28 @@ class EnvironmentRegistry:
         # Machine-local, per-Project references; never written to SQLite.
         self._interpreter_bindings: dict[str, Path] = {}
 
+    def plan(
+        self, *, python: str | None = None, teal: str | None = None,
+        teal_extras: list[str] | tuple[str, ...] | None = None,
+        gpu: str | bool = "auto",
+    ) -> dict[str, Any]:
+        """Preview a managed interpreter install without modifying anything."""
+        from text_analysis_lab.core.managed_environments import plan
+        return plan(
+            python=python, teal=teal, teal_extras=teal_extras, gpu=gpu,
+        )
+
+    def create(
+        self, *, python: str | None = None, teal: str | None = None,
+        teal_extras: list[str] | tuple[str, ...] | None = None,
+        gpu: str | bool = "auto",
+    ) -> dict[str, Any]:
+        """Explicitly install/verify a user-local uv environment for R1."""
+        from text_analysis_lab.core.managed_environments import create
+        return create(
+            self, python=python, teal=teal, teal_extras=teal_extras, gpu=gpu,
+        )
+
     @property
     def opening_id(self) -> str:
         """Registered identity of the interpreter running this Project instance."""
