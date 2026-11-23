@@ -179,6 +179,24 @@ def test_child_handle_stops_only_its_own_process():
     assert b.closed
 
 
+
+def test_windows_log_cleanup_error_does_not_mask_normal_close(monkeypatch):
+    process = _child_process("import sys; sys.stdin.readline()")
+    handle = _handle(process)
+    original_cleanup = handle._temporary.cleanup
+
+    def locked():
+        raise PermissionError("Windows child.log is temporarily locked")
+
+    monkeypatch.setattr(handle._temporary, "cleanup", locked)
+    try:
+        handle.close()
+        assert handle.wait(timeout=1)
+        assert handle.closed
+    finally:
+        original_cleanup()
+
+
 def test_child_handle_detects_abrupt_exit():
     process = _child_process("import sys; sys.exit(7)")
     handle = _handle(process)
