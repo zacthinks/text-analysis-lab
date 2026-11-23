@@ -194,7 +194,7 @@ def test_verified_local_realization_is_same_logical_environment_across_platforms
     manifest = {
         "realizations": [{"distributions": copy.deepcopy(raw["distributions"])}],
     }
-    canonical_manifest = environments._normalize_lock_manifest(manifest)
+    canonical_manifest = environments._normalize_portable_manifest(manifest)
     spec["lock"] = {
         "kind": "uv",
         "manifest": manifest,
