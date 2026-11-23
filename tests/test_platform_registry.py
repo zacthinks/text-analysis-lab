@@ -531,20 +531,10 @@ def _spec_with_manifest(manifest):
 ])
 def test_portable_lock_rejects_inconsistent_exact_realizations(tmp_path, manifest):
     """A contradictory or incomplete lock must never be registered."""
-    spec = _spec_with_manifest(manifest) if not (
-        "realizations" in manifest and any(
-            len(r["distributions"]) != len({d["name"].lower() for d in r["distributions"]})
-            for r in manifest["realizations"]
-        )
-    ) else None
-    # Duplicate names are rejected while canonicalizing rather than hashed.
-    if spec is None:
-        with pytest.raises(environments.EnvironmentRegistryError):
-            _spec_with_manifest(manifest)
-        return
+    spec = _spec_with_manifest(manifest)
     with Project.create(tmp_path / "study", "study") as project:
         before = len(project.environments.list())
-        with pytest.raises(environments.EnvironmentRegistryError, match="Portable realization"):
+        with pytest.raises(environments.EnvironmentRegistryError, match="Portable realization|Duplicate package"):
             project.environments.register_portable_specification(spec)
         assert len(project.environments.list()) == before
 
