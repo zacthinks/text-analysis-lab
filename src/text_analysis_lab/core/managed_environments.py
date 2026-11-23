@@ -79,24 +79,56 @@ def _uv() -> str:
 
 
 def _local_source_commit() -> str:
+    """Resolve a verifiable parent source from Git or trusted install metadata."""
     source_root = Path(__file__).resolve().parents[3]
     try:
-        root = _run_command(["git", "-C", str(source_root), "rev-parse", "--show-toplevel"], timeout=15)
-        if Path(root).resolve() != source_root:
-            raise ManagedEnvironmentError("The current TeAL source root is not a Git checkout.")
-        changed = _run_command(["git", "-C", str(source_root), "status", "--porcelain"], timeout=15)
-        if changed:
-            raise ManagedEnvironmentError(
-                "Managed TeAL installation requires a clean committed parent checkout."
+        root = _run_command(
+            ["git", "-C", str(source_root), "rev-parse", "--show-toplevel"],
+            timeout=15,
+        )
+        if Path(root).resolve() == source_root:
+            changes = _run_command(
+                ["git", "-C", str(source_root), "status", "--porcelain", "--",
+                 "src/text_analysis_lab", "pyproject.toml"], timeout=15,
             )
-        commit = _run_command(["git", "-C", str(source_root), "rev-parse", "HEAD"], timeout=15)
-    except ManagedEnvironmentError:
-        raise
-    except Exception as exc:
-        raise ManagedEnvironmentError("Cannot identify the parent's immutable TeAL source.") from exc
-    if not _COMMIT.fullmatch(commit):
-        raise ManagedEnvironmentError("TeAL source did not resolve to a full immutable Git commit.")
-    return commit
+            if changes:
+                raise ManagedEnvironmentError(
+                    "Managed TeAL installation requires committed parent source files."
+                )
+            commit = _run_command(
+                ["git", "-C", str(source_root), "rev-parse", "HEAD"], timeout=15,
+            )
+            if _COMMIT.fullmatch(commit):
+                return commit
+    except ManagedEnvironmentError as exc:
+        # A missing Git CLI or non-checkout installation may still have a
+        # recorded immutable Git origin; dirty source files are never accepted.
+        if "requires committed parent source files" in str(exc):
+            raise
+
+    try:
+        installed = metadata.distribution("text-analysis-lab")
+        raw = installed.read_text("direct_url.json")
+        direct = json.loads(raw) if raw else {}
+        origin = direct.get("url")
+        vcs = direct.get("vcs_info", {})
+        commit = vcs.get("commit_id") if isinstance(vcs, dict) else None
+        if (isinstance(origin, str)
+                and re.fullmatch(
+                    r"https://github\\.com/zacthinks/text-analysis-lab(?:\\.git)?/?",
+                    origin,
+                )
+                and isinstance(vcs, dict)
+                and vcs.get("vcs") == "git"
+                and isinstance(commit, str)
+                and _COMMIT.fullmatch(commit)):
+            return commit
+    except (metadata.PackageNotFoundError, ValueError, TypeError, OSError):
+        pass
+    raise ManagedEnvironmentError(
+        "Cannot identify an immutable TeAL source. Run from a clean committed "
+        "TeAL checkout or install TeAL from its pinned Git commit."
+    )
 
 
 def _normalized_request(
