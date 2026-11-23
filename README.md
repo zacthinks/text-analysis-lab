@@ -53,8 +53,8 @@ native checkpoint is portable.
 
 TeAL can explicitly install a compatible child interpreter using `uv` without
 altering the Python running your notebook. Install `uv` on your PATH and use
-a clean committed TeAL Git checkout (the current pilot requires the same
-immutable TeAL commit as the parent):
+a committed TeAL Git checkout or a TeAL installation with an immutable
+Git-origin record (the child must use the same committed source as the parent):
 
 ```python
 preview = project.environments.plan(teal_extras=["parallel"], gpu="auto")
@@ -81,7 +81,8 @@ default is `"auto"`. No GPU driver or model weight is downloaded by TeAL.
 local installed inventory as `observed_unlocked`. It does not invent a
 universal lock or claim cross-platform reproducibility from a successful
 `uv pip install`. This pilot also requires a clean committed parent checkout
-and the same exact TeAL source in the child; independent compatible versions,
+or an immutable Git-installed parent and the same exact TeAL source in the child;
+independent compatible versions,
 portable export and generalized translator delegation remain future work.
 
 ## Project environments
