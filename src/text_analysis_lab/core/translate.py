@@ -587,9 +587,12 @@ def translate(
         finalize_alias_plan(project, alias_plan, outputs)
         return outputs
     except Exception as exc:
-        operation = project.catalog.get_operation(runtime.operation_id)
-        if str(operation["status"]) != "complete":
-            _fail_runtime(project, runtime, exc)
+        # A pre-execution rejection (for example an already-complete
+        # operation) is not a failure owned by this coordinator.
+        if runtime.execution_attempt_id is not None:
+            operation = project.catalog.get_operation(runtime.operation_id)
+            if str(operation["status"]) != "complete":
+                _fail_runtime(project, runtime, exc)
         raise
     finally:
         try:
@@ -768,9 +771,12 @@ def _resume_translate_owned(
             finalize_alias_plan(project, AliasPlan.from_dict(raw_alias_plan), outputs)
         return outputs
     except Exception as exc:
-        operation = project.catalog.get_operation(runtime.operation_id)
-        if str(operation["status"]) != "complete":
-            _fail_runtime(project, runtime, exc)
+        # A pre-execution rejection (for example an already-complete
+        # operation) is not a failure owned by this coordinator.
+        if runtime.execution_attempt_id is not None:
+            operation = project.catalog.get_operation(runtime.operation_id)
+            if str(operation["status"]) != "complete":
+                _fail_runtime(project, runtime, exc)
         raise
     finally:
         plan.close()
