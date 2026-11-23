@@ -35,4 +35,6 @@ jobs:
         run: uv sync --python 3.11 --all-extras
 
       - name: Run acceptance tests
+        env:
+          TEAL_REAL_MANAGED_ACCEPTANCE: "1"
         run: uv run pytest --acceptance -m acceptance -q -rs

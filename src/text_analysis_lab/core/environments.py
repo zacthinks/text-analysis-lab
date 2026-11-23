@@ -533,6 +533,28 @@ class EnvironmentRegistry:
         # Machine-local, per-Project references; never written to SQLite.
         self._interpreter_bindings: dict[str, Path] = {}
 
+    def plan(
+        self, *, python: str | None = None, teal: str | None = None,
+        teal_extras: list[str] | tuple[str, ...] | None = None,
+        gpu: str | bool = "auto",
+    ) -> dict[str, Any]:
+        """Preview a managed interpreter install without modifying anything."""
+        from text_analysis_lab.core.managed_environments import plan
+        return plan(
+            python=python, teal=teal, teal_extras=teal_extras, gpu=gpu,
+        )
+
+    def create(
+        self, *, python: str | None = None, teal: str | None = None,
+        teal_extras: list[str] | tuple[str, ...] | None = None,
+        gpu: str | bool = "auto",
+    ) -> dict[str, Any]:
+        """Explicitly install/verify a user-local uv environment for R1."""
+        from text_analysis_lab.core.managed_environments import create
+        return create(
+            self, python=python, teal=teal, teal_extras=teal_extras, gpu=gpu,
+        )
+
     @property
     def opening_id(self) -> str:
         """Registered identity of the interpreter running this Project instance."""
@@ -638,9 +660,21 @@ class EnvironmentRegistry:
         self.get(environment_id)
         path = self._interpreter_bindings.get(environment_id)
         if path is None:
+            # A Project records software identities, never machine-local paths.
+            # On reopen, discover a previously published uv interpreter by its
+            # *registered observed identity* and fully reverify the installation
+            # before installing a new session-only binding. Unmanaged and
+            # unverified environments still require an explicit binding.
+            from text_analysis_lab.core.managed_environments import find_cached_interpreter
+
+            path = find_cached_interpreter(environment_id)
+            if path is not None:
+                self.bind_interpreter(environment_id, path)
+        if path is None:
             raise EnvironmentRegistryError(
                 f"Environment {environment_id!r} has no bound Python interpreter. "
-                "Call project.environments.bind_interpreter(...)."
+                "Call project.environments.bind_interpreter(...) or create a "
+                "verified managed installation."
             )
         if not path.is_file() or not os.access(path, os.X_OK):
             raise EnvironmentRegistryError(

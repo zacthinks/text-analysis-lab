@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import importlib
 import json
+import os
 import subprocess
 import sys
 from importlib import metadata
@@ -187,12 +188,26 @@ def _run(
     data: Mapping[str, Any] | None = None,
     *,
     timeout: float | None = None,
+    isolated: bool = False,
 ) -> tuple[int, dict[str, Any] | None, str]:
-    args = [str(executable), "-m", "text_analysis_lab.core.secondary_coordinator", action]
+    # A published uv-managed child must use its own site-packages rather than
+    # import the parent's editable TeAL or dependencies through PYTHONPATH.
+    # Older manually bound R1 fixture interpreters retain their original
+    # dependency-sharing behavior.
+    managed = (executable.parent.parent / "managed.json").is_file()
+    isolated = isolated or managed
+    args = [str(executable)]
+    if isolated:
+        args.append("-I")
+    args.extend(["-m", "text_analysis_lab.core.secondary_coordinator", action])
     try:
         result = subprocess.run(
             args, input=None if data is None else _json(data), text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
+            env=(
+                {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+                if isolated else None
+            ),
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
