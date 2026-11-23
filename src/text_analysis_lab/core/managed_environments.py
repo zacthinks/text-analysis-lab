@@ -232,6 +232,7 @@ def _probe(executable: Path, request: dict[str, Any]) -> dict[str, Any]:
 
 def _gpu_probe(executable: Path, policy: str | bool) -> dict[str, Any]:
     allowed_accelerators = policy is not False
+    repr = lambda value: "True" if value else "False"
     script = (
         "import json,importlib.util\n"
         "if importlib.util.find_spec('torch') is None:\n"
@@ -239,10 +240,9 @@ def _gpu_probe(executable: Path, policy: str | bool) -> dict[str, Any]:
         "else:\n"
         " import torch\n"
         " device='cpu'\n"
-        (" if torch.cuda.is_available(): device='cuda'\n" if allowed_accelerators else "")
-        (" elif hasattr(torch.backends,'mps') and torch.backends.mps.is_available(): device='mps'\n" if allowed_accelerators else "")
-        (" elif hasattr(torch,'xpu') and torch.xpu.is_available(): device='xpu'\n" if allowed_accelerators else "")
-        (" elif hasattr(torch.version,'hip') and torch.version.hip: device='cuda'\n" if allowed_accelerators else "")
+        " if " + repr(allowed_accelerators) + " and torch.cuda.is_available(): device='cuda'\n"
+        " elif " + repr(allowed_accelerators) + " and hasattr(torch.backends,'mps') and torch.backends.mps.is_available(): device='mps'\n"
+        " elif " + repr(allowed_accelerators) + " and hasattr(torch,'xpu') and torch.xpu.is_available(): device='xpu'\n"
         " if device != 'cpu':\n"
         "  try:\n"
         "   x=torch.tensor([2.,3.],device=device); assert float(x.sum().item()) == 5.\n"
