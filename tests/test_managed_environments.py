@@ -292,7 +292,7 @@ def test_real_uv_managed_child_textlength(tmp_path, monkeypatch):
     shadow_package = shadow / "text_analysis_lab"
     shadow_package.mkdir(parents=True)
     (shadow_package / "__init__.py").write_text(
-        "raise RuntimeError('managed child imported parent PYTHONPATH')\\n",
+        "raise RuntimeError('managed child imported parent PYTHONPATH')\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("PYTHONPATH", str(shadow))
