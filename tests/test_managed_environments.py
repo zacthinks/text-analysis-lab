@@ -378,9 +378,8 @@ def test_real_uv_managed_child_textlength(tmp_path, monkeypatch):
         assert len(attempts) == 1
         assert attempts[0]["outcome"] == "complete"
         assert attempts[0]["environment_id"] == result["environment_id"]
-        again = project.environments.create(teal_extras=["parallel"], gpu=False)
-        assert again["reused"]
-        assert again["environment_id"] == result["environment_id"]
+        # Deliberately DO NOT call create() again: reopening must discover
+        # this published installation by identity rather than by request.
 
     # A fresh Project instance has no interpreter binding. Reuse must
     # rediscover the already-published installation solely by E1 identity,
