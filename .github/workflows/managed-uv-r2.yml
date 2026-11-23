@@ -14,8 +14,14 @@ on:
 
 jobs:
   managed-base:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
@@ -24,10 +30,18 @@ jobs:
       - name: Install exact Python for managed test
         run: uv python install 3.11.15
       - name: Install local editable parent and test dependencies
+        shell: bash
         run: |
           uv venv --python 3.11.15 .venv
-          uv pip install --python .venv/bin/python -e . pytest
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            echo "PYTHON_EXE=.venv/Scripts/python.exe" >> "$GITHUB_ENV"
+            uv pip install --python .venv/Scripts/python.exe -e . pytest
+          else
+            echo "PYTHON_EXE=.venv/bin/python" >> "$GITHUB_ENV"
+            uv pip install --python .venv/bin/python -e . pytest
+          fi
       - name: Real standalone managed child and R1 delegation
+        shell: bash
         env:
           TEAL_RUN_MANAGED_INSTALL_ACCEPTANCE: "1"
-        run: .venv/bin/python -m pytest tests/test_managed_environments.py -m acceptance -q -rs
+        run: "$PYTHON_EXE" -m pytest tests/test_managed_environments.py -m acceptance -q -rs
