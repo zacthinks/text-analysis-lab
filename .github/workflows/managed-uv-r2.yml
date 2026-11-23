@@ -1,0 +1,33 @@
+name: R2 Managed uv smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - feature/platforms-and-environments
+    paths:
+      - src/text_analysis_lab/core/managed_environments.py
+      - src/text_analysis_lab/core/environments.py
+      - src/text_analysis_lab/core/secondary_coordinator.py
+      - tests/test_managed_environments.py
+      - .github/workflows/managed-uv-r2.yml
+
+jobs:
+  managed-base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      - name: Install exact Python for managed test
+        run: uv python install 3.11.15
+      - name: Install local editable parent and test dependencies
+        run: |
+          uv venv --python 3.11.15 .venv
+          uv pip install --python .venv/bin/python -e . pytest
+      - name: Real standalone managed child and R1 delegation
+        env:
+          TEAL_RUN_MANAGED_INSTALL_ACCEPTANCE: "1"
+        run: .venv/bin/python -m pytest tests/test_managed_environments.py -m acceptance -q -rs
