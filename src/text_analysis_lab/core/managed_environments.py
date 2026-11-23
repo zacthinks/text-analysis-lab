@@ -16,7 +16,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from importlib import metadata
 from typing import Any, Iterator
 
@@ -134,6 +133,11 @@ def _normalized_request(
         raise ManagedEnvironmentError(
             "teal must be a 40-character Git commit; version-only references "
             "and moving branches are not reproducible."
+        )
+    if teal != _local_source_commit():
+        raise ManagedEnvironmentError(
+            "The R2 pilot requires the current parent TeAL source commit; "
+            "different immutable revisions are not yet supported."
         )
     # A mismatched child will be rejected by the actual R1 source probe.
     return {
@@ -254,8 +258,6 @@ def _gpu_probe(executable: Path, policy: str | bool) -> dict[str, Any]:
         raise ManagedEnvironmentError(
             "Strict GPU environment requested but no working accelerator was verified."
         )
-    if policy is False and state["status"] == "available":
-        raise ManagedEnvironmentError("CPU-only policy unexpectedly selected an accelerator.")
     return state
 
 
@@ -301,32 +303,32 @@ def create(
             except (ManagedEnvironmentError, OSError, ValueError, KeyError):
                 verified = None
         if verified is None:
-            staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=root))
+            # Virtual environments are not relocatable: installed console-script
+            # shebangs may embed the interpreter's absolute path. Construct at
+            # the final cache path, but do not publish the ready marker until
+            # every verification passes. The lock prevents a concurrent reader.
+            if target.exists():
+                shutil.rmtree(target)
+            target.mkdir(parents=True)
             try:
-                _run_command([uv, "venv", str(staging), "--python", request["python"]])
-                executable = _interpreter(staging)
+                _run_command([uv, "venv", str(target), "--python", request["python"]])
+                executable = _interpreter(target)
                 args = [uv, "pip", "install", "--python", str(executable)]
                 args += ["--torch-backend", "cpu" if gpu is False else "auto"]
                 args.append(_source_requirement(request))
                 if gpu is True and not _TORCH_EXTRAS.intersection(request["teal_extras"]):
                     args.append("torch")
                 _run_command(args)
-                verified = _verify(staging, request, uv)
-                (staging / "managed.json").write_text(
+                verified = _verify(target, request, uv)
+                temp_marker = target / "managed.json.pending"
+                temp_marker.write_text(
                     json.dumps({"schema_version": _CACHE_SCHEMA, "request": request},
                                sort_keys=True), encoding="utf-8",
                 )
-                if target.exists():
-                    # No live environment may be modified. A corrupt/stale cache
-                    # is quarantined, then replaced while holding the request lock.
-                    old = root / (".retired-" + request_key)
-                    if old.exists():
-                        shutil.rmtree(old)
-                    target.rename(old)
-                staging.rename(target)
-            finally:
-                if staging.exists():
-                    shutil.rmtree(staging)
+                temp_marker.replace(target / "managed.json")
+            except BaseException:
+                shutil.rmtree(target, ignore_errors=True)
+                raise
         assert verified is not None
         observed, gpu_state = verified
         fingerprint = fingerprint_observation(observed)
