@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import multiprocessing
+import subprocess
+import sys
+import threading
 import queue
 import time
 from collections.abc import Mapping
@@ -1267,3 +1270,151 @@ def test_checkpoint_swap_discards_stale_previous_when_target_is_complete(
 
     assert (target / "state.txt").read_text(encoding="utf-8") == "new"
     assert not previous.exists()
+
+
+def test_concurrent_resume_does_not_displace_live_owner(tmp_path: Path, monkeypatch) -> None:
+    """Two Project sessions cannot manipulate the same live checkpoint."""
+    import text_analysis_lab as teal
+    from text_analysis_lab.core import translate as execution
+    from text_analysis_lab.core.errors import OperatorError
+
+    _install_pickle_parquet(monkeypatch)
+    rows = pd.DataFrame({"id": list(range(6))})
+    _install_fake_source_queries(monkeypatch, rows)
+    location = tmp_path / "exclusive-resume"
+    with teal.Project.create(location, name="exclusive_resume") as project:
+        source = _seed_source_artifact(project, rows)
+        translator = _TransientResumableTranslator(
+            str(tmp_path / "fail-once"), fail_unit=0,
+        )
+        with pytest.raises(RuntimeError, match="transient unit 0"):
+            project.translate(translator, source, batch_size=2, workers=1)
+        operation_id = project.catalog.list_operations()[-1]["operation_id"]
+
+    entered, release = threading.Event(), threading.Event()
+    original_run = execution._run_repeated_plan
+
+    def hold_first_resume(**kwargs):
+        entered.set()
+        if not release.wait(timeout=30):
+            raise RuntimeError("First execution did not receive release signal.")
+        return original_run(**kwargs)
+
+    monkeypatch.setattr(execution, "_run_repeated_plan", hold_first_resume)
+    results: list[str] = []
+    errors: list[BaseException] = []
+
+    def resume_first():
+        try:
+            with teal.Project.open(location) as first:
+                output = first.resume_operation(operation_id)["output"]
+                results.append(output.artifact_id)
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=resume_first)
+    thread.start()
+    try:
+        assert entered.wait(timeout=30), "First session never entered execution."
+        with teal.Project.open(location) as contender:
+            attempts_before = contender.execution_attempts(operation_id)
+            checkpoint_dir = contender.storage.operation_temp_dir(operation_id)
+            checkpoint_before = {
+                p.relative_to(checkpoint_dir): p.read_bytes()
+                for p in checkpoint_dir.rglob("*") if p.is_file()
+            }
+            with pytest.raises(OperatorError, match="already executing"):
+                contender.resume_operation(operation_id)
+            assert contender.execution_attempts(operation_id) == attempts_before
+            assert {
+                p.relative_to(checkpoint_dir): p.read_bytes()
+                for p in checkpoint_dir.rglob("*") if p.is_file()
+            } == checkpoint_before
+    finally:
+        release.set()
+        thread.join(timeout=30)
+    assert not thread.is_alive()
+    assert not errors, errors
+    assert len(results) == 1
+    with teal.Project.open(location) as verified:
+        assert verified.get_operation(operation_id)["status"] == "complete"
+        attempts = verified.execution_attempts(operation_id)
+        assert len(attempts) == 2
+        assert [a["outcome"] for a in attempts] == ["failed", "complete"]
+
+
+def test_operation_lock_is_exclusive_across_independent_processes(tmp_path: Path):
+    """The OS lock (not just a Python thread flag) excludes another process."""
+    from text_analysis_lab.core.execution_ownership import exclusive_operation_execution
+    from text_analysis_lab.core.errors import OperatorError
+
+    operation_dir = tmp_path / "one-operation"
+    operation_dir.mkdir()
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from text_analysis_lab.core.execution_ownership import "
+        "exclusive_operation_execution\n"
+        "with exclusive_operation_execution(Path(sys.argv[1])):\n"
+        "    print('LOCKED', flush=True)\n"
+        "    sys.stdin.read()\n"
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(operation_dir)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert child.stdout.readline().strip() == "LOCKED", child.stderr.read()
+        with pytest.raises(OperatorError, match="already executing"):
+            with exclusive_operation_execution(operation_dir):
+                pass
+    finally:
+        if child.stdin is not None:
+            child.stdin.close()
+        child.wait(timeout=15)
+    with exclusive_operation_execution(operation_dir):
+        pass
+
+
+def test_attempt_and_operation_completion_roll_back_together(tmp_path: Path):
+    """A failure in either SQL update cannot produce a half-complete record."""
+    import text_analysis_lab as teal
+
+    with teal.Project.create(tmp_path / "atomic-operation", name="atomic") as project:
+        project.catalog.register_operator(
+            operator_id="optr_atomic", operation_type="translate",
+        )
+        project.catalog.register_operation(
+            operation_id="oper_atomic", operator_id="optr_atomic",
+            operation_type="translate", status="incomplete",
+            environment_id=project.environments.opening_id,
+            platform_id=project.platforms.opening_id,
+        )
+        attempt_id = project.catalog.begin_execution_attempt(
+            "oper_atomic",
+            environment_id=project.environments.opening_id,
+            platform_id=project.platforms.opening_id,
+        )
+        with project.catalog.con as con:
+            con.execute(
+                "CREATE TRIGGER prevent_atomic_completion BEFORE UPDATE "
+                "ON operations BEGIN SELECT RAISE(ABORT, 'injected SQL failure'); END"
+            )
+        with pytest.raises(Exception, match="injected SQL failure"):
+            project.catalog.finish_execution_attempt(
+                "oper_atomic", attempt_id=attempt_id, outcome="complete",
+            )
+        assert project.get_operation("oper_atomic")["status"] == "incomplete"
+        assert project.execution_attempts("oper_atomic")[0]["outcome"] == "running"
+        with project.catalog.con as con:
+            con.execute("DROP TRIGGER prevent_atomic_completion")
+        project.catalog.finish_execution_attempt(
+            "oper_atomic", attempt_id=attempt_id, outcome="complete",
+        )
+        assert project.get_operation("oper_atomic")["status"] == "complete"
+        assert project.execution_attempts("oper_atomic")[0]["outcome"] == "complete"
+        with pytest.raises(ValueError, match="no longer active"):
+            project.catalog.finish_execution_attempt(
+                "oper_atomic", attempt_id=attempt_id, outcome="failed",
+            )
