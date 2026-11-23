@@ -345,24 +345,38 @@ def create(
     with _request_lock(root / "locks" / (request_key + ".lock")):
         reused = False
         verified: tuple[dict[str, Any], dict[str, Any]] | None = None
-        if target.is_dir():
+        if target.is_dir() and (target / "managed.json").exists():
             try:
-                manifest = json.loads((target / "managed.json").read_text(encoding="utf-8"))
-                if (manifest.get("schema_version") == _CACHE_SCHEMA
-                        and manifest.get("request") == request
-                        and isinstance(manifest.get("observed_fingerprint"), str)):
-                    candidate = _verify(target, request, uv)
-                    if fingerprint_observation(candidate[0]) == manifest["observed_fingerprint"]:
-                        verified = candidate
-                        reused = True
-            except (ManagedEnvironmentError, OSError, ValueError, KeyError):
-                verified = None
+                manifest = json.loads(
+                    (target / "managed.json").read_text(encoding="utf-8")
+                )
+                if (manifest.get("schema_version") != _CACHE_SCHEMA
+                        or manifest.get("request") != request
+                        or not isinstance(manifest.get("observed_fingerprint"), str)):
+                    raise ManagedEnvironmentError("Invalid managed cache metadata.")
+                candidate = _verify(target, request, uv)
+                if fingerprint_observation(candidate[0]) != manifest["observed_fingerprint"]:
+                    raise ManagedEnvironmentError("Managed environment software inventory drifted.")
+                verified = candidate
+                reused = True
+            except (ManagedEnvironmentError, OSError, ValueError, KeyError) as exc:
+                # A published environment might still have running children.
+                # Never remove or rebuild it in place on a cache mismatch.
+                raise ManagedEnvironmentError(
+                    "The existing managed interpreter is no longer verified; "
+                    "it was left untouched to protect running operations. "
+                    "Use a different request or repair this cache when idle."
+                ) from exc
         if verified is None:
             # Virtual environments are not relocatable: installed console-script
             # shebangs may embed the interpreter's absolute path. Construct at
             # the final cache path, but do not publish the ready marker until
             # every verification passes. The lock prevents a concurrent reader.
             if target.exists():
+                # No readiness marker: interrupted installation under a
+                # previously released request lock is safe to clean up.
+                if target.is_symlink() or not target.is_dir():
+                    raise ManagedEnvironmentError("Managed cache target is not a directory.")
                 shutil.rmtree(target)
             target.mkdir(parents=True)
             try:
