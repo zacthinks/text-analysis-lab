@@ -606,6 +606,10 @@ class Project:
         """Return one operation catalog record."""
         return self.catalog.get_operation(str(operation_id))
 
+    def execution_attempts(self, operation_id: str) -> list[dict[str, Any]]:
+        """Execution contexts for a translation and its explicit recovery attempts."""
+        return self.catalog.list_execution_attempts(str(operation_id))
+
     def list_operations(
         self,
         *,
@@ -1033,7 +1037,7 @@ class Project:
         # R1: unsupported cross-interpreter requests are checked and delegated
         # before any local scientific work, ID allocation, or alias changes.
         selected = self.environments.resolve(environment)
-        if selected != self.environments.opening_id:
+        if not self.environments.is_current_interpreter(selected):
             if _coordinator_request_id is not None:
                 raise OperatorError("Nested secondary coordination is unsupported.")
             from text_analysis_lab.core.secondary_coordinator import delegate_translate
@@ -1122,6 +1126,8 @@ class Project:
     def resume_operation(
         self,
         operation_id: str,
+        *,
+        _coordinator_request_id: str | None = None,
     ) -> Mapping[str, BaseArtifact]:
         """Resume a previously recorded resumable operation as configured."""
         operation = self.catalog.get_operation(str(operation_id))
@@ -1131,12 +1137,17 @@ class Project:
             if operation["environment_id"] is not None
             else self.environments.resolve()
         )
-        if selected != self.environments.opening_id:
+        if not self.environments.is_current_interpreter(selected):
+            if _coordinator_request_id is not None:
+                raise OperatorError("Nested secondary resume is unsupported.")
             from text_analysis_lab.core.secondary_coordinator import delegate_resume
 
             return delegate_resume(self, selected, str(operation_id))
         if operation_type in {"translate", "subset"}:
-            return _resume_translate(self, str(operation_id))
+            return _resume_translate(
+                self, str(operation_id),
+                coordinator_request_id=_coordinator_request_id,
+            )
         raise OperatorError(
             f"Operation {operation_id!r} has unsupported operation_type "
             f"{operation_type!r} for resume_operation(...)."

@@ -8,6 +8,8 @@ interpreter boundary. Never import a callable named by a request.
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import importlib
 import json
 import subprocess
 import sys
@@ -19,6 +21,7 @@ from uuid import uuid4
 from text_analysis_lab.core.environments import (
     EnvironmentRegistryError,
     fingerprint_observation,
+    normalize_environment,
     observe_environment,
 )
 from text_analysis_lab.core.errors import OperatorError
@@ -26,7 +29,7 @@ from text_analysis_lab.core.errors import OperatorError
 if TYPE_CHECKING:
     from text_analysis_lab.core.project import Project
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 TRANSLATOR_TYPE = "TextLength"
 TRANSLATOR_MODULE = "text_analysis_lab.translators.text_length"
 
@@ -75,12 +78,41 @@ def _version(message: Mapping[str, Any]) -> None:
         )
 
 
+def _pilot_code_digest() -> str:
+    """Require the code actually implementing this narrow protocol to match.
+
+    TeAL distribution versions alone can hide locally modified installations.
+    This is a conservative R1 pilot compatibility check, not a hash of the
+    parent's scientific dependencies or a generic package-verification scheme.
+    """
+    digest = hashlib.sha256()
+    for name in (
+        "text_analysis_lab.core.secondary_coordinator",
+        "text_analysis_lab.core.catalog",
+        "text_analysis_lab.core.environments",
+        "text_analysis_lab.core.project",
+        "text_analysis_lab.core.translate",
+        "text_analysis_lab.translators.text_length",
+    ):
+        module = importlib.import_module(name)
+        source = getattr(module, "__file__", None)
+        if not source or not str(source).endswith(".py"):
+            raise SecondaryCoordinatorError(
+                f"Cannot verify source of secondary protocol module {name}."
+            )
+        digest.update(name.encode("utf-8"))
+        digest.update(hashlib.sha256(Path(source).read_bytes()).digest())
+    return digest.hexdigest()
+
+
 def _probe_payload() -> dict[str, Any]:
-    observation = observe_environment()
+    observation = normalize_environment(observe_environment())
     return {
         "protocol_version": PROTOCOL_VERSION,
         "kind": "probe",
         "environment_id": "env_" + fingerprint_observation(observation),
+        "observation": observation,
+        "pilot_code_sha256": _pilot_code_digest(),
         "teal_version": metadata.version("text-analysis-lab"),
         "observation_schema_version": observation["schema_version"],
         "python_version": list(sys.version_info[:3]),
@@ -91,36 +123,62 @@ def _check_probe(project: Project, selected: str, payload: dict[str, Any]) -> No
     _keys(
         payload,
         {
-            "protocol_version", "kind", "environment_id", "teal_version",
+            "protocol_version", "kind", "environment_id", "observation",
+            "pilot_code_sha256", "teal_version",
             "observation_schema_version", "python_version",
         },
     )
     _version(payload)
     if payload["kind"] != "probe":
         raise SecondaryCoordinatorError("Child returned an unexpected probe response.")
-    if payload["environment_id"] != selected:
-        raise EnvironmentRegistryError(
-            f"Bound interpreter has environment identity {payload['environment_id']!r}, "
-            f"but selected registered environment is {selected!r}. "
-            "Installed packages or Python/platform details may have changed."
-        )
-    current = project.environments.get(project.environments.opening_id)["observation"]
+
+    # Do not trust the logical identity claimed by a child: reconstruct its
+    # installed metadata fingerprint and validate against the selected record.
+    actual = normalize_environment(payload["observation"])
+    if actual["kind"] != "observed_unlocked":
+        raise SecondaryCoordinatorError("Child must probe its actual installed software.")
+    actual_id = "env_" + fingerprint_observation(actual)
+    if payload["environment_id"] != actual_id:
+        raise EnvironmentRegistryError("Child's claimed environment identity disagrees with its software inventory.")
     target = project.environments.get(selected)["observation"]
-    if payload["teal_version"] != current["teal"]["version"] or (
-        payload["teal_version"] != target["teal"]["version"]
-    ):
+    if target["kind"] == "observed_unlocked":
+        if actual_id != selected:
+            raise EnvironmentRegistryError(
+                "Installed packages or Python changed in bound secondary interpreter."
+            )
+    elif target["kind"] == "portable_locked":
+        if not project.environments._matches_portable(selected, actual):
+            raise EnvironmentRegistryError(
+                "Child's installed packages, Python or immutable TeAL source do not "
+                "match a declared portable lock realization."
+            )
+    else:
+        raise SecondaryCoordinatorError("Unsupported secondary environment kind.")
+
+    current = project.environments.get(project.environments.opening_id)["observation"]
+    if (payload["teal_version"] != actual["teal"]["version"]
+            or payload["teal_version"] != current["teal"]["version"]
+            or payload["teal_version"] != target["teal"]["version"]):
         raise SecondaryCoordinatorError(
             "Incompatible TeAL distribution version in secondary interpreter."
         )
-    if payload["observation_schema_version"] != target["schema_version"]:
+    if (payload["observation_schema_version"] != actual["schema_version"]
+            or target["schema_version"] != actual["schema_version"]):
         raise SecondaryCoordinatorError("Incompatible environment observation schema.")
     py = payload["python_version"]
     if (
         not isinstance(py, list) or len(py) != 3
         or any(type(v) is not int for v in py)
         or (py[0], py[1]) < (3, 11)
+        or ".".join(map(str, py)) != actual["python"]["version"]
     ):
-        raise SecondaryCoordinatorError("Secondary interpreter requires Python >=3.11.")
+        raise SecondaryCoordinatorError("Secondary interpreter has incompatible Python version.")
+    if (not isinstance(payload["pilot_code_sha256"], str)
+            or payload["pilot_code_sha256"] != _pilot_code_digest()):
+        raise SecondaryCoordinatorError(
+            "Incompatible TeAL secondary protocol implementation/source; "
+            "matching package versions alone are insufficient."
+        )
 
 
 def _run(
@@ -295,12 +353,18 @@ def _return_artifacts(
 ) -> Mapping[str, Any]:
     _keys(response, {
         "protocol_version", "kind", "request_id", "status", "operation_id",
-        "output_artifact_ids", "environment_id", "result_kind",
+        "output_artifact_ids", "environment_id", "platform_id", "result_kind",
     })
     _version(response)
     if response["kind"] != "result" or response["request_id"] != request_id:
         raise SecondaryCoordinatorError("Mismatched secondary response.")
-    if response["status"] != "complete" or response["environment_id"] != selected:
+    if (
+        response["status"] != "complete"
+        or not isinstance(response["environment_id"], str)
+        or not project.environments.equivalent_executor_identities(
+            selected, response["environment_id"],
+        )
+    ):
         raise SecondaryCoordinatorError("Secondary returned incompatible status or environment.")
     result_kind = response["result_kind"]
     if result_kind not in {"executed", "reused"}:
@@ -315,15 +379,28 @@ def _return_artifacts(
     if operation["status"] != "complete":
         raise SecondaryCoordinatorError("Secondary result references an incomplete operation.")
     if result_kind == "executed":
+        # The executor's actual platform, including a different resume host,
+        # comes from the child attempt. Never substitute the parent platform.
+        attempts = project.catalog.list_execution_attempts(opid)
+        if not attempts or attempts[-1]["outcome"] != "complete":
+            raise SecondaryCoordinatorError("Missing completed child execution attempt.")
+        if (attempts[-1]["environment_id"] != response["environment_id"]
+                or attempts[-1]["platform_id"] != response["platform_id"]
+                or project.platforms.get(response["platform_id"]) is None):
+            raise SecondaryCoordinatorError("Child execution attempt provenance mismatch.")
         # Only the selected child may create an operation for this request.
         # A resume executes an existing B operation, not a new one.
-        if operation["environment_id"] != selected:
+        if not project.environments.equivalent_executor_identities(
+            selected, operation["environment_id"],
+        ):
             raise SecondaryCoordinatorError(
                 "Executed operation has incorrect environment provenance."
             )
         if expected_operation_id is None and operation["coordinator_request_id"] != request_id:
             raise SecondaryCoordinatorError("Secondary operation request correlation mismatch.")
     else:
+        if response["platform_id"] != operation["platform_id"]:
+            raise SecondaryCoordinatorError("Reused alias lost its original platform provenance.")
         # Alias reuse legitimately returns an earlier artifact: there is *no*
         # operation belonging to this request, and its historical executor need
         # not be B. Check the actual alias and durable output edges instead.
@@ -371,7 +448,14 @@ def _delegate(
         exit_code, response, stderr = _run(executable, "--run", message)
     except SecondaryCoordinatorError as exc:
         _refresh_parent(project)
-        operation = project.catalog.operation_for_coordinator_request(request_id)
+        operation = (
+            project.catalog.operation_for_coordinator_request(request_id)
+            or project.catalog.operation_for_attempt_request(request_id)
+        )
+        if operation is not None:
+            project.catalog.mark_execution_attempt_uncertain(
+                operation["operation_id"], request_id=request_id,
+            )
         raise SecondaryOperationError(
             "Secondary coordinator outcome is uncertain; do not automatically retry. "
             f"Request {request_id}; operation "
@@ -380,7 +464,10 @@ def _delegate(
             operation_id=None if operation is None else operation["operation_id"],
         ) from exc
     _refresh_parent(project)
-    tracked = project.catalog.operation_for_coordinator_request(request_id)
+    tracked = (
+        project.catalog.operation_for_coordinator_request(request_id)
+        or project.catalog.operation_for_attempt_request(request_id)
+    )
     if exit_code != 0 or response is None or response.get("status") != "complete":
         operation_id = (
             response.get("operation_id") if response is not None else None
@@ -389,6 +476,10 @@ def _delegate(
         )
         reason = response.get("error") if isinstance(response, dict) else None
         phase = response.get("phase") if isinstance(response, dict) else None
+        if operation_id is not None:
+            project.catalog.mark_execution_attempt_uncertain(
+                operation_id, request_id=request_id,
+            )
         raise SecondaryOperationError(
             f"Secondary {message['kind']} failed "
             f"({phase or 'uncertain'}, exit={exit_code}, request={request_id}, "
@@ -478,9 +569,20 @@ def _child_run(message: dict[str, Any]) -> dict[str, Any]:
     from text_analysis_lab.translators.text_length import TextLength
 
     with Project.open(message["project_path"]) as project:
-        if project.environments.opening_id != message["environment_id"]:
+        selected = message["environment_id"]
+        specification = project.environments.get(selected)["observation"]
+        observed = normalize_environment(observe_environment())
+        if specification["kind"] == "portable_locked":
+            # Revalidate in the actual child process and explicitly associate
+            # its observed inventory with the portable identity before writing.
+            project.environments.verify_current_portable(selected)
+        elif "env_" + fingerprint_observation(observed) != selected:
             raise EnvironmentRegistryError(
-                "Child's actual opening environment does not match requested environment."
+                "Child's installed software differs from the selected observed environment."
+            )
+        if not project.environments.is_current_interpreter(selected):
+            raise EnvironmentRegistryError(
+                "Child's verified opening environment does not match requested environment."
             )
         if message["kind"] == "resume":
             opid = message["operation_id"]
@@ -488,11 +590,19 @@ def _child_run(message: dict[str, Any]) -> dict[str, Any]:
             descriptor = _read_json(
                 project.storage.operation_descriptor_path(opid).read_text(encoding="utf-8")
             )
-            if op["operation_type"] != "translate" or descriptor.get("translator_class") != {
+            if (op["environment_id"] is not None
+                    and not project.environments.equivalent_executor_identities(
+                        selected, op["environment_id"],
+                    ) or op["operation_type"] != "translate"
+                    or descriptor.get("translator_class") != {
                 "module": TRANSLATOR_MODULE, "qualname": TRANSLATOR_TYPE
-            }:
-                raise SecondaryCoordinatorError("Only TextLength operations can resume.")
-            outputs = project.resume_operation(opid)
+            }):
+                raise SecondaryCoordinatorError(
+                    "Only TextLength operations under the selected software environment can resume."
+                )
+            outputs = project.resume_operation(
+                opid, _coordinator_request_id=message["request_id"],
+            )
         else:
             state = message["scientific_state"]
             translator = TextLength.from_json_state(state)
@@ -529,7 +639,9 @@ def _child_run(message: dict[str, Any]) -> dict[str, Any]:
             result_kind = "reused"
         if operation["status"] != "complete" or (
             result_kind == "executed"
-            and operation["environment_id"] != project.environments.opening_id
+            and not project.environments.equivalent_executor_identities(
+                operation["environment_id"], project.environments.opening_id,
+            )
         ):
             raise SecondaryCoordinatorError(
                 "Child operation did not complete with its executor provenance."
@@ -538,6 +650,10 @@ def _child_run(message: dict[str, Any]) -> dict[str, Any]:
             "protocol_version": PROTOCOL_VERSION, "kind": "result",
             "request_id": message["request_id"], "status": "complete",
             "operation_id": opid, "environment_id": project.environments.opening_id,
+            "platform_id": (
+                project.platforms.opening_id if result_kind == "executed"
+                else operation["platform_id"]
+            ),
             "result_kind": result_kind,
             "output_artifact_ids": {k: v.artifact_id for k, v in outputs.items()},
         }

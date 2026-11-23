@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import multiprocessing
+import subprocess
+import sys
+import threading
 import queue
 import time
 from collections.abc import Mapping
@@ -501,6 +504,14 @@ def test_cpu_checkpoint_resumes_after_platform_driver_observation_changes(
         historical = project.get_operation(operation_id)
         assert historical["platform_id"] == initial_platform
         assert historical["environment_id"] == initial_software
+        attempts = project.execution_attempts(operation_id)
+        assert len(attempts) == 2
+        assert [attempt["outcome"] for attempt in attempts] == ["failed", "complete"]
+        assert attempts[0]["environment_id"] == initial_software
+        assert attempts[0]["platform_id"] == initial_platform
+        assert attempts[1]["environment_id"] == initial_software
+        assert attempts[1]["platform_id"] == project.platforms.opening_id
+        assert attempts[1]["platform_id"] != initial_platform
 
 
 def test_legacy_resumable_operation_obeys_active_default_without_backfilling(
@@ -1259,3 +1270,316 @@ def test_checkpoint_swap_discards_stale_previous_when_target_is_complete(
 
     assert (target / "state.txt").read_text(encoding="utf-8") == "new"
     assert not previous.exists()
+
+
+@pytest.mark.acceptance
+def test_concurrent_resume_does_not_displace_live_owner(tmp_path: Path, monkeypatch) -> None:
+    """Two Project sessions cannot manipulate the same live checkpoint."""
+    import text_analysis_lab as teal
+    from text_analysis_lab.core import translate as execution
+    from text_analysis_lab.core.errors import OperatorError
+
+    _install_pickle_parquet(monkeypatch)
+    rows = pd.DataFrame({"id": list(range(6))})
+    _install_fake_source_queries(monkeypatch, rows)
+    location = tmp_path / "exclusive-resume"
+    with teal.Project.create(location, name="exclusive_resume") as project:
+        source = _seed_source_artifact(project, rows)
+        translator = _TransientResumableTranslator(
+            str(tmp_path / "fail-once"), fail_unit=0,
+        )
+        with pytest.raises(RuntimeError, match="transient unit 0"):
+            project.translate(translator, source, batch_size=2, workers=1)
+        operation_id = project.catalog.list_operations()[-1]["operation_id"]
+
+    entered, release = threading.Event(), threading.Event()
+    original_run = execution._run_repeated_plan
+
+    def hold_first_resume(**kwargs):
+        entered.set()
+        if not release.wait(timeout=30):
+            raise RuntimeError("First execution did not receive release signal.")
+        return original_run(**kwargs)
+
+    monkeypatch.setattr(execution, "_run_repeated_plan", hold_first_resume)
+    results: list[str] = []
+    errors: list[BaseException] = []
+
+    def resume_first():
+        try:
+            with teal.Project.open(location) as first:
+                output = first.resume_operation(operation_id)["output"]
+                results.append(output.artifact_id)
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=resume_first)
+    thread.start()
+    try:
+        assert entered.wait(timeout=30), "First session never entered execution."
+        with teal.Project.open(location) as contender:
+            attempts_before = contender.execution_attempts(operation_id)
+            checkpoint_dir = contender.storage.operation_temp_dir(operation_id)
+            checkpoint_before = {
+                p.relative_to(checkpoint_dir): p.read_bytes()
+                for p in checkpoint_dir.rglob("*") if p.is_file()
+            }
+            with pytest.raises(OperatorError, match="already executing"):
+                contender.resume_operation(operation_id)
+            assert contender.execution_attempts(operation_id) == attempts_before
+            assert {
+                p.relative_to(checkpoint_dir): p.read_bytes()
+                for p in checkpoint_dir.rglob("*") if p.is_file()
+            } == checkpoint_before
+    finally:
+        release.set()
+        thread.join(timeout=30)
+    assert not thread.is_alive()
+    assert not errors, errors
+    assert len(results) == 1
+    with teal.Project.open(location) as verified:
+        assert verified.get_operation(operation_id)["status"] == "complete"
+        attempts = verified.execution_attempts(operation_id)
+        assert len(attempts) == 2
+        assert [a["outcome"] for a in attempts] == ["failed", "complete"]
+
+
+@pytest.mark.acceptance
+def test_operation_lock_is_exclusive_across_independent_processes(tmp_path: Path):
+    """The OS lock (not just a Python thread flag) excludes another process."""
+    from text_analysis_lab.core.execution_ownership import exclusive_operation_execution
+    from text_analysis_lab.core.errors import OperatorError
+
+    operation_dir = tmp_path / "one-operation"
+    operation_dir.mkdir()
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from text_analysis_lab.core.execution_ownership import "
+        "exclusive_operation_execution\n"
+        "with exclusive_operation_execution(Path(sys.argv[1])):\n"
+        "    print('LOCKED', flush=True)\n"
+        "    sys.stdin.read()\n"
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", script, str(operation_dir)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert child.stdout.readline().strip() == "LOCKED", child.stderr.read()
+        with pytest.raises(OperatorError, match="already executing"):
+            with exclusive_operation_execution(operation_dir):
+                pass
+    finally:
+        if child.stdin is not None:
+            child.stdin.close()
+        child.wait(timeout=15)
+    with exclusive_operation_execution(operation_dir):
+        pass
+
+
+def test_attempt_and_operation_completion_roll_back_together(tmp_path: Path):
+    """A failure in either SQL update cannot produce a half-complete record."""
+    import text_analysis_lab as teal
+
+    with teal.Project.create(tmp_path / "atomic-operation", name="atomic") as project:
+        project.catalog.register_operator(
+            operator_id="optr_atomic", operation_type="translate",
+        )
+        project.catalog.register_operation(
+            operation_id="oper_atomic", operator_id="optr_atomic",
+            operation_type="translate", status="incomplete",
+            environment_id=project.environments.opening_id,
+            platform_id=project.platforms.opening_id,
+        )
+        attempt_id = project.catalog.begin_execution_attempt(
+            "oper_atomic",
+            environment_id=project.environments.opening_id,
+            platform_id=project.platforms.opening_id,
+        )
+        with project.catalog.con as con:
+            con.execute(
+                "CREATE TRIGGER prevent_atomic_completion BEFORE UPDATE "
+                "ON operations BEGIN SELECT RAISE(ABORT, 'injected SQL failure'); END"
+            )
+        with pytest.raises(Exception, match="injected SQL failure"):
+            project.catalog.finish_execution_attempt(
+                "oper_atomic", attempt_id=attempt_id, outcome="complete",
+            )
+        assert project.get_operation("oper_atomic")["status"] == "incomplete"
+        assert project.execution_attempts("oper_atomic")[0]["outcome"] == "running"
+        with project.catalog.con as con:
+            con.execute("DROP TRIGGER prevent_atomic_completion")
+        project.catalog.finish_execution_attempt(
+            "oper_atomic", attempt_id=attempt_id, outcome="complete",
+        )
+        assert project.get_operation("oper_atomic")["status"] == "complete"
+        assert project.execution_attempts("oper_atomic")[0]["outcome"] == "complete"
+        with pytest.raises(ValueError, match="no longer active"):
+            project.catalog.finish_execution_attempt(
+                "oper_atomic", attempt_id=attempt_id, outcome="failed",
+            )
+
+
+def test_stale_attempt_id_cannot_finish_new_recovery(tmp_path: Path):
+    """A recovered attempt can never be finalized by its predecessor's token."""
+    import text_analysis_lab as teal
+    from text_analysis_lab.core.execution_ownership import exclusive_operation_execution
+
+    with teal.Project.create(tmp_path / "stale-attempt", name="stale") as project:
+        project.catalog.register_operator(
+            operator_id="optr_stale", operation_type="translate",
+        )
+        project.catalog.register_operation(
+            operation_id="oper_stale", operator_id="optr_stale",
+            operation_type="translate", status="incomplete",
+            environment_id=project.environments.opening_id,
+            platform_id=project.platforms.opening_id,
+        )
+        operation_dir = project.storage.operation_dir("oper_stale")
+        operation_dir.mkdir(parents=True)
+        with exclusive_operation_execution(operation_dir):
+            old_id = project.catalog.begin_execution_attempt(
+                "oper_stale",
+                environment_id=project.environments.opening_id,
+                platform_id=project.platforms.opening_id,
+            )
+        # This deliberately simulates a coordinator that died while its
+        # attempt row remained 'running'. The OS ownership has been released.
+        with exclusive_operation_execution(operation_dir):
+            new_id = project.catalog.begin_execution_attempt(
+                "oper_stale",
+                environment_id=project.environments.opening_id,
+                platform_id=project.platforms.opening_id,
+                recover=True,
+            )
+            with pytest.raises(ValueError, match="no longer active"):
+                project.catalog.finish_execution_attempt(
+                    "oper_stale", attempt_id=old_id, outcome="complete",
+                )
+            attempts = project.execution_attempts("oper_stale")
+            assert [a["outcome"] for a in attempts] == ["uncertain", "running"]
+            assert attempts[1]["attempt_id"] == new_id
+            assert project.get_operation("oper_stale")["status"] == "incomplete"
+            project.catalog.finish_execution_attempt(
+                "oper_stale", attempt_id=new_id, outcome="complete",
+            )
+        assert project.get_operation("oper_stale")["status"] == "complete"
+        assert [a["outcome"] for a in project.execution_attempts("oper_stale")] == [
+            "uncertain", "complete",
+        ]
+
+
+def test_observed_operation_resumes_locally_after_verified_portable_adoption(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """E1 history remains runnable locally after the same interpreter adopts E2."""
+    import copy
+    import hashlib
+    import json
+    import platform
+    import sys
+
+    import text_analysis_lab as teal
+    from text_analysis_lab.core import environments
+    from text_analysis_lab.core import secondary_coordinator
+
+    _install_pickle_parquet(monkeypatch)
+    rows = pd.DataFrame({"id": list(range(6))})
+    _install_fake_source_queries(monkeypatch, rows)
+    observed = {
+        "schema_version": 2,
+        "kind": "observed_unlocked",
+        "python": {
+            "implementation": sys.implementation.name,
+            "version": platform.python_version(),
+        },
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": "a" * 40},
+            {"name": "r1-portable-probe", "version": "1.0"},
+        ],
+    }
+    monkeypatch.setattr(
+        environments, "observe_environment", lambda: copy.deepcopy(observed),
+    )
+    location = tmp_path / "observed-to-portable"
+    with teal.Project.create(location, name="observed_to_portable") as project:
+        source = _seed_source_artifact(project, rows)
+        first = project.environments.opening_id
+        with pytest.raises(RuntimeError, match="transient unit 0"):
+            project.translate(
+                _TransientResumableTranslator(
+                    str(tmp_path / "fail-once"), fail_unit=0,
+                ),
+                source, batch_size=2, workers=1,
+            )
+        operation_id = project.catalog.list_operations()[-1]["operation_id"]
+        assert project.get_operation(operation_id)["environment_id"] == first
+        assert project.execution_attempts(operation_id)[0]["environment_id"] == first
+
+        manifest = {
+            "realizations": [
+                {"distributions": copy.deepcopy(observed["distributions"])},
+            ],
+        }
+        canonical = environments._normalize_portable_manifest(manifest)
+        spec = {
+            "schema_version": 2, "kind": "portable_locked",
+            "python": copy.deepcopy(observed["python"]),
+            "teal": {
+                "version": observed["teal"]["version"],
+                "source": {"vcs": "git", "commit": "a" * 40},
+            },
+            "extras": [],
+            "lock": {
+                "kind": "uv", "manifest": manifest,
+                "sha256": hashlib.sha256(json.dumps(
+                    canonical, sort_keys=True, separators=(",", ":"),
+                ).encode("utf-8")).hexdigest(),
+            },
+        }
+        second = project.environments.register_portable_specification(spec)
+        assert first != second
+        assert not project.environments.equivalent_executor_identities(first, second)
+        unverified_spec = copy.deepcopy(spec)
+        unverified_spec["extras"] = ["unverified-alternative"]
+        unverified = project.environments.register_portable_specification(unverified_spec)
+        assert unverified not in {first, second}
+        project.environments.verify_current_portable(second)
+        assert not project.environments.equivalent_executor_identities(first, unverified)
+        assert not project.environments.equivalent_executor_identities(second, unverified)
+        assert project.environments.opening_id == second
+        assert project.environments.is_current_interpreter(first)
+        assert project.environments.equivalent_executor_identities(first, second)
+
+        # Regression: routing through a secondary interpreter would fail here
+        # because the user never bound one. There must be no process launch.
+        def forbidden_secondary(*args, **kwargs):
+            raise AssertionError("An already-local observed E1 must not delegate.")
+
+        monkeypatch.setattr(secondary_coordinator, "delegate_resume", forbidden_secondary)
+        result = project.resume_operation(operation_id)["output"]
+        assert result.status == "complete"
+        assert result.n_rows == 6
+        historical = project.get_operation(operation_id)
+        assert historical["environment_id"] == first
+        descriptor = json.loads(
+            project.storage.operation_descriptor_path(operation_id).read_text()
+        )
+        assert descriptor["environment_id"] == first
+        attempts = project.execution_attempts(operation_id)
+        assert [attempt["outcome"] for attempt in attempts] == ["failed", "complete"]
+        assert [attempt["environment_id"] for attempt in attempts] == [first, second]
+
+    with teal.Project.open(location) as reopened:
+        assert reopened.environments.opening_id == second
+        assert reopened.environments.is_current_interpreter(first)
+        assert reopened.get_operation(operation_id)["environment_id"] == first
+
+    # A mutated inventory cannot rely on an association made under E1.
+    observed["distributions"][1]["version"] = "2.0"
+    with teal.Project.open(location) as changed:
+        assert changed.environments.opening_id not in {first, second}
+        assert not changed.environments.is_current_interpreter(first)

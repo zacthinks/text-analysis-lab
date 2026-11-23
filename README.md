@@ -37,6 +37,18 @@ does not by itself certify that an accelerator works, or that checkpoints can sa
 resume on another computer. Portable creation, imports, GPU setup and resource
 bundling remain separate future work; the R0 registry does not download software.
 
+
+For resumable translations, `project.execution_attempts(operation_id)` reports
+the original and subsequent execution contexts as append-only catalog rows.
+Each attempt records its actual software environment, observed platform,
+optional coordinator request, and completion status. The operation's original
+environment/platform references remain unchanged after resumption; a compatible
+CPU checkpoint can resume after an unrelated platform change. An interrupted
+attempt remains unresolved until explicit recovery marks the old attempt
+uncertain and records a new attempt. This history does not certify that every
+native checkpoint is portable.
+
+
 ## Project environments
 
 Each TeAL project records an immutable, fingerprinted observation of the

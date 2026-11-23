@@ -248,6 +248,27 @@ class ProjectCatalog:
                     registered_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS operation_execution_attempts (
+                    attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    operation_id TEXT NOT NULL REFERENCES operations(operation_id),
+                    environment_id TEXT REFERENCES project_environments(environment_id),
+                    platform_id TEXT REFERENCES project_platforms(platform_id),
+                    coordinator_request_id TEXT,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    outcome TEXT NOT NULL CHECK (
+                        outcome IN ('running', 'complete', 'failed', 'uncertain')
+                    ),
+                    error TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_operation_attempts_operation
+                ON operation_execution_attempts(operation_id, attempt_id);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_single_running_attempt
+                ON operation_execution_attempts(operation_id)
+                WHERE outcome = 'running';
+
                 CREATE TABLE IF NOT EXISTS memos (
                     memo_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     target_type TEXT NOT NULL,
@@ -946,6 +967,119 @@ class ProjectCatalog:
                     coordinator_request_id,
                 ),
             )
+
+    def begin_execution_attempt(
+        self, operation_id: str, *, environment_id: str, platform_id: str,
+        coordinator_request_id: str | None = None, recover: bool = False,
+    ) -> int:
+        """Start execution under the *caller-held* exclusive operation lock.
+
+        Reclassification is permitted only on explicit recovery, after its
+        coordinator acquired the cross-process operation lock. The database's
+        partial unique index also prevents overlapping running attempts.
+        """
+        with self.con as con:
+            existing = con.execute(
+                "SELECT status FROM operations WHERE operation_id = ?",
+                (str(operation_id),),
+            ).fetchone()
+            if existing is None:
+                raise KeyError(str(operation_id))
+            if existing["status"] == "complete":
+                raise ValueError("Cannot begin execution of a complete operation.")
+            active = con.execute(
+                "SELECT attempt_id FROM operation_execution_attempts "
+                "WHERE operation_id = ? AND outcome = 'running'",
+                (str(operation_id),),
+            ).fetchone()
+            if active is not None:
+                if not recover:
+                    raise ValueError(
+                        "Operation already has an active execution attempt."
+                    )
+                con.execute(
+                    "UPDATE operation_execution_attempts SET outcome = 'uncertain', "
+                    "finished_at = ? WHERE attempt_id = ? AND outcome = 'running'",
+                    (utc_now_iso(), active["attempt_id"]),
+                )
+            result = con.execute(
+                "INSERT INTO operation_execution_attempts "
+                "(operation_id, environment_id, platform_id, coordinator_request_id, "
+                "started_at, outcome) VALUES (?, ?, ?, ?, ?, 'running')",
+                (str(operation_id), environment_id, platform_id,
+                 coordinator_request_id, utc_now_iso()),
+            )
+            return int(result.lastrowid)
+
+    def finish_execution_attempt(
+        self, operation_id: str, *, attempt_id: int, outcome: str,
+        error: Exception | None = None,
+    ) -> None:
+        """Atomically seal this exact attempt and its operation status.
+
+        The attempt id is an ownership token: a different caller cannot finish
+        the newest attempt merely because it shares the same operation id.
+        """
+        if outcome not in {"complete", "failed"}:
+            raise ValueError("Invalid completed execution-attempt outcome.")
+        with self.con as con:
+            row = con.execute(
+                "UPDATE operation_execution_attempts SET outcome = ?, "
+                "finished_at = ?, error = ? WHERE attempt_id = ? "
+                "AND operation_id = ? AND outcome = 'running'",
+                (outcome, utc_now_iso(), None if error is None else str(error),
+                 attempt_id, str(operation_id)),
+            )
+            if row.rowcount != 1:
+                raise ValueError(
+                    "Execution attempt is no longer active or is not owned by this caller."
+                )
+            updated = con.execute(
+                "UPDATE operations SET status = ?, completed_at = ?, error = ? "
+                "WHERE operation_id = ? AND status != 'complete'",
+                (outcome, utc_now_iso(), None if error is None else str(error),
+                 str(operation_id)),
+            )
+            if updated.rowcount != 1:
+                raise ValueError("Operation is already complete or missing.")
+
+    def mark_execution_attempt_uncertain(
+        self, operation_id: str, *, request_id: str | None = None,
+    ) -> None:
+        """Mark an unconfirmed attempt uncertain after the coordinator exits.
+
+        An unsuccessful or missing subprocess response does not establish that
+        the scientific operation failed, or how far a checkpoint progressed.
+        """
+        with self.con as con:
+            con.execute(
+                "UPDATE operation_execution_attempts SET outcome = 'uncertain', "
+                "finished_at = ? WHERE operation_id = ? AND outcome = 'running' "
+                "AND (? IS NULL OR coordinator_request_id = ?)",
+                (utc_now_iso(), str(operation_id), request_id, request_id),
+            )
+
+    def list_execution_attempts(self, operation_id: str) -> list[dict[str, Any]]:
+        """Return append-only attempt contexts, including unknown prior outcomes."""
+        return self._dicts(self.con.execute(
+            "SELECT * FROM operation_execution_attempts "
+            "WHERE operation_id = ? ORDER BY attempt_id",
+            (str(operation_id),),
+        ).fetchall())
+
+    def operation_for_attempt_request(
+        self, request_id: str,
+    ) -> dict[str, Any] | None:
+        """Resolve a resume request without rewriting the original operation ID."""
+        row = self.con.execute(
+            "SELECT operations.* FROM operations "
+            "JOIN operation_execution_attempts AS attempts "
+            "ON attempts.operation_id = operations.operation_id "
+            "WHERE attempts.coordinator_request_id = ? "
+            "ORDER BY attempts.attempt_id DESC LIMIT 1",
+            (str(request_id),),
+        ).fetchone()
+        return self._dict(row)
 
     def operation_for_coordinator_request(
         self, request_id: str

@@ -5,6 +5,7 @@ on:
   pull_request:
     branches:
       - main
+      - feature/platforms-and-environments
 
 jobs:
   acceptance:

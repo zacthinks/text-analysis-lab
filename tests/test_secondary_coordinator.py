@@ -1,14 +1,16 @@
 """Real independent-interpreter acceptance for the R1 TextLength-only pilot.
 
 The secondary is an actual isolated venv with a distinct installed package
-inventory. On POSIX CI it shares test dependencies via PYTHONPATH solely to
-avoid reinstalling unrelated packages; TeAL never provisions environments.
+inventory. Test dependencies are shared via PYTHONPATH solely to avoid
+reinstalling unrelated packages; TeAL never provisions environments.
 Both interpreters use the same Python minor unless separately tested.
 """
 
 from __future__ import annotations
 
 import concurrent.futures
+import copy
+import hashlib
 import json
 import os
 import subprocess
@@ -21,12 +23,14 @@ import pandas as pd
 import pytest
 
 from text_analysis_lab import Project
+from text_analysis_lab.core import environments, platforms
 from text_analysis_lab.core.environments import EnvironmentRegistryError
 from text_analysis_lab.core.secondary_coordinator import (
     PROTOCOL_VERSION,
     SecondaryCoordinatorError,
     SecondaryOperationError,
     _check_probe,
+    _pilot_code_digest,
     _json,
     _read_json,
     _run,
@@ -36,11 +40,12 @@ from text_analysis_lab.translators import FeatureMatrix, TextLength
 
 @pytest.fixture
 def two_interpreters(tmp_path, monkeypatch):
-    if sys.platform == "win32":
-        pytest.skip("POSIX dependency-sharing fixture; Windows tested by Acceptance suite")
     directory = tmp_path / "other-venv"
     venv.EnvBuilder(with_pip=False, system_site_packages=False).create(directory)
-    executable = directory / "bin" / "python"
+    executable = (
+        directory / "Scripts" / "python.exe"
+        if sys.platform == "win32" else directory / "bin" / "python"
+    )
     result = subprocess.run(
         [str(executable), "-c", "import site; print(site.getsitepackages()[0])"],
         text=True, capture_output=True, check=True, timeout=30,
@@ -99,6 +104,7 @@ def _open_bound(two_interpreters):
     return project
 
 
+@pytest.mark.acceptance
 def test_secondary_sequential_translation_correct_artifact_and_provenance(two_interpreters):
     _, source_id, _, a, b, _ = two_interpreters
     with _open_bound(two_interpreters) as project:
@@ -119,11 +125,20 @@ def test_secondary_sequential_translation_correct_artifact_and_provenance(two_in
         operation = project.operation_for_artifact(output)
         assert operation is not None
         assert operation["environment_id"] == b
+        assert operation["platform_id"] in {
+            row["platform_id"] for row in project.platforms.list()
+        }
+        assert len(project.execution_attempts(operation["operation_id"])) == 1
+        attempt = project.execution_attempts(operation["operation_id"])[0]
+        assert attempt["environment_id"] == b
+        assert attempt["platform_id"] == operation["platform_id"]
+        assert attempt["outcome"] == "complete"
         assert operation["coordinator_request_id"]
         descriptor = json.loads(
             project.storage.operation_descriptor_path(operation["operation_id"]).read_text()
         )
         assert descriptor["environment_id"] == b
+        assert descriptor["platform_id"] == operation["platform_id"]
         assert descriptor["coordinator_request_id"] == operation["coordinator_request_id"]
         assert project.catalog.operation_outputs(operation["operation_id"])[0][
             "artifact_id"
@@ -144,6 +159,7 @@ def test_remote_alias_reuse_and_overwrite_preserve_idempotence(two_interpreters)
         assert original_operation["environment_id"] == b
         assert original_operation["coordinator_request_id"]
         assert len(project.list_operations()) == before + 1
+        original_attempts = project.execution_attempts(original_operation["operation_id"])
 
         # Existing TeAL semantics ignore new scientific parameters on reuse.
         # The new request must NOT be misidentified as a new operation.
@@ -155,6 +171,7 @@ def test_remote_alias_reuse_and_overwrite_preserve_idempotence(two_interpreters)
         assert project.resolve_artifact_id("lengths") == first.artifact_id
         assert len(project.list_operations()) == before + 1
         assert project.get_operation(original_operation["operation_id"]) == original_operation
+        assert project.execution_attempts(original_operation["operation_id"]) == original_attempts
         assert reused.query(
             data_columns=False, metadata_columns=["text_words"],
             metadata_mode="local", form="table",
@@ -260,11 +277,12 @@ def test_protocol_and_teal_version_mismatch_rejected_before_execution(two_interp
         from text_analysis_lab.core.secondary_coordinator import _verified_executable
         _verified_executable(project, b)
         before = project.list_operations()
-        fake = {
-            "protocol_version": PROTOCOL_VERSION + 1, "kind": "probe",
-            "environment_id": b, "teal_version": "0.12.2",
-            "observation_schema_version": 1, "python_version": [3, 11, 0],
-        }
+        exit_code, fake, stderr = _run(
+            project.environments.bound_interpreter(b), "--probe", timeout=60,
+        )
+        assert exit_code == 0, stderr
+        assert fake is not None
+        fake["protocol_version"] = PROTOCOL_VERSION + 1
         with pytest.raises(SecondaryCoordinatorError, match="protocol version"):
             _check_probe(project, b, fake)
         fake["protocol_version"] = PROTOCOL_VERSION
@@ -322,6 +340,11 @@ def test_pre_operation_failure_and_child_registered_failure(two_interpreters, tm
         restored = project.resume_operation(failed["operation_id"])["output"]
         assert restored.status == "complete"
         assert project.operation_for_artifact(restored)["environment_id"] == b
+        history = project.execution_attempts(failed["operation_id"])
+        assert len(history) == 2
+        assert [attempt["outcome"] for attempt in history] == ["failed", "complete"]
+        assert all(attempt["environment_id"] == b for attempt in history)
+        assert history[-1]["platform_id"] == failed["platform_id"]
         with Project.open(project_path) as unbound:
             with pytest.raises(EnvironmentRegistryError, match="no bound"):
                 unbound.resume_operation(failed["operation_id"])
@@ -446,7 +469,189 @@ def test_secondary_abrupt_termination_is_correlated_and_does_not_auto_retry(
             assert output.status == "complete"
             assert output.n_rows == 150
             assert project.get_operation(operation_id)["environment_id"] == b
+            history = project.execution_attempts(operation_id)
+            assert len(history) == 2
+            assert [attempt["outcome"] for attempt in history] == ["uncertain", "complete"]
         finally:
             if child.poll() is None:
                 child.kill()
                 child.wait(timeout=15)
+
+
+def test_secondary_probe_evidence_and_code_compatibility(two_interpreters):
+    """An ID string, TeAL version, or protocol number alone never authorizes B."""
+    _, source_id, executable, a, b, _ = two_interpreters
+    with _open_bound(two_interpreters) as project:
+        code, payload, stderr = _run(executable, "--probe", timeout=60)
+        assert code == 0, stderr
+        assert payload is not None
+        _check_probe(project, b, payload)
+        spoofed = copy.deepcopy(payload)
+        spoofed["environment_id"] = a
+        with pytest.raises(EnvironmentRegistryError, match="claimed"):
+            _check_probe(project, b, spoofed)
+        changed = copy.deepcopy(payload)
+        changed["observation"]["distributions"].append(
+            {"name": "unrecorded-b-package", "version": "1.0"}
+        )
+        with pytest.raises(EnvironmentRegistryError, match="claimed"):
+            _check_probe(project, b, changed)
+        incompatible = copy.deepcopy(payload)
+        incompatible["pilot_code_sha256"] = "0" * 64
+        with pytest.raises(SecondaryCoordinatorError, match="implementation/source"):
+            _check_probe(project, b, incompatible)
+        assert project.catalog.operation_for_coordinator_request("missing") is None
+
+
+@pytest.mark.acceptance
+def test_portable_child_adopts_verified_realization_with_distinct_platform(
+    two_interpreters, monkeypatch, tmp_path,
+):
+    """Real B subprocess and installed inventory; source/host metadata controlled.
+
+    Test environments share editable TeAL dependencies via PYTHONPATH. The
+    fixture supplies a *synthetic* immutable source proof, so this exercises
+    coordination logic, NOT independent artifact/source-byte verification or
+    genuine different-hardware execution.
+    """
+    project_path, source_id, executable, a, b, _ = two_interpreters
+    hook_dir = tmp_path / "controlled-probe"
+    hook_dir.mkdir()
+    (hook_dir / "sitecustomize.py").write_text(
+        "import copy\n"
+        "import os\n"
+        "from text_analysis_lab.core import environments, platforms\n"
+        "_original_software = environments.observe_environment\n"
+        "_original_platform = platforms.observe_platform\n"
+        "def controlled_software():\n"
+        "    result = copy.deepcopy(_original_software())\n"
+        "    for dist in result['distributions']:\n"
+        "        dist.pop('editable', None)\n"
+        "        dist.pop('local_install', None)\n"
+        "        if dist['name'] == 'text-analysis-lab':\n"
+        "            dist['vcs_commit'] = 'a' * 40\n"
+        "    return result\n"
+        "def controlled_platform():\n"
+        "    result = copy.deepcopy(_original_platform())\n"
+        "    result['os']['release'] += '-simulated-secondary'\n"
+        "    return result\n"
+        "environments.observe_environment = controlled_software\n"
+        "platforms.observe_platform = controlled_platform\n"
+        "if os.environ.get('TEAL_R1_TEST_FAIL_AFTER_REGISTRATION') == '1':\n"
+        "    import text_analysis_lab.core.translate as execution\n"
+        "    def injected_failure(**kwargs):\n"
+        "        raise RuntimeError('Injected B operation failure before portable adoption')\n"
+        "    execution._run_repeated_plan = injected_failure\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "PYTHONPATH", os.pathsep.join([str(hook_dir), os.environ["PYTHONPATH"]]),
+    )
+    exit_code, probe, stderr = _run(executable, "--probe", timeout=60)
+    assert exit_code == 0, stderr
+    assert probe is not None
+    observed = probe["observation"]
+    assert observed["kind"] == "observed_unlocked"
+    assert any(
+        dist.get("vcs_commit") == "a" * 40
+        for dist in observed["distributions"]
+        if dist["name"] == "text-analysis-lab"
+    )
+    # This same B interpreter first runs under its observed identity E1.
+    # It fails before the researcher imports and adopts portable identity E2.
+    registered = subprocess.run(
+        [str(executable), "-c",
+         "import sys; from text_analysis_lab import Project; "
+         "p=Project.open(sys.argv[1]); print(p.environments.opening_id); p.close()",
+         str(project_path)],
+        text=True, capture_output=True, timeout=90, check=False,
+    )
+    assert registered.returncode == 0, registered.stderr
+    observed_b = registered.stdout.strip().splitlines()[-1]
+    assert observed_b == probe["environment_id"]
+
+    manifest = {
+        "realizations": [{"distributions": copy.deepcopy(observed["distributions"])}],
+    }
+    canonical = environments._normalize_portable_manifest(manifest)
+    manifest_digest = hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    spec = {
+        "schema_version": 2,
+        "kind": "portable_locked",
+        "python": observed["python"],
+        "teal": {
+            "version": observed["teal"]["version"],
+            "source": {"vcs": "git", "commit": "a" * 40},
+        },
+        "extras": [],
+        "lock": {"kind": "uv", "manifest": manifest, "sha256": manifest_digest},
+    }
+    with Project.open(project_path) as project:
+        project.environments.bind_interpreter(observed_b, executable)
+        monkeypatch.setenv("TEAL_R1_TEST_FAIL_AFTER_REGISTRATION", "1")
+        try:
+            with pytest.raises(SecondaryOperationError, match="Injected B operation failure") as failed:
+                project.translate(
+                    TextLength({"text": "words"}), source_id,
+                    environment=observed_b, workers=1, batch_size=2,
+                )
+        finally:
+            monkeypatch.delenv("TEAL_R1_TEST_FAIL_AFTER_REGISTRATION")
+        prior_operation_id = failed.value.operation_id
+        assert prior_operation_id is not None
+        assert project.get_operation(prior_operation_id)["environment_id"] == observed_b
+        assert project.execution_attempts(prior_operation_id)[0]["outcome"] == "failed"
+
+        portable = project.environments.register_portable_specification(spec)
+        project.environments.bind_interpreter(portable, executable)
+        assert project.environments.opening_id == a
+        assert project.environments.get(portable)["readiness"] == "unverified"
+        output = project.translate(
+            TextLength({"text": "words"}), source_id, environment=portable,
+            workers=1, batch_size=2,
+        )["output"]
+        operation = project.operation_for_artifact(output)
+        assert operation["environment_id"] == portable
+        assert operation["platform_id"] != project.platforms.opening_id
+        descriptor = json.loads(
+            project.storage.operation_descriptor_path(
+                operation["operation_id"]
+            ).read_text(encoding="utf-8")
+        )
+        assert descriptor["platform_id"] == operation["platform_id"]
+        history = project.execution_attempts(operation["operation_id"])
+        assert len(history) == 1
+        assert history[0]["platform_id"] == operation["platform_id"]
+        assert history[0]["environment_id"] == portable
+        assert history[0]["outcome"] == "complete"
+
+        # B now reopens under E2 automatically. An explicit resume of its old
+        # E1 operation must still work via the genuinely separate interpreter.
+        recovered = project.resume_operation(prior_operation_id)["output"]
+        assert recovered.status == "complete"
+        assert recovered.n_rows == 5
+        original = project.get_operation(prior_operation_id)
+        assert original["environment_id"] == observed_b
+        original_descriptor = json.loads(
+            project.storage.operation_descriptor_path(prior_operation_id).read_text()
+        )
+        assert original_descriptor["environment_id"] == observed_b
+        recovery = project.execution_attempts(prior_operation_id)
+        assert len(recovery) == 2
+        assert [a["outcome"] for a in recovery] == ["failed", "complete"]
+        assert [a["environment_id"] for a in recovery] == [observed_b, portable]
+        assert recovery[-1]["platform_id"] == original["platform_id"]
+        assert recovery[-1]["coordinator_request_id"]
+
+    # The verified association is durable, and can be reopened by the child.
+    reopened = subprocess.run(
+        [str(executable), "-c",
+         "import sys; from text_analysis_lab import Project; "
+         "p=Project.open(sys.argv[1]); print(p.environments.opening_id); p.close()",
+         str(project_path)],
+        text=True, capture_output=True, timeout=90, check=False,
+    )
+    assert reopened.returncode == 0, reopened.stderr
+    assert reopened.stdout.strip().splitlines()[-1] == portable
