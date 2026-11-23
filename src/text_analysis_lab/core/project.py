@@ -35,7 +35,6 @@ from text_analysis_lab.core.errors import (
     OperatorNotFoundError,
     PipelineError,
 )
-from text_analysis_lab.core.environments import EnvironmentRegistry
 from text_analysis_lab.core.feature_subset import (
     FeatureSubsetFunction,
 )
@@ -157,12 +156,7 @@ class Project:
     def __init__(self, storage: ProjectStorage) -> None:
         self.storage = storage
         self.catalog = ProjectCatalog(self.storage.catalog_dir)
-        try:
-            self.environments = EnvironmentRegistry(self.catalog)
-            self.query = QueryEngine(self)
-        except Exception:
-            self.catalog.close()
-            raise
+        self.query = QueryEngine(self)
         self._geco_manager = None
         self._project_centers: list[ProjectCenterServer] = []
         self._closed = False
@@ -1014,8 +1008,6 @@ class Project:
         alias: AliasSpec = None,
         overwrite: bool = False,
         freeze_device: bool = False,
-        environment: str | None = None,
-        _coordinator_request_id: str | None = None,
         **params: Any,
     ) -> Mapping[str, BaseArtifact]:
         """Run a translation operation and return output artifacts by label.
@@ -1025,21 +1017,6 @@ class Project:
         expose a typed ``translate(project, ...)`` convenience method that
         delegates here.
         """
-        # R1: unsupported cross-interpreter requests are checked and delegated
-        # before any local scientific work, ID allocation, or alias changes.
-        selected = self.environments.resolve(environment)
-        if selected != self.environments.opening_id:
-            if _coordinator_request_id is not None:
-                raise OperatorError("Nested secondary coordination is unsupported.")
-            from text_analysis_lab.core.secondary_coordinator import delegate_translate
-
-            return delegate_translate(
-                self, selected, translator, sources, workers=workers,
-                batch_size=batch_size, batch_by=batch_by,
-                max_outstanding_units=max_outstanding_units, memo=memo,
-                alias=alias, overwrite=overwrite, freeze_device=freeze_device,
-                params=params,
-            )
         from text_analysis_lab.translators.feature_matrix import FeatureMatrix
         if not isinstance(freeze_device, bool):
             raise TypeError("freeze_device must be a bool.")
@@ -1074,7 +1051,6 @@ class Project:
             alias=alias,
             overwrite=overwrite,
             freeze_device=freeze_device,
-            coordinator_request_id=_coordinator_request_id,
             **params,
         )
 
@@ -1121,15 +1097,6 @@ class Project:
         """Resume a previously recorded resumable operation as configured."""
         operation = self.catalog.get_operation(str(operation_id))
         operation_type = str(operation["operation_type"])
-        selected = (
-            operation["environment_id"]
-            if operation["environment_id"] is not None
-            else self.environments.resolve()
-        )
-        if selected != self.environments.opening_id:
-            from text_analysis_lab.core.secondary_coordinator import delegate_resume
-
-            return delegate_resume(self, selected, str(operation_id))
         if operation_type in {"translate", "subset"}:
             return _resume_translate(self, str(operation_id))
         raise OperatorError(

@@ -1202,7 +1202,6 @@ def _execute_import(
         operation_type="import",
         operator_id=operator_id,
         status="incomplete",
-        environment_id=project.environments.opening_id,
     )
 
     artifact_id = next_id(project.storage.manifest_path, "artifact")
@@ -1234,7 +1233,6 @@ def _execute_import(
     descriptor: dict[str, Any] = {
         "schema_version": 1,
         "operation_id": operation_id,
-        "environment_id": project.environments.opening_id,
         "operation_type": "import",
         "operator_id": operator_id,
         "import_kind": kind,
