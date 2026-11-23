@@ -95,7 +95,9 @@ def _lock_toml(lock: dict[str, Any]) -> str:
 
 
 def _trusted_https(url: str) -> str:
-    """Protect import against local paths, credentials and private network URLs."""
+    """Require an actual HTTPS remote, not a symbolic R0 index label."""
+    if not isinstance(url, str) or urlsplit(url).scheme != "https":
+        raise EnvironmentRegistryError("Portable artifact/index must use HTTPS.")
     return _portable_index_reference(url)
 
 
@@ -211,6 +213,17 @@ def validate_manifest(manifest: Any, *, python: str, commit: str, extras: list[s
     if (len(root_deps) != 1 or len(root_metadata) != 1
             or sorted(root_metadata[0].get("extras", [])) != extras):
         raise EnvironmentRegistryError("The uv root dependency contradicts requested TeAL extras.")
+    declared_git = root_metadata[0].get("git")
+    if not isinstance(declared_git, str):
+        raise EnvironmentRegistryError("The uv root dependency must preserve pinned TeAL Git provenance.")
+    parsed_git = urlsplit(declared_git)
+    if (parsed_git.scheme != "https" or parsed_git.hostname != "github.com"
+            or parsed_git.username is not None or parsed_git.password is not None
+            or parsed_git.path.rstrip("/") not in {
+                "/zacthinks/text-analysis-lab", "/zacthinks/text-analysis-lab.git"
+            } or parsed_git.fragment not in {"", commit}
+            or parse_qs(parsed_git.query) != {"rev": [commit]}):
+        raise EnvironmentRegistryError("The root Git requirement differs from immutable TeAL source.")
     if any(x not in _SUPPORTED_EXTRAS for x in extras):
         raise EnvironmentRegistryError("Portable Torch/heavy extras are not yet supported.")
     if "resolution-markers" in lock:
