@@ -128,6 +128,7 @@ def test_legacy_project_operations_remain_unassigned(tmp_path, simulated):
         assert len(project.environments.list()) == 1
         assert project.get_operation("run_000001") is not None
         assert project.get_operation("run_000001")["environment_id"] is None
+        assert project.get_operation("run_000001")["platform_id"] is None
     with sqlite3.connect(db) as con:
         assert con.execute("SELECT * FROM operations").fetchall() == before
 
