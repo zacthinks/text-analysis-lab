@@ -331,3 +331,32 @@ def test_replay_allowed_but_cross_platform_checkpoint_resume_rejected(
         with pytest.raises(OperatorError, match="Cross-platform checkpoint resume"):
             project.resume_operation("run_r0_resume")
         assert project.get_operation("run_r0_resume") == historical
+
+
+def test_fast_platform_probe_avoids_bitness_subprocess_and_duplicate_gpu_calls(monkeypatch):
+    """Opening many Projects must not launch 'file' or nvidia-smi for each one."""
+    def forbidden_architecture():
+        raise AssertionError("platform.architecture() may launch an external process")
+
+    calls = []
+    def fake_gpu():
+        calls.append(1)
+        return [{"backend": "nvidia", "model": "Test GPU", "driver_version": "1"}]
+
+    monkeypatch.setattr(platforms.platform, "architecture", forbidden_architecture)
+    monkeypatch.setattr(platforms, "_GPU_PROBE_CACHE", None)
+    monkeypatch.setattr(platforms, "_query_nvidia_devices", fake_gpu)
+
+    first = platforms.observe_platform()
+    for _ in range(8):
+        assert platforms.observe_platform() == first
+    assert first["python_architecture"] in {"32bit", "64bit"}
+    assert len(calls) == 1
+
+    # Driver details may change. The bounded cache must eventually refresh.
+    monkeypatch.setattr(platforms, "_GPU_PROBE_CACHE", (
+        platforms.time.monotonic() - platforms._GPU_PROBE_TTL_SECONDS - 1,
+        first["accelerators"],
+    ))
+    assert platforms.observe_platform()["accelerators"] == first["accelerators"]
+    assert len(calls) == 2
