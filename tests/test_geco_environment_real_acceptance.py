@@ -126,9 +126,10 @@ def test_actual_child_exploratory_geometry_and_server(tmp_path, second_python, m
             # One strict port collision must fail without killing the first
             # live child or the parent interpreter.
             other = project.geco.launch(
-                "coding", environment=child_id, device="cpu", warmup=False,
+                "coding", environment=child_id, device="auto", warmup=False,
             )
             try:
+                assert other.execution_device in {"cpu", "cuda:0", "mps"}
                 assert other.port != server.port
                 assert not other.closed and not server.closed
             finally:
