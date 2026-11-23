@@ -58,12 +58,14 @@ def _cache_root() -> Path:
     return (Path(base) if base else Path.home() / ".cache") / "text-analysis-lab" / "environments"
 
 
-def _run_command(args: list[str], *, timeout: int = 1800) -> str:
+def _run_command(args: list[str], *, timeout: int = 1800,
+                 env_overrides: dict[str, str] | None = None) -> str:
     try:
         completed = subprocess.run(
             args, capture_output=True, text=True, timeout=timeout, check=False,
             # Installation builds must not import the parent's notebook paths.
-            env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
+            env={**{k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
+                 **(env_overrides or {})},
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ManagedEnvironmentError(f"Managed environment command could not finish: {args[0]}") from exc
