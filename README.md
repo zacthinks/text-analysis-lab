@@ -60,7 +60,9 @@ Python version, TeAL version and normalized installed distributions (including
 package-installed models), but no OS/kernel/driver or local executable path.
 A portable-locked entry additionally carries immutable TeAL source identity,
 requested extras and a content-verified manifest that may encode conditional
-realizations. It does **not** contain a separate top-level installed-distribution
+realizations. It requires an exact Python `major.minor.micro` version and checks
+that each declared realization satisfies any accompanying exact package pins
+(PEP 440 semantics allow a pinned `torch==2.14.1` to match `2.14.1+cu130`). It does **not** contain a separate top-level installed-distribution
 inventory: that would make the same portable lock have multiple identities.
 Only supported, portable manifest fields can be registered; arbitrary metadata,
 private local paths and credential-bearing origins are rejected before storage.
@@ -84,7 +86,10 @@ and `unverified`. The `verification_level` reports `installed_metadata_match`
 for a locally matched portable lock; this is **not** artifact verification.
 R2 must establish trusted installation/wheel hash evidence before claiming an
 exact binary reproduction. A metadata match is not a GPU probe and does not prove
-that a cross-machine scientific checkpoint can safely resume.
+that an arbitrary cross-machine scientific checkpoint can safely resume. Platform
+observations are historical provenance, **not an unconditional resume gate**;
+compatibility and frozen scientific device/backend requirements remain the
+execution layer's responsibility.
 
 
 `set_default()` only changes the active default of that *open Project
