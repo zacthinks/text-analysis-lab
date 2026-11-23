@@ -519,6 +519,7 @@ def test_portable_child_adopts_verified_realization_with_distinct_platform(
     hook_dir.mkdir()
     (hook_dir / "sitecustomize.py").write_text(
         "import copy\n"
+        "import os\n"
         "from text_analysis_lab.core import environments, platforms\n"
         "_original_software = environments.observe_environment\n"
         "_original_platform = platforms.observe_platform\n"
@@ -535,7 +536,12 @@ def test_portable_child_adopts_verified_realization_with_distinct_platform(
         "    result['os']['release'] += '-simulated-secondary'\n"
         "    return result\n"
         "environments.observe_environment = controlled_software\n"
-        "platforms.observe_platform = controlled_platform\n",
+        "platforms.observe_platform = controlled_platform\n"
+        "if os.environ.get('TEAL_R1_TEST_FAIL_AFTER_REGISTRATION') == '1':\n"
+        "    import text_analysis_lab.core.translate as execution\n"
+        "    def injected_failure(**kwargs):\n"
+        "        raise RuntimeError('Injected B operation failure before portable adoption')\n"
+        "    execution._run_repeated_plan = injected_failure\n",
         encoding="utf-8",
     )
     monkeypatch.setenv(
@@ -551,6 +557,19 @@ def test_portable_child_adopts_verified_realization_with_distinct_platform(
         for dist in observed["distributions"]
         if dist["name"] == "text-analysis-lab"
     )
+    # This same B interpreter first runs under its observed identity E1.
+    # It fails before the researcher imports and adopts portable identity E2.
+    registered = subprocess.run(
+        [str(executable), "-c",
+         "import sys; from text_analysis_lab import Project; "
+         "p=Project.open(sys.argv[1]); print(p.environments.opening_id); p.close()",
+         str(project_path)],
+        text=True, capture_output=True, timeout=90, check=False,
+    )
+    assert registered.returncode == 0, registered.stderr
+    observed_b = registered.stdout.strip().splitlines()[-1]
+    assert observed_b == probe["environment_id"]
+
     manifest = {
         "realizations": [{"distributions": copy.deepcopy(observed["distributions"])}],
     }
@@ -570,6 +589,21 @@ def test_portable_child_adopts_verified_realization_with_distinct_platform(
         "lock": {"kind": "uv", "manifest": manifest, "sha256": manifest_digest},
     }
     with Project.open(project_path) as project:
+        project.environments.bind_interpreter(observed_b, executable)
+        monkeypatch.setenv("TEAL_R1_TEST_FAIL_AFTER_REGISTRATION", "1")
+        try:
+            with pytest.raises(SecondaryOperationError, match="Injected B operation failure") as failed:
+                project.translate(
+                    TextLength({"text": "words"}), source_id,
+                    environment=observed_b, workers=1, batch_size=2,
+                )
+        finally:
+            monkeypatch.delenv("TEAL_R1_TEST_FAIL_AFTER_REGISTRATION")
+        prior_operation_id = failed.value.operation_id
+        assert prior_operation_id is not None
+        assert project.get_operation(prior_operation_id)["environment_id"] == observed_b
+        assert project.execution_attempts(prior_operation_id)[0]["outcome"] == "failed"
+
         portable = project.environments.register_portable_specification(spec)
         project.environments.bind_interpreter(portable, executable)
         assert project.environments.opening_id == a
@@ -592,6 +626,24 @@ def test_portable_child_adopts_verified_realization_with_distinct_platform(
         assert history[0]["platform_id"] == operation["platform_id"]
         assert history[0]["environment_id"] == portable
         assert history[0]["outcome"] == "complete"
+
+        # B now reopens under E2 automatically. An explicit resume of its old
+        # E1 operation must still work via the genuinely separate interpreter.
+        recovered = project.resume_operation(prior_operation_id)["output"]
+        assert recovered.status == "complete"
+        assert recovered.n_rows == 5
+        original = project.get_operation(prior_operation_id)
+        assert original["environment_id"] == observed_b
+        original_descriptor = json.loads(
+            project.storage.operation_descriptor_path(prior_operation_id).read_text()
+        )
+        assert original_descriptor["environment_id"] == observed_b
+        recovery = project.execution_attempts(prior_operation_id)
+        assert len(recovery) == 2
+        assert [a["outcome"] for a in recovery] == ["failed", "complete"]
+        assert [a["environment_id"] for a in recovery] == [observed_b, portable]
+        assert recovery[-1]["platform_id"] == original["platform_id"]
+        assert recovery[-1]["coordinator_request_id"]
 
     # The verified association is durable, and can be reopened by the child.
     reopened = subprocess.run(
