@@ -92,10 +92,11 @@ def test_real_uv_managed_base_and_r1_textlength(tmp_path, monkeypatch):
         pytest.skip("Immutable Git checkout required for source verification")
     monkeypatch.setenv("TEAL_MANAGED_ENV_ROOT", str(tmp_path / "managed"))
     with Project.create(tmp_path / "project", "project") as project:
-        source = project.from_keyed_frame(
-            [{"id": 1, "text": "hello world"}, {"id": 2, "text": "another sentence"}],
-            primary_key=["id"],
-        )
+        import pandas as pd
+
+        csv = tmp_path / "source.csv"
+        pd.DataFrame({"text": ["hello world", "another sentence"]}).to_csv(csv, index=False)
+        source = project.read_csv(csv, text_fields="text", metadata_fields=None)
         result = project.environments.create(teal_extras=["parallel"], gpu="auto")
         assert result.backend == "not_applicable"
         assert result.portability.startswith("observed_unlocked")
