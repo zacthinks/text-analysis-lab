@@ -461,6 +461,48 @@ def test_sequential_resume_retries_first_failed_unit_without_redoing_completed_w
 
 
 
+def test_cpu_checkpoint_resumes_after_platform_driver_observation_changes(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Changed driver/OS provenance must not veto a compatible CPU checkpoint."""
+    import copy
+    import text_analysis_lab as teal
+    from text_analysis_lab.core import platforms
+
+    _install_pickle_parquet(monkeypatch)
+    rows = pd.DataFrame({"id": list(range(6))})
+    _install_fake_source_queries(monkeypatch, rows)
+    original = platforms.observe_platform()
+    observed = {"value": original}
+    monkeypatch.setattr(platforms, "observe_platform", lambda: copy.deepcopy(observed["value"]))
+    location = tmp_path / "portable-resume"
+    with teal.Project.create(location, name="portable_resume") as project:
+        source = _seed_source_artifact(project, rows)
+        translator = _TransientResumableTranslator(
+            str(tmp_path / "fail-once"), fail_unit=0,
+        )
+        with pytest.raises(RuntimeError, match="transient unit 0"):
+            project.translate(translator, source, batch_size=2, workers=1)
+        operation = project.catalog.list_operations()[-1]
+        operation_id = operation["operation_id"]
+        initial_platform = operation["platform_id"]
+        initial_software = operation["environment_id"]
+        assert project.storage.operation_temp_dir(operation_id).exists()
+
+    changed = copy.deepcopy(original)
+    changed["os"]["release"] = changed["os"]["release"] + "-updated"
+    observed["value"] = changed
+    with teal.Project.open(location) as project:
+        assert project.platforms.opening_id != initial_platform
+        assert project.environments.opening_id == initial_software
+        result = project.resume_operation(operation_id)["output"]
+        assert result.status == "complete"
+        assert result.n_rows == 6
+        historical = project.get_operation(operation_id)
+        assert historical["platform_id"] == initial_platform
+        assert historical["environment_id"] == initial_software
+
+
 def test_legacy_resumable_operation_obeys_active_default_without_backfilling(
     tmp_path: Path, monkeypatch
 ) -> None:
