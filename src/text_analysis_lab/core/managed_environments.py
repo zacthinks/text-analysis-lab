@@ -222,9 +222,12 @@ def _request_lock(path: Path) -> Iterator[None]:
     with path.open("a+b") as stream:
         if os.name == "nt":
             import msvcrt
-            stream.seek(0)
-            stream.write(b"\0")
-            stream.flush()
+            # Only seed an empty lock file. Writing the locked byte on
+            # every contender would fail before waiting on Windows.
+            stream.seek(0, os.SEEK_END)
+            if stream.tell() == 0:
+                stream.write(b"\0")
+                stream.flush()
             stream.seek(0)
             deadline = time.monotonic() + 1800
             while True:
