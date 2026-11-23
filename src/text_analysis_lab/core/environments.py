@@ -209,7 +209,8 @@ def _normalize_lock_manifest(value: Any, *, field: str | None = None) -> Any:
         }
     if isinstance(value, list):
         items = [_normalize_lock_manifest(item) for item in value]
-        if field in {"packages", "distributions", "realizations", "dependencies", "extras"}:
+        if field in {"packages", "package", "wheels", "requires-dist",
+                     "distributions", "realizations", "dependencies", "extras"}:
             return sorted(
                 items, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
             )
@@ -336,8 +337,18 @@ def _portable_index_reference(value: Any) -> str:
     return value
 
 
-def _normalize_portable_manifest(manifest: Any) -> dict[str, Any]:
-    """R0's small, explicit manifest contract; R2 owns true uv lock parsing."""
+def _normalize_portable_manifest(manifest: Any, *, python: str | None = None,
+                                 teal_commit: str | None = None,
+                                 teal_version: str | None = None,
+                                 extras: list[str] | None = None) -> dict[str, Any]:
+    """Validate legacy explicit realizations or a resolver-backed uv project lock."""
+    if isinstance(manifest, dict) and "uv_lock" in manifest:
+        from text_analysis_lab.core.portable_locks import validate_manifest
+        if not (python and teal_commit and teal_version and extras is not None):
+            raise EnvironmentRegistryError("Incomplete uv lock validation context.")
+        return validate_manifest(manifest, python=python,
+                                 commit=teal_commit, extras=extras,
+                                 teal_version=teal_version)
     if (not isinstance(manifest, dict) or not manifest
             or set(manifest) - _PORTABLE_MANIFEST_FIELDS):
         raise EnvironmentRegistryError("Unsupported portable lock manifest field.")
@@ -471,7 +482,11 @@ def normalize_environment(observation: dict[str, Any]) -> dict[str, Any]:
     result["extras"] = sorted({_portable_name(x, label="extra") for x in extras})
     if not isinstance(lock["kind"], str) or not _SAFE_INDEX_LABEL.fullmatch(lock["kind"]):
         raise EnvironmentRegistryError("Invalid portable lock kind.")
-    manifest = _normalize_portable_manifest(lock["manifest"])
+    manifest = _normalize_portable_manifest(
+        lock["manifest"], python=python_info["version"],
+        teal_commit=normalized_source.get("commit"),
+        teal_version=teal["version"], extras=result["extras"],
+    )
     expected_digest = hashlib.sha256(_canonical_json(manifest).encode("utf-8")).hexdigest()
     digest = lock["sha256"]
     if not isinstance(digest, str) or digest.lower() != expected_digest:
@@ -554,6 +569,31 @@ class EnvironmentRegistry:
         return create(
             self, python=python, teal=teal, teal_extras=teal_extras, gpu=gpu,
         )
+
+    def create_specification(
+        self, *, python: str | None = None, teal: str | None = None,
+        teal_extras: list[str] | tuple[str, ...] | None = None,
+        gpu: str | bool = False,
+    ) -> dict[str, Any]:
+        """Resolve/register a content-addressed cross-platform uv software lock."""
+        from text_analysis_lab.core.portable_locks import create_specification
+        return create_specification(self, python=python, teal=teal,
+                                    teal_extras=teal_extras, gpu=gpu)
+
+    def export_specification(self, environment_id: str, destination: str | Path) -> Path:
+        """Export a registered frozen specification without local cache paths."""
+        from text_analysis_lab.core.portable_locks import export_specification
+        return export_specification(self, environment_id, destination)
+
+    def import_specification(self, source: str | Path) -> str:
+        """Validate and register a frozen specification without installing it."""
+        from text_analysis_lab.core.portable_locks import import_specification
+        return import_specification(self, source)
+
+    def create_from_specification(self, environment_id: str) -> dict[str, Any]:
+        """Explicitly reconstruct and bind a verified realization of a portable lock."""
+        from text_analysis_lab.core.portable_locks import create_from_specification
+        return create_from_specification(self, environment_id)
 
     @property
     def opening_id(self) -> str:
@@ -667,7 +707,13 @@ class EnvironmentRegistry:
             # unverified environments still require an explicit binding.
             from text_analysis_lab.core.managed_environments import find_cached_interpreter
 
-            path = find_cached_interpreter(environment_id)
+            row = self.get(environment_id)
+            if (row["kind"] == "portable_locked"
+                    and row["observation"]["lock"]["kind"] == "uv-project-v1"):
+                from text_analysis_lab.core.portable_locks import find_cached_portable_interpreter
+                path = find_cached_portable_interpreter(self, environment_id)
+            else:
+                path = find_cached_interpreter(environment_id)
             if path is not None:
                 self.bind_interpreter(environment_id, path)
         if path is None:
@@ -716,6 +762,9 @@ class EnvironmentRegistry:
             return False
         if source.get("sha256") and teal_package.get("archive_sha256") != source["sha256"].lower():
             return False
+        if spec["lock"]["kind"] == "uv-project-v1":
+            from text_analysis_lab.core.portable_locks import matches_installed
+            return matches_installed(spec, observed)
         realizations = spec["lock"]["manifest"].get("realizations")
         if not isinstance(realizations, list):
             return False
