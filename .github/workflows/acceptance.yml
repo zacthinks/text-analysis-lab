@@ -135,3 +135,43 @@ jobs:
           MKL_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
         run: uv run pytest tests/test_geco_environment_real_acceptance.py --acceptance -m acceptance -q -rs
+
+  pre-r0-persisted-compatibility:
+    name: real pre-R0 Project migration (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    steps:
+      - name: Checkout candidate integration code
+        uses: actions/checkout@v7
+
+      - name: Checkout actual pre-R0 baseline
+        uses: actions/checkout@v7
+        with:
+          ref: 19e98f4ee1d18630157625495725578d09e81030
+          path: pre-r0-baseline
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.11
+
+      - name: Install candidate TeAL
+        run: uv sync --python 3.11 --all-extras
+
+      - name: Create historical persisted scientific state and verify migration
+        env:
+          TEAL_PRE_R0_BASELINE_CHECKOUT: ${{ github.workspace }}/pre-r0-baseline
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+        run: uv run pytest tests/test_real_pre_r0_compatibility.py --acceptance -m acceptance -q -rs
