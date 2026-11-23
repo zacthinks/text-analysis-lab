@@ -366,6 +366,15 @@ def _build(executable_uv: str, directory: Path, chosen: ManagedEnvironmentPlan,
     return observation, backend, reason
 
 
+def _installation_executable(directory: Path) -> Path:
+    """Resolve one published cache index without allowing arbitrary local paths."""
+    stored = json.loads((directory / _MANIFEST_NAME).read_text(encoding="utf-8"))
+    name = stored.get("installation")
+    if not isinstance(name, str) or not re.fullmatch(r"\.staging-[A-Za-z0-9_-]+", name):
+        raise EnvironmentRegistryError("Invalid local managed installation reference.")
+    return _python_executable(_root() / name / "venv")
+
+
 def _valid_cached(directory: Path, chosen: ManagedEnvironmentPlan, uv_path: str) -> tuple[dict[str, Any], str, str | None] | None:
     meta_path = directory / _MANIFEST_NAME
     if not meta_path.is_file():
@@ -374,7 +383,7 @@ def _valid_cached(directory: Path, chosen: ManagedEnvironmentPlan, uv_path: str)
         stored = json.loads(meta_path.read_text(encoding="utf-8"))
         if stored.get("request_key") != _request_key(chosen):
             return None
-        executable = _python_executable(directory / "venv")
+        executable = _installation_executable(directory)
         _invoke([uv_path, "--no-config", "pip", "check", "--python", str(executable)], timeout=120)
         actual = _probe(executable, chosen)
         backend, reason = _device_check(executable, chosen)
@@ -393,7 +402,7 @@ def _register(registry: Any, directory: Path, observed: dict[str, Any], chosen: 
         fingerprint=fingerprint, schema_version=OBSERVATION_SCHEMA_VERSION,
         observation_json=_canonical_json(observed),
     )
-    registry.bind_interpreter(environment_id, _python_executable(directory / "venv"))
+    registry.bind_interpreter(environment_id, _installation_executable(directory))
     return ManagedEnvironmentResult(
         environment_id=environment_id, python=chosen.python,
         teal_version=chosen.teal_version, teal_commit=chosen.teal_commit,
@@ -418,7 +427,10 @@ def find_cached_interpreter(environment_id: str) -> Path | None:
             data = json.loads(meta.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        executable = _python_executable(entry / "venv")
+        try:
+            executable = _installation_executable(entry)
+        except (OSError, ValueError, EnvironmentRegistryError):
+            continue
         if data.get("observed_id") == environment_id and executable.is_file():
             return executable
     return None
@@ -427,7 +439,11 @@ def find_cached_interpreter(environment_id: str) -> Path | None:
 def create(registry: Any, *, python: str | None = None, teal: str | None = None,
            teal_extras: list[str] | tuple[str, ...] | None = None,
            gpu: str | bool = "auto") -> ManagedEnvironmentResult:
-    """Explicit opt-in: stage, verify, publish, register, and bind one uv installation."""
+    """Explicit opt-in managed creation with an atomic cache *index* publish.
+
+    Installed venvs never move: uv-generated console scripts can embed the
+    absolute executable path. Only a small host-local ready index is replaced.
+    """
     chosen = plan(python=python, teal=teal, teal_extras=teal_extras, gpu=gpu)
     uv = _uv()
     cache = _root()
@@ -440,7 +456,9 @@ def create(registry: Any, *, python: str | None = None, teal: str | None = None,
             return _register(registry, target, existing[0], chosen, existing[1], existing[2], True)
 
         staged = Path(tempfile.mkdtemp(prefix=".staging-", dir=str(cache)))
-        old: Path | None = None
+        published = False
+        manifest = target / _MANIFEST_NAME
+        previous: bytes | None = manifest.read_bytes() if manifest.is_file() else None
         try:
             selected_backend = None if not chosen.torch_required else (
                 "cpu" if chosen.gpu == "cpu" else "auto"
@@ -450,45 +468,38 @@ def create(registry: Any, *, python: str | None = None, teal: str | None = None,
             except EnvironmentRegistryError as exc:
                 if chosen.gpu != "auto" or not chosen.torch_required:
                     raise
-                # Retry in a new staging venv; never mutate an existing install.
                 shutil.rmtree(staged)
                 staged.mkdir()
                 observed, backend, reason = _build(uv, staged, chosen, torch_backend="cpu")
                 reason = f"Automatic accelerator setup failed; a clean CPU installation passed: {type(exc).__name__}."
-            (staged / _MANIFEST_NAME).write_text(
-                _canonical_json({
-                    "request_key": key, "observed_id": "env_" + fingerprint_observation(observed),
-                    "backend": backend, "python": chosen.python, "teal_commit": chosen.teal_commit,
-                    "extras": list(chosen.teal_extras), "gpu": chosen.gpu,
-                    "verification": "installed_metadata_and_runtime_only",
-                }),
-                encoding="utf-8",
-            )
-            if target.exists():
-                old = cache / (".retired-" + uuid4().hex)
-                target.rename(old)
+            payload = _canonical_json({
+                "request_key": key, "observed_id": "env_" + fingerprint_observation(observed),
+                "backend": backend, "python": chosen.python, "teal_commit": chosen.teal_commit,
+                "extras": list(chosen.teal_extras), "gpu": chosen.gpu,
+                "verification": "installed_metadata_and_runtime_only",
+                "installation": staged.name,
+            })
+            target.mkdir(parents=True, exist_ok=True)
+            temporary = target / (".managed-" + uuid4().hex)
             try:
-                staged.rename(target)
-            except OSError:
-                if old is not None:
-                    old.rename(target)
-                    old = None
-                raise
-            staged = None
+                temporary.write_text(payload, encoding="utf-8")
+                os.replace(temporary, manifest)
+            finally:
+                temporary.unlink(missing_ok=True)
             try:
                 post_publish = _valid_cached(target, chosen, uv)
                 if post_publish is None:
-                    raise EnvironmentRegistryError("Published managed interpreter failed post-move verification.")
-                result = _register(registry, target, post_publish[0], chosen, post_publish[1], post_publish[2], False)
+                    raise EnvironmentRegistryError("Published managed interpreter failed revalidation.")
+                result = _register(registry, target, post_publish[0], chosen,
+                                   post_publish[1], post_publish[2], False)
             except Exception:
-                shutil.rmtree(target, ignore_errors=True)
-                if old is not None:
-                    old.rename(target)
-                    old = None
+                if previous is None:
+                    manifest.unlink(missing_ok=True)
+                else:
+                    manifest.write_bytes(previous)
                 raise
-            if old is not None:
-                shutil.rmtree(old, ignore_errors=True)
+            published = True
             return result
         finally:
-            if staged is not None:
+            if not published:
                 shutil.rmtree(staged, ignore_errors=True)
