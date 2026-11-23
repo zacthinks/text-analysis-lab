@@ -190,6 +190,22 @@ def observe_environment() -> dict[str, Any]:
         ) from exc
 
 
+def _normalize_lock_manifest(value: Any) -> Any:
+    """Canonicalize unordered manifest records without embedding local paths."""
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            raise EnvironmentRegistryError("Invalid portable lock field name.")
+        return {key: _normalize_lock_manifest(item) for key, item in sorted(value.items())}
+    if isinstance(value, list):
+        return sorted(
+            (_normalize_lock_manifest(item) for item in value),
+            key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+        )
+    if value is None or type(value) in {bool, str, int, float}:
+        return value
+    raise EnvironmentRegistryError("Invalid portable lock manifest value.")
+
+
 def normalize_environment(observation: dict[str, Any]) -> dict[str, Any]:
     """Canonical identity of software without original OS, GPU, drivers or ABI."""
     if not isinstance(observation, dict) or observation.get("schema_version") != OBSERVATION_SCHEMA_VERSION:
@@ -236,14 +252,29 @@ def normalize_environment(observation: dict[str, Any]) -> dict[str, Any]:
             or any(not isinstance(x, str) or not x.strip() for x in extras)
             or not isinstance(lock, dict) or not lock):
             raise EnvironmentRegistryError("Portable specification requires extras and lock.")
+        if set(lock) != {"kind", "manifest", "sha256"} or not isinstance(lock.get("kind"), str):
+            raise EnvironmentRegistryError("Portable lock requires kind, manifest and SHA-256.")
+        manifest = _normalize_lock_manifest(lock["manifest"])
+        if not isinstance(manifest, dict) or not manifest:
+            raise EnvironmentRegistryError("Portable lock manifest must be a nonempty mapping.")
         digest = lock.get("sha256")
-        if not isinstance(digest, str) or not re.fullmatch(r"[a-fA-F0-9]{64}", digest):
-            raise EnvironmentRegistryError("Portable lock requires a SHA-256 manifest digest.")
-        if not isinstance(teal.get("source"), dict) or not teal["source"]:
-            raise EnvironmentRegistryError("Portable TeAL needs immutable source metadata.")
+        expected_digest = hashlib.sha256(_canonical_json(manifest).encode("utf-8")).hexdigest()
+        if not isinstance(digest, str) or digest.lower() != expected_digest:
+            raise EnvironmentRegistryError("Portable lock content hash does not match manifest.")
+        source = teal.get("source")
+        if (not isinstance(source, dict)
+            or not any(
+                isinstance(source.get(field), str)
+                and re.fullmatch(r"[a-fA-F0-9]{40,64}", source[field])
+                for field in ("commit", "sha256")
+            )):
+            raise EnvironmentRegistryError("Portable TeAL requires an immutable commit/hash.")
         result["extras"] = sorted(set(x.strip().lower() for x in extras))
-        result["lock"] = dict(lock)
-        result["lock"]["sha256"] = digest.lower()
+        result["lock"] = {
+            "kind": lock["kind"],
+            "manifest": manifest,
+            "sha256": expected_digest,
+        }
     return result
 
 
