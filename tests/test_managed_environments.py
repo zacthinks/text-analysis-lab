@@ -357,6 +357,13 @@ def test_real_uv_managed_child_textlength(tmp_path, monkeypatch):
         source = project.read_csv(csv, text_fields="text", metadata_fields=None)
         parent = project.environments.opening_id
         result = project.environments.create(teal_extras=["parallel"], gpu=False)
+        # Distinct installation requests may resolve to exactly the same
+        # observed software. Both published caches must remain reusable.
+        same_software = project.environments.create(
+            teal_extras=["parallel"], gpu="auto",
+        )
+        assert not same_software["reused"]
+        assert same_software["environment_id"] == result["environment_id"]
         assert not result["reused"]
         assert result["environment_id"] != parent
         assert result["portability"].startswith("observed_unlocked")
@@ -386,6 +393,10 @@ def test_real_uv_managed_child_textlength(tmp_path, monkeypatch):
     # without calling create() or re-resolving uv packages.
     with Project.open(tmp_path / "project") as reopened:
         assert result["environment_id"] not in reopened.environments._interpreter_bindings
+        # Deterministic selection among two fully verified request caches.
+        chosen = reopened.environments.bound_interpreter(result["environment_id"])
+        assert chosen.is_file()
+        assert chosen == managed.find_cached_interpreter(result["environment_id"])
         reopened.environments.set_default(result["environment_id"])
         restored = reopened.translate(
             TextLength({"text": "characters"}), source.artifact_id,
@@ -584,3 +595,116 @@ def test_auto_gpu_does_not_retry_unrelated_install_failure(
         managed.create(object(), gpu="auto", teal_extras=["transformers"])
     assert installed == ["auto"]
     assert not list((tmp_path / "managed").glob("*/managed.json"))
+
+
+def test_torch_accelerator_tensor_failure_triggers_error_not_silent_cpu(
+    monkeypatch, tmp_path,
+):
+    """Execute the actual Torch smoke script with an advertised broken CUDA."""
+    import contextlib
+    import importlib.util
+    import io
+    import types
+
+    executable = tmp_path / "python"
+    executable.touch()
+    devices: list[str] = []
+    torch = types.ModuleType("torch")
+    torch.__spec__ = importlib.util.spec_from_loader("torch", loader=None)
+    torch.cuda = types.SimpleNamespace(is_available=lambda: True)
+    torch.version = types.SimpleNamespace(hip=None)
+    torch.backends = types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: False))
+    torch.xpu = types.SimpleNamespace(is_available=lambda: False)
+
+    class FakeTensor:
+        def sum(self):
+            return self
+        def item(self):
+            return 5.0
+
+    def tensor(values, *, device):
+        devices.append(device)
+        if device == "cuda":
+            raise RuntimeError("CUDA driver/runtime cannot allocate tensor")
+        return FakeTensor()
+
+    torch.tensor = tensor
+    import sys as runtime_sys
+    monkeypatch.setitem(runtime_sys.modules, "torch", torch)
+    monkeypatch.setattr(
+        importlib.util, "find_spec",
+        lambda name: torch.__spec__ if name == "torch" else None,
+    )
+
+    def execute_actual_smoke(args, **kwargs):
+        assert args[1:3] == ["-I", "-c"]
+        captured = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(captured):
+                exec(args[3], {"__name__": "__main__"})
+        except Exception as exc:
+            # _run_command raises ManagedEnvironmentError on nonzero child exit.
+            raise managed.ManagedEnvironmentError("Torch runtime subprocess failed") from exc
+        return captured.getvalue()
+
+    monkeypatch.setattr(managed, "_run_command", execute_actual_smoke)
+    for policy in ("auto", True):
+        devices.clear()
+        with pytest.raises(managed.ManagedAcceleratorError, match="Torch runtime"):
+            managed._gpu_probe(executable, policy)
+        assert devices == ["cpu", "cuda"]
+    devices.clear()
+    assert managed._gpu_probe(executable, False)["status"] == "cpu"
+    assert devices == ["cpu"]
+
+
+def test_discovery_rejects_old_parent_source_commit_even_if_r1_digest_matches(
+    parent_source, tmp_path, monkeypatch,
+):
+    """The parent commit check is independent of R1's narrow module digest."""
+    from text_analysis_lab import Project
+
+    monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(tmp_path / "managed"))
+    monkeypatch.setattr(managed, "_uv", lambda: "uv")
+
+    def command(args, **kwargs):
+        if args[:2] == ["uv", "venv"]:
+            exe = managed._interpreter(Path(args[2]))
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.touch()
+            exe.chmod(0o755)
+        return ""
+
+    monkeypatch.setattr(managed, "_run_command", command)
+    observation = {
+        "schema_version": 2,
+        "kind": "observed_unlocked",
+        "python": {"implementation": sys.implementation.name,
+                   "version": ".".join(map(str, sys.version_info[:3]))},
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": COMMIT},
+        ],
+    }
+    probes = []
+
+    def unchanged_r1_probe(*args):
+        probes.append(True)
+        return observation, {"status": "not_applicable", "backend": None, "reason": None}
+
+    monkeypatch.setattr(managed, "_verify", unchanged_r1_probe)
+    with Project.create(tmp_path / "project", "managed-mismatched-parent") as project:
+        first = project.environments.create()
+        identity = first["environment_id"]
+    monkeypatch.setattr(managed, "_local_source_commit", lambda: "b" * 40)
+    with Project.open(tmp_path / "project") as reopened:
+        assert identity not in reopened.environments._interpreter_bindings
+        with pytest.raises(
+            ManagedEnvironmentError, match="failed re-verification",
+        ) as exc:
+            reopened.environments.bound_interpreter(identity)
+        assert "source commit" in str(exc.value.__cause__)
+        assert identity not in reopened.environments._interpreter_bindings
+    # The child's same-version software and narrow R1 source digest still
+    # match the stored installation, but parent revision is now different.
+    assert len(probes) == 1
