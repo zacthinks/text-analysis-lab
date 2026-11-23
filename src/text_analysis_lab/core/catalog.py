@@ -265,6 +265,10 @@ class ProjectCatalog:
                 CREATE INDEX IF NOT EXISTS idx_operation_attempts_operation
                 ON operation_execution_attempts(operation_id, attempt_id);
 
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_single_running_attempt
+                ON operation_execution_attempts(operation_id)
+                WHERE outcome = 'running';
+
                 CREATE TABLE IF NOT EXISTS memos (
                     memo_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     target_type TEXT NOT NULL,
@@ -966,20 +970,38 @@ class ProjectCatalog:
 
     def begin_execution_attempt(
         self, operation_id: str, *, environment_id: str, platform_id: str,
-        coordinator_request_id: str | None = None,
+        coordinator_request_id: str | None = None, recover: bool = False,
     ) -> int:
-        """Append an actual translation execution context, preserving original provenance.
+        """Start execution under the *caller-held* exclusive operation lock.
 
-        A previous unfinished row is *uncertain*, not silently marked failed:
-        process termination cannot establish how far a native checkpoint ran.
-        Calling resume_operation is the explicit recovery decision.
+        Reclassification is permitted only on explicit recovery, after its
+        coordinator acquired the cross-process operation lock. The database's
+        partial unique index also prevents overlapping running attempts.
         """
         with self.con as con:
-            con.execute(
-                "UPDATE operation_execution_attempts SET outcome = 'uncertain' "
+            existing = con.execute(
+                "SELECT status FROM operations WHERE operation_id = ?",
+                (str(operation_id),),
+            ).fetchone()
+            if existing is None:
+                raise KeyError(str(operation_id))
+            if existing["status"] == "complete":
+                raise ValueError("Cannot begin execution of a complete operation.")
+            active = con.execute(
+                "SELECT attempt_id FROM operation_execution_attempts "
                 "WHERE operation_id = ? AND outcome = 'running'",
                 (str(operation_id),),
-            )
+            ).fetchone()
+            if active is not None:
+                if not recover:
+                    raise ValueError(
+                        "Operation already has an active execution attempt."
+                    )
+                con.execute(
+                    "UPDATE operation_execution_attempts SET outcome = 'uncertain', "
+                    "finished_at = ? WHERE attempt_id = ? AND outcome = 'running'",
+                    (utc_now_iso(), active["attempt_id"]),
+                )
             result = con.execute(
                 "INSERT INTO operation_execution_attempts "
                 "(operation_id, environment_id, platform_id, coordinator_request_id, "
@@ -990,20 +1012,36 @@ class ProjectCatalog:
             return int(result.lastrowid)
 
     def finish_execution_attempt(
-        self, operation_id: str, *, outcome: str, error: Exception | None = None,
+        self, operation_id: str, *, attempt_id: int, outcome: str,
+        error: Exception | None = None,
     ) -> None:
-        """Finish only the most recent active attempt; never change older history."""
+        """Atomically seal this exact attempt and its operation status.
+
+        The attempt id is an ownership token: a different caller cannot finish
+        the newest attempt merely because it shares the same operation id.
+        """
         if outcome not in {"complete", "failed"}:
             raise ValueError("Invalid completed execution-attempt outcome.")
         with self.con as con:
-            con.execute(
+            row = con.execute(
                 "UPDATE operation_execution_attempts SET outcome = ?, "
-                "finished_at = ?, error = ? WHERE attempt_id = ("
-                "SELECT MAX(attempt_id) FROM operation_execution_attempts "
-                "WHERE operation_id = ? AND outcome = 'running')",
+                "finished_at = ?, error = ? WHERE attempt_id = ? "
+                "AND operation_id = ? AND outcome = 'running'",
+                (outcome, utc_now_iso(), None if error is None else str(error),
+                 attempt_id, str(operation_id)),
+            )
+            if row.rowcount != 1:
+                raise ValueError(
+                    "Execution attempt is no longer active or is not owned by this caller."
+                )
+            updated = con.execute(
+                "UPDATE operations SET status = ?, completed_at = ?, error = ? "
+                "WHERE operation_id = ? AND status != 'complete'",
                 (outcome, utc_now_iso(), None if error is None else str(error),
                  str(operation_id)),
             )
+            if updated.rowcount != 1:
+                raise ValueError("Operation is already complete or missing.")
 
     def mark_execution_attempt_uncertain(
         self, operation_id: str, *, request_id: str | None = None,
@@ -1015,10 +1053,10 @@ class ProjectCatalog:
         """
         with self.con as con:
             con.execute(
-                "UPDATE operation_execution_attempts SET outcome = 'uncertain' "
-                "WHERE operation_id = ? AND outcome = 'running' "
+                "UPDATE operation_execution_attempts SET outcome = 'uncertain', "
+                "finished_at = ? WHERE operation_id = ? AND outcome = 'running' "
                 "AND (? IS NULL OR coordinator_request_id = ?)",
-                (str(operation_id), request_id, request_id),
+                (utc_now_iso(), str(operation_id), request_id, request_id),
             )
 
     def list_execution_attempts(self, operation_id: str) -> list[dict[str, Any]]:
