@@ -350,6 +350,113 @@ def _source_requirement(request: dict[str, Any]) -> str:
     return f"text-analysis-lab{suffix} @ git+{_SOURCE}@{request['teal_commit']}"
 
 
+_FALLBACK_REASONS = {
+    "GPU-preferred installation failed; CPU-only retry succeeded",
+    "GPU-preferred Torch runtime verification failed; CPU-only retry succeeded",
+}
+
+
+def _request_key(request: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _read_cache_manifest(target: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate a local ready marker without trusting paths or its request."""
+    if target.is_symlink() or not re.fullmatch(r"[a-f0-9]{64}", target.name):
+        raise ManagedEnvironmentError("Invalid managed installation directory.")
+    marker = json.loads((target / "managed.json").read_text(encoding="utf-8"))
+    if not isinstance(marker, dict) or set(marker) != {
+        "schema_version", "request", "observed_fingerprint", "fallback_reason",
+    }:
+        raise ManagedEnvironmentError("Invalid managed cache metadata.")
+    request = marker["request"]
+    if (marker["schema_version"] != _CACHE_SCHEMA
+            or not isinstance(request, dict)
+            or set(request) != {"python", "teal_commit", "teal_version", "teal_extras", "gpu"}
+            or not isinstance(request["python"], str)
+            or _PYTHON.fullmatch(request["python"]) is None
+            or not isinstance(request["teal_commit"], str)
+            or _COMMIT.fullmatch(request["teal_commit"]) is None
+            or not isinstance(request["teal_version"], str)
+            or not request["teal_version"]
+            or not isinstance(request["teal_extras"], list)
+            or any(not isinstance(x, str) or _EXTRA.fullmatch(x) is None
+                   for x in request["teal_extras"])
+            or request["teal_extras"] != sorted(set(request["teal_extras"]))
+            or request["gpu"] not in ("auto", True, False)
+            or _request_key(request) != target.name
+            or not isinstance(marker["observed_fingerprint"], str)
+            or re.fullmatch(r"[a-f0-9]{64}", marker["observed_fingerprint"]) is None
+            or marker["fallback_reason"] is not None
+            and (request["gpu"] != "auto"
+                 or marker["fallback_reason"] not in _FALLBACK_REASONS)):
+        raise ManagedEnvironmentError("Invalid managed cache metadata.")
+    return request, marker
+
+
+def _verified_cache(target: Path, request: dict[str, Any], uv: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    stored_request, marker = _read_cache_manifest(target)
+    if stored_request != request:
+        raise ManagedEnvironmentError("Managed cache request does not match.")
+    observation, gpu_state = _verify(target, request, uv)
+    if fingerprint_observation(observation) != marker["observed_fingerprint"]:
+        raise ManagedEnvironmentError("Managed environment software inventory drifted.")
+    fallback = marker["fallback_reason"]
+    if fallback is not None:
+        if gpu_state["status"] != "cpu":
+            raise ManagedEnvironmentError("Managed CPU fallback metadata disagrees with runtime.")
+        gpu_state = {**gpu_state, "reason": fallback}
+    return observation, gpu_state
+
+
+def find_cached_interpreter(environment_id: str) -> Path | None:
+    """Rediscover a previously published installation by its verified E1 ID.
+
+    Never trust the cache marker alone, install packages, or persist local
+    executable paths in project history. All R1 source/protocol, uv dependency
+    and actual inventory checks are repeated under the request lock.
+    """
+    if not isinstance(environment_id, str) or re.fullmatch(
+        r"env_[a-f0-9]{64}", environment_id,
+    ) is None:
+        return None
+    root = _cache_root()
+    if not root.is_dir():
+        return None
+    candidates = []
+    for target in root.iterdir():
+        if target.is_symlink() or not target.is_dir() or re.fullmatch(
+            r"[a-f0-9]{64}", target.name,
+        ) is None:
+            continue
+        marker_path = target / "managed.json"
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(marker, dict) or (
+            marker.get("observed_fingerprint") != environment_id[4:]
+        ):
+            continue
+        with _request_lock(root / "locks" / (target.name + ".lock")):
+            try:
+                request, _ = _read_cache_manifest(target)
+                _verified_cache(target, request, _uv())
+            except (OSError, ValueError, KeyError, ManagedEnvironmentError) as exc:
+                raise ManagedEnvironmentError(
+                    "Previously published managed interpreter failed re-verification; "
+                    "the installation was left untouched."
+                ) from exc
+            candidates.append(_interpreter(target))
+    if len(candidates) > 1:
+        raise ManagedEnvironmentError(
+            "Several verified managed installations claim the same observed environment."
+        )
+    return candidates[0] if candidates else None
+
+
 def create(
     registry: Any, *, python: str | None = None, teal: str | None = None,
     teal_extras: list[str] | tuple[str, ...] | None = None,
@@ -362,26 +469,14 @@ def create(
     uv = _uv()
     root = _cache_root()
     # Request hashes select a local candidate, never a portable environment ID.
-    request_key = hashlib.sha256(
-        json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    request_key = _request_key(request)
     target = root / request_key
     with _request_lock(root / "locks" / (request_key + ".lock")):
         reused = False
         verified: tuple[dict[str, Any], dict[str, Any]] | None = None
         if target.is_dir() and (target / "managed.json").exists():
             try:
-                manifest = json.loads(
-                    (target / "managed.json").read_text(encoding="utf-8")
-                )
-                if (manifest.get("schema_version") != _CACHE_SCHEMA
-                        or manifest.get("request") != request
-                        or not isinstance(manifest.get("observed_fingerprint"), str)):
-                    raise ManagedEnvironmentError("Invalid managed cache metadata.")
-                candidate = _verify(target, request, uv)
-                if fingerprint_observation(candidate[0]) != manifest["observed_fingerprint"]:
-                    raise ManagedEnvironmentError("Managed environment software inventory drifted.")
-                verified = candidate
+                verified = _verified_cache(target, request, uv)
                 reused = True
             except (ManagedEnvironmentError, OSError, ValueError, KeyError) as exc:
                 # A published environment might still have running children.
