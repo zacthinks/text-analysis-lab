@@ -163,8 +163,8 @@ def _handle(proc: subprocess.Popen[str]) -> ChildGeCoServer:
 
 
 def test_child_handle_stops_only_its_own_process():
-    first = _handle("import sys; sys.stdin.readline()")
-    second = _handle("import sys; sys.stdin.readline()")
+    first = _child_process("import sys; sys.stdin.readline()")
+    second = _child_process("import sys; sys.stdin.readline()")
     a = _handle(first)
     b = _handle(second)
     try:
