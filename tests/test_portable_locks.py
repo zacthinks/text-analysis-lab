@@ -184,11 +184,24 @@ def test_real_uv_portable_lock_reconstruct_and_delegate(tmp_path, monkeypatch):
     pd.DataFrame({"text": ["hello world", "one two three"]}).to_csv(csv, index=False)
     with Project.create(tmp_path / "project", "portable-r2b") as project:
         source = project.read_csv(csv, text_fields="text", metadata_fields=None)
-        resolved = project.environments.create_specification(teal_extras=["parallel"], gpu=False)
-        logical = resolved["environment_id"]
+        # Cross-OS acceptance: Ubuntu exports one immutable specification,
+        # and Windows reconstructs that exact exported specification.
+        exported_input = os.environ.get("TEAL_PORTABLE_SPEC_INPUT")
+        if exported_input:
+            logical = project.environments.import_specification(exported_input)
+        else:
+            resolved = project.environments.create_specification(
+                teal_extras=["parallel"], gpu=False,
+            )
+            logical = resolved["environment_id"]
         assert project.environments.get(logical)["kind"] == "portable_locked"
-        portable_file = project.environments.export_specification(logical, tmp_path / "portable.json")
+        portable_file = project.environments.export_specification(
+            logical, tmp_path / "portable.json",
+        )
         assert logical == project.environments.import_specification(portable_file)
+        exported_output = os.environ.get("TEAL_PORTABLE_SPEC_OUTPUT")
+        if exported_output:
+            project.environments.export_specification(logical, exported_output)
         first = project.environments.create_from_specification(logical)
         assert first["environment_id"] == logical
         assert first["observed_environment_id"] != logical
