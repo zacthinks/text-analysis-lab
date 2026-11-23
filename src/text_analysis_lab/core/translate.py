@@ -609,7 +609,15 @@ def resume_translate(
     coordinator_request_id: str | None = None,
 ) -> Mapping[str, BaseArtifact]:
     """Resume with exclusive ownership before reading mutable checkpoints."""
-    with exclusive_operation_execution(project.storage.operation_dir(operation_id)):
+    operation_dir = project.storage.operation_dir(operation_id)
+    if not operation_dir.is_dir():
+        # Preserve existing diagnostics for historical/malformed operations
+        # that never had a checkpoint directory; there is no mutable work
+        # that could have an active owner in this case.
+        return _resume_translate_owned(
+            project, operation_id, coordinator_request_id=coordinator_request_id,
+        )
+    with exclusive_operation_execution(operation_dir):
         return _resume_translate_owned(
             project, operation_id, coordinator_request_id=coordinator_request_id,
         )
