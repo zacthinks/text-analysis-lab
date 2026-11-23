@@ -217,7 +217,7 @@ def plan(*, python: str | None = None, teal: str | None = None,
         raise EnvironmentRegistryError("Managed Python must be an exact major.minor.micro version.")
     if python.split(".")[0] != "3" or int(python.split(".")[1]) < 11:
         raise EnvironmentRegistryError("TeAL requires Python >= 3.11.")
-    if gpu not in ("auto", True, False) or (gpu is not True and gpu is not False and gpu != "auto"):
+    if gpu != "auto" and type(gpu) is not bool:
         raise EnvironmentRegistryError("gpu must be 'auto', True, or False.")
     chosen_extras = _extras(teal_extras)
     commit = _source_commit(teal)
@@ -334,7 +334,7 @@ def _device_check(executable: Path, chosen: ManagedEnvironmentPlan) -> tuple[str
         "name = ('rocm' if d == 'cuda' and torch.version.hip else d)\n"
         "print(json.dumps({'device':name}))\n"
     )
-    result = _run_child(executable, ["-c", script])
+    result = _run_child(executable, ["-c", script.replace("if torch.cuda.is_available(): d = 'cuda'", "if False: d = 'cuda'" if chosen.gpu == "cpu" else "if torch.cuda.is_available(): d = 'cuda'").replace("elif getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available(): d = 'mps'", "elif getattr(torch.backends, 'mps', None) and torch.backends.mps.is_available(): d = 'mps'" if chosen.gpu != "cpu" else "elif False: d = 'mps'").replace("elif hasattr(torch, 'xpu') and torch.xpu.is_available(): d = 'xpu'", "elif hasattr(torch, 'xpu') and torch.xpu.is_available(): d = 'xpu'" if chosen.gpu != "cpu" else "elif False: d = 'xpu'")])
     device = result.get("device")
     if device not in {"cpu", "cuda", "mps", "xpu", "rocm"}:
         raise EnvironmentRegistryError("Invalid child Torch backend verification.")
@@ -475,9 +475,20 @@ def create(registry: Any, *, python: str | None = None, teal: str | None = None,
                     old = None
                 raise
             staged = None
+            try:
+                post_publish = _valid_cached(target, chosen, uv)
+                if post_publish is None:
+                    raise EnvironmentRegistryError("Published managed interpreter failed post-move verification.")
+                result = _register(registry, target, post_publish[0], chosen, post_publish[1], post_publish[2], False)
+            except Exception:
+                shutil.rmtree(target, ignore_errors=True)
+                if old is not None:
+                    old.rename(target)
+                    old = None
+                raise
             if old is not None:
                 shutil.rmtree(old, ignore_errors=True)
-            return _register(registry, target, observed, chosen, backend, reason, False)
+            return result
         finally:
             if staged is not None:
                 shutil.rmtree(staged, ignore_errors=True)
