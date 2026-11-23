@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import copy
 from pathlib import Path
 import sys
 
@@ -139,6 +140,67 @@ def test_failed_install_leaves_no_ready_cache(parent_source, tmp_path, monkeypat
         managed.create(Registry())
     assert not list((tmp_path / "cache").glob("*/managed.json"))
 
+
+
+def test_cached_package_drift_forces_recreation(parent_source, tmp_path, monkeypatch):
+    monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(tmp_path / "managed"))
+    monkeypatch.setattr(managed, "_uv", lambda: "uv")
+    invocations = []
+    def command(args, **kwargs):
+        invocations.append(args)
+        if args[:2] == ["uv", "venv"]:
+            executable = managed._interpreter(Path(args[2]))
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.touch()
+        return ""
+    monkeypatch.setattr(managed, "_run_command", command)
+    observation = {
+        "schema_version": 2,
+        "kind": "observed_unlocked",
+        "python": {
+            "implementation": sys.implementation.name,
+            "version": ".".join(map(str, sys.version_info[:3])),
+        },
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": COMMIT},
+        ],
+    }
+    drifted = copy.deepcopy(observation)
+    drifted["distributions"].append({"name": "unplanned-package", "version": "1.0"})
+    calls = 0
+    def verify(*args):
+        nonlocal calls
+        calls += 1
+        # First creation is clean; cache probe detects drift; replacement is clean.
+        return (drifted if calls == 2 else observation), {
+            "status": "not_applicable", "backend": None, "reason": None,
+        }
+    monkeypatch.setattr(managed, "_verify", verify)
+    class Catalog:
+        def register_environment(self, *, fingerprint, **kwargs):
+            return "env_" + fingerprint
+    class Registry:
+        _catalog = Catalog()
+        def bind_interpreter(self, env, exe):
+            assert Path(exe).is_file()
+    first = managed.create(Registry())
+    second = managed.create(Registry())
+    assert first["environment_id"] == second["environment_id"]
+    assert not second["reused"]
+    assert len([a for a in invocations if a[:2] == ["uv", "venv"]]) == 2
+
+
+def test_strict_gpu_never_reports_cpu_ready(monkeypatch, tmp_path):
+    executable = tmp_path / "python"
+    executable.touch()
+    monkeypatch.setattr(
+        managed, "_run_command",
+        lambda *a, **kw: '{"status":"cpu","backend":"cpu","reason":"No GPU"}',
+    )
+    with pytest.raises(managed.ManagedEnvironmentError, match="Strict GPU"):
+        managed._gpu_probe(executable, True)
+    assert managed._gpu_probe(executable, "auto")["status"] == "cpu"
 
 @pytest.mark.acceptance
 def test_real_uv_managed_child_textlength(tmp_path, monkeypatch):
