@@ -17,6 +17,7 @@ dependencies = [
     "pandas>=1.4",
     "nltk>=3.9.2",
     "openpyxl>=3.1",
+    "packaging>=24",
     "pyarrow",
     "scikit-learn>=1.9.1",
     "rich>=13.9",
