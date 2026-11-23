@@ -12,7 +12,6 @@ import os
 import platform
 import re
 import sys
-import sysconfig
 from importlib import metadata
 from pathlib import Path
 from threading import RLock
@@ -24,7 +23,7 @@ from text_analysis_lab.core.errors import TeALError
 if TYPE_CHECKING:
     from text_analysis_lab.core.catalog import ProjectCatalog
 
-OBSERVATION_SCHEMA_VERSION = 1
+OBSERVATION_SCHEMA_VERSION = 2
 _NAME_SEPARATOR = re.compile(r"[-_.]+")
 _SAFE_COMMIT = re.compile(r"^[a-fA-F0-9]{7,64}$")
 
@@ -163,7 +162,7 @@ def observe_environment() -> dict[str, Any]:
 
     Captures the whole installed distribution inventory so that changing any
     installed package version produces a new historical identity. Version 1
-    fingerprints are portable software/platform observations, not lockfiles.
+    fingerprints are software observations, not a portable lockfile.
     """
     try:
         distributions = _installed_distributions()
@@ -173,17 +172,10 @@ def observe_environment() -> dict[str, Any]:
             teal_version = "0+unknown"
         return {
             "schema_version": OBSERVATION_SCHEMA_VERSION,
+            "kind": "observed_unlocked",
             "python": {
                 "implementation": sys.implementation.name,
                 "version": platform.python_version(),
-                "implementation_version": list(sys.implementation.version[:3]),
-                "abi": str(sysconfig.get_config_var("SOABI") or ""),
-            },
-            "platform": {
-                "system": platform.system(),
-                "release": platform.release(),
-                "machine": platform.machine(),
-                "architecture": platform.architecture()[0],
             },
             "teal": {
                 "version": teal_version,
@@ -198,29 +190,73 @@ def observe_environment() -> dict[str, Any]:
         ) from exc
 
 
+def normalize_environment(observation: dict[str, Any]) -> dict[str, Any]:
+    """Canonical identity of software without original OS, GPU, drivers or ABI."""
+    if not isinstance(observation, dict) or observation.get("schema_version") != OBSERVATION_SCHEMA_VERSION:
+        raise EnvironmentRegistryError("Unsupported software observation schema.")
+    kind = observation.get("kind")
+    if kind not in {"observed_unlocked", "portable_locked"}:
+        raise EnvironmentRegistryError("Unknown software environment kind.")
+    expected = {"schema_version", "kind", "python", "teal", "distributions"}
+    if kind == "portable_locked":
+        expected |= {"extras", "lock"}
+    if set(observation) != expected:
+        raise EnvironmentRegistryError("Unexpected software environment fields.")
+    python_info, teal = observation["python"], observation["teal"]
+    if (not isinstance(python_info, dict)
+        or set(python_info) != {"implementation", "version"}
+        or any(not isinstance(v, str) or not v for v in python_info.values())
+        or not isinstance(teal, dict)
+        or not isinstance(teal.get("version"), str)
+        or not teal["version"]):
+        raise EnvironmentRegistryError("Invalid Python or TeAL identity.")
+    records = observation["distributions"]
+    if not isinstance(records, list):
+        raise EnvironmentRegistryError("Distributions must be a list.")
+    distributions = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise EnvironmentRegistryError("Invalid package record.")
+        name, version = record.get("name"), record.get("version")
+        if not isinstance(name, str) or not name.strip() or not isinstance(version, str) or not version:
+            raise EnvironmentRegistryError("A package needs a name and version.")
+        copy = dict(record)
+        copy["name"] = _NAME_SEPARATOR.sub("-", name.strip()).lower()
+        distributions.append(copy)
+    result = {
+        "schema_version": OBSERVATION_SCHEMA_VERSION,
+        "kind": kind,
+        "python": dict(python_info),
+        "teal": dict(teal),
+        "distributions": sorted(distributions, key=_canonical_json),
+    }
+    if kind == "portable_locked":
+        extras, lock = observation.get("extras"), observation.get("lock")
+        if (not isinstance(extras, list)
+            or any(not isinstance(x, str) or not x.strip() for x in extras)
+            or not isinstance(lock, dict) or not lock):
+            raise EnvironmentRegistryError("Portable specification requires extras and lock.")
+        digest = lock.get("sha256")
+        if not isinstance(digest, str) or not re.fullmatch(r"[a-fA-F0-9]{64}", digest):
+            raise EnvironmentRegistryError("Portable lock requires a SHA-256 manifest digest.")
+        if not isinstance(teal.get("source"), dict) or not teal["source"]:
+            raise EnvironmentRegistryError("Portable TeAL needs immutable source metadata.")
+        result["extras"] = sorted(set(x.strip().lower() for x in extras))
+        result["lock"] = dict(lock)
+        result["lock"]["sha256"] = digest.lower()
+    return result
+
+
 def fingerprint_observation(
     observation: dict[str, Any], *, require_current_schema: bool = True
 ) -> str:
-    """SHA-256 of canonical versioned observation JSON.
-
-    Historical verification accepts a previously stored positive integer
-    schema version; only new observations require the current producer schema.
-    No historical record is migrated or reinterpreted.
-    """
-    if not isinstance(observation, dict):
-        raise EnvironmentRegistryError("Invalid environment observation.")
-    version = observation.get("schema_version")
-    if (
-        type(version) is not int
-        or version < 1
-        or (require_current_schema and version != OBSERVATION_SCHEMA_VERSION)
-        or not all(key in observation for key in ("python", "platform", "teal", "distributions"))
-    ):
-        raise EnvironmentRegistryError("Unsupported or incomplete environment observation.")
+    """Hash canonical, versioned software identity, never an OS/platform."""
     try:
-        return hashlib.sha256(_canonical_json(observation).encode("utf-8")).hexdigest()
+        return hashlib.sha256(
+            _canonical_json(normalize_environment(observation)).encode("utf-8")
+        ).hexdigest()
     except (TypeError, ValueError) as exc:
-        raise EnvironmentRegistryError("Environment observation is not serializable.") from exc
+        raise EnvironmentRegistryError("Software observation is not serializable.") from exc
 
 
 class EnvironmentRegistry:
@@ -238,7 +274,7 @@ class EnvironmentRegistry:
 
     def __init__(self, catalog: ProjectCatalog) -> None:
         self._catalog = catalog
-        observed = observe_environment()
+        observed = normalize_environment(observe_environment())
         fingerprint = fingerprint_observation(observed)
         self._opening_id = catalog.register_environment(
             fingerprint=fingerprint,
@@ -310,9 +346,20 @@ class EnvironmentRegistry:
             )
         return path
 
+    def register_portable_specification(self, specification: dict[str, Any]) -> str:
+        """Record a supplied portable lock; do not assert it can run locally."""
+        normalized = normalize_environment(specification)
+        if normalized["kind"] != "portable_locked":
+            raise EnvironmentRegistryError("Expected a portable locked specification.")
+        return self._catalog.register_environment(
+            fingerprint=fingerprint_observation(normalized),
+            schema_version=OBSERVATION_SCHEMA_VERSION,
+            observation_json=_canonical_json(normalized),
+        )
+
     def _public_row(self, row: dict[str, Any]) -> dict[str, Any]:
         try:
-            observation = json.loads(row["observation_json"])
+            observation = normalize_environment(json.loads(row["observation_json"]))
             if fingerprint_observation(observation, require_current_schema=False) != row["fingerprint"]:
                 raise EnvironmentRegistryError("Fingerprint mismatch in environment registry.")
             if row["environment_id"] != "env_" + row["fingerprint"]:
@@ -326,6 +373,7 @@ class EnvironmentRegistry:
             "fingerprint": row["fingerprint"],
             "registered_at": row["registered_at"],
             "observation": observation,
+            "kind": observation["kind"],
             "readiness": (
                 "current_interpreter"
                 if row["environment_id"] == self._opening_id
