@@ -142,7 +142,7 @@ def test_failed_install_leaves_no_ready_cache(parent_source, tmp_path, monkeypat
 
 
 
-def test_cached_package_drift_forces_recreation(parent_source, tmp_path, monkeypatch):
+def test_cached_package_drift_is_rejected_without_touching_live_install(parent_source, tmp_path, monkeypatch):
     monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(tmp_path / "managed"))
     monkeypatch.setattr(managed, "_uv", lambda: "uv")
     invocations = []
@@ -185,10 +185,18 @@ def test_cached_package_drift_forces_recreation(parent_source, tmp_path, monkeyp
         def bind_interpreter(self, env, exe):
             assert Path(exe).is_file()
     first = managed.create(Registry())
-    second = managed.create(Registry())
-    assert first["environment_id"] == second["environment_id"]
-    assert not second["reused"]
-    assert len([a for a in invocations if a[:2] == ["uv", "venv"]]) == 2
+    with pytest.raises(managed.ManagedEnvironmentError, match="left untouched"):
+        managed.create(Registry())
+    assert len([a for a in invocations if a[:2] == ["uv", "venv"]]) == 1
+    request = managed._normalized_request(
+        python=None, teal=None, teal_extras=None, gpu="auto",
+    )
+    import hashlib
+    cache_key = hashlib.sha256(
+        json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert (tmp_path / "managed" / cache_key / "managed.json").is_file()
+
 
 
 def test_strict_gpu_never_reports_cpu_ready(monkeypatch, tmp_path):
