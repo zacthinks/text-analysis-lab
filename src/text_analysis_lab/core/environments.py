@@ -19,6 +19,9 @@ from threading import RLock
 from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, Any
 
+from packaging.specifiers import SpecifierSet
+from packaging.version import InvalidVersion, Version
+
 from text_analysis_lab.core.errors import TeALError
 
 if TYPE_CHECKING:
@@ -237,7 +240,26 @@ def _portable_name(value: Any, *, label: str) -> str:
 def _portable_version(value: Any) -> str:
     if not isinstance(value, str) or not _PINNED_VERSION.fullmatch(value):
         raise EnvironmentRegistryError("Portable versions must be pinned package versions, not URLs or paths.")
+    try:
+        Version(value)
+    except InvalidVersion as exc:
+        raise EnvironmentRegistryError("Invalid pinned package version.") from exc
     return value
+
+
+def _exact_python_version(value: Any) -> str:
+    """Require Python's explicit major.minor.micro, not a minor-only request."""
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[0-9]+\.[0-9]+\.[0-9]+(?:a[0-9]+|b[0-9]+|rc[0-9]+)?", value
+    ):
+        raise EnvironmentRegistryError("Portable Python version must include major.minor.micro.")
+    return value
+
+
+def _requirement_satisfied(pin: str, installed_version: str) -> bool:
+    """PEP 440 == pins accept local build variants when pin has no local tag."""
+    return SpecifierSet(f"=={pin}").contains(installed_version)
+
 
 
 def _normalize_distribution_records(
@@ -349,6 +371,22 @@ def _normalize_portable_manifest(manifest: Any) -> dict[str, Any]:
                 ),
             })
         result["realizations"].sort(key=_canonical_json)
+    if "requirements" in result and "realizations" in result:
+        pins = result["requirements"]
+        for realization in result["realizations"]:
+            inventory = {}
+            for distribution in realization["distributions"]:
+                name = distribution["name"]
+                if name in inventory:
+                    raise EnvironmentRegistryError(
+                        f"Duplicate package {name!r} in portable realization."
+                    )
+                inventory[name] = distribution["version"]
+            for name, pin in pins.items():
+                if name not in inventory or not _requirement_satisfied(pin, inventory[name]):
+                    raise EnvironmentRegistryError(
+                        f"Portable realization contradicts exact requirement {name}=={pin}."
+                    )
     if "index_priority" in manifest:
         entries = manifest["index_priority"]
         if not isinstance(entries, list):
@@ -399,7 +437,7 @@ def normalize_environment(observation: dict[str, Any]) -> dict[str, Any]:
 
     # A portable lock hashes only its canonical software specification, never
     # a redundant top-level inventory from one particular platform.
-    _portable_version(python_info["version"])
+    _exact_python_version(python_info["version"])
     _portable_name(python_info["implementation"], label="Python implementation")
     _portable_version(teal["version"])
     source = teal["source"]
