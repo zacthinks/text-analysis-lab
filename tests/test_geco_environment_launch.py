@@ -98,6 +98,37 @@ def test_focus_uses_distinct_launch_contract(routing):
         manager.launch_focus("coding")
 
 
+def test_child_launch_does_not_import_geco_in_parent(routing, monkeypatch):
+    import builtins
+
+    _, manager, _, calls, _, _ = routing
+    real_import = builtins.__import__
+
+    def guarded(name, *args, **kwargs):
+        if name == "geometric_coder" or name.startswith("geometric_coder."):
+            raise AssertionError("Parent must not import GeCo for child launch.")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded)
+    manager.launch("coding", environment="child-B")
+    assert calls[-1]["environment"] == "child-B"
+
+
+def test_child_unbound_selector_failure_is_actionable(routing, monkeypatch):
+    from text_analysis_lab.core.environments import EnvironmentRegistryError
+
+    _, manager, _, _, _, _ = routing
+
+    def reject(*args, **kwargs):
+        raise EnvironmentRegistryError("no bound Python interpreter")
+
+    monkeypatch.setattr(
+        "text_analysis_lab.integrations.geco_process.launch", reject,
+    )
+    with pytest.raises(EnvironmentRegistryError, match="bound Python"):
+        manager.launch("coding", environment="unbound")
+
+
 def test_current_interpreter_preserves_native_server(routing):
     _, manager, _, _, _, monkeypatch = routing
     expected = _Server()
