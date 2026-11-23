@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -58,6 +59,35 @@ def _log_tail(path: Path) -> str:
     with suppress(OSError):
         return path.read_text(encoding="utf-8", errors="replace")[-3000:]
     return ""
+
+
+def assert_port_available(host: str, port: int | None) -> None:
+    """Reject occupied explicit ports before invoking Werkzeug.
+
+    Windows SO_REUSEADDR may allow two listeners on the same address/port;
+    an exclusive probe detects conflicts that Werkzeug alone can miss. The
+    actual GeCo bind remains authoritative after this preflight.
+    """
+    if port is None or port == 0:
+        return
+    if type(port) is not int or not 0 < port <= 65535:
+        raise GeCoLaunchError("Port must be None, 0, or a valid TCP port.")
+    try:
+        addresses = socket.getaddrinfo(
+            host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP,
+        )
+        if not addresses:
+            raise GeCoLaunchError(f"Cannot resolve GeCo bind host {host!r}.")
+        family, sock_type, proto, _, address = addresses[0]
+        with socket.socket(family, sock_type, proto) as probe:
+            exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if exclusive is not None:
+                probe.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+            probe.bind(address)
+    except OSError as exc:
+        raise GeCoLaunchError(
+            f"Could not start GeCo at {host}:{port}: port unavailable or in use ({exc})."
+        ) from exc
 
 
 def _http_ready(url: str) -> bool:
@@ -152,6 +182,7 @@ def launch(
     debug: bool,
 ) -> ChildGeCoServer:
     """Start, verify, and own exactly one child server."""
+    assert_port_available(host, port)
     # This verifies actual installed inventory and compatible R1 TeAL source.
     executable = _verified_executable(project, environment, isolated=True)
     temp = tempfile.TemporaryDirectory(prefix="teal-geco-")
@@ -281,6 +312,7 @@ def _child_main() -> int:
         probe = _probe_payload()
         _load_geometric_coder()  # Check current public GeCo integration capabilities.
         linked = project.geco.open(record["workspace"])
+        assert_port_available(record["host"], record["port"])
         if record["focus"]:
             if not linked.is_focus_coder:
                 raise GeCoLaunchError("Requested Focus Coding for an exploratory workspace.")
