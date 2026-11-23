@@ -1126,6 +1126,8 @@ class Project:
     def resume_operation(
         self,
         operation_id: str,
+        *,
+        _coordinator_request_id: str | None = None,
     ) -> Mapping[str, BaseArtifact]:
         """Resume a previously recorded resumable operation as configured."""
         operation = self.catalog.get_operation(str(operation_id))
@@ -1136,11 +1138,16 @@ class Project:
             else self.environments.resolve()
         )
         if selected != self.environments.opening_id:
+            if _coordinator_request_id is not None:
+                raise OperatorError("Nested secondary resume is unsupported.")
             from text_analysis_lab.core.secondary_coordinator import delegate_resume
 
             return delegate_resume(self, selected, str(operation_id))
         if operation_type in {"translate", "subset"}:
-            return _resume_translate(self, str(operation_id))
+            return _resume_translate(
+                self, str(operation_id),
+                coordinator_request_id=_coordinator_request_id,
+            )
         raise OperatorError(
             f"Operation {operation_id!r} has unsupported operation_type "
             f"{operation_type!r} for resume_operation(...)."
