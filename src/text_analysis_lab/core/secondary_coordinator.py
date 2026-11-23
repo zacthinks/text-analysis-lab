@@ -576,7 +576,9 @@ def _child_run(message: dict[str, Any]) -> dict[str, Any]:
                 raise SecondaryCoordinatorError(
                     "Only TextLength operations under the selected software environment can resume."
                 )
-            outputs = project.resume_operation(opid)
+            outputs = project.resume_operation(
+                opid, _coordinator_request_id=message["request_id"],
+            )
         else:
             state = message["scientific_state"]
             translator = TextLength.from_json_state(state)
