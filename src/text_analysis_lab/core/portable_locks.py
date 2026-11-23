@@ -515,5 +515,16 @@ def find_cached_portable_interpreter(registry: Any, environment_id: str) -> Path
     if not target.exists():
         return None
     with managed._request_lock(target.parent / "locks" / (target.name + ".lock")):
-        _verify_cached(registry, target, environment_id, spec)
+        observed = _verify_cached(registry, target, environment_id, spec)
+        # A valid user-wide cache can be reused after importing the same
+        # portable specification into a *different* Project. Reconstruct its
+        # observed-to-portable evidence in this Project's catalog as well,
+        # otherwise R1 sees the child observed ID but cannot adopt the
+        # portable alias. Neither ID nor frozen lock is mutated.
+        observed_id = registry._catalog.register_environment(
+            fingerprint=fingerprint_observation(observed),
+            schema_version=observed["schema_version"],
+            observation_json=_canonical_json(observed),
+        )
+        registry._catalog.record_environment_realization(observed_id, environment_id)
     return managed._interpreter(target)
