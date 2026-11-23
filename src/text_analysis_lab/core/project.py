@@ -606,6 +606,10 @@ class Project:
         """Return one operation catalog record."""
         return self.catalog.get_operation(str(operation_id))
 
+    def execution_attempts(self, operation_id: str) -> list[dict[str, Any]]:
+        """Execution contexts for a translation and its explicit recovery attempts."""
+        return self.catalog.list_execution_attempts(str(operation_id))
+
     def list_operations(
         self,
         *,
