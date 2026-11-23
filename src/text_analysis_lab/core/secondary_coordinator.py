@@ -190,10 +190,12 @@ def _run(
 ) -> tuple[int, dict[str, Any] | None, str]:
     args = [str(executable), "-m", "text_analysis_lab.core.secondary_coordinator", action]
     try:
+        from text_analysis_lab.core.managed_environments import sanitized_child_env
+
         result = subprocess.run(
             args, input=None if data is None else _json(data), text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
-            check=False,
+            check=False, env=sanitized_child_env(executable),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SecondaryCoordinatorError(
