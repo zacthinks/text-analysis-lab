@@ -18,7 +18,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener
 from uuid import uuid4
 
 from text_analysis_lab.core.secondary_coordinator import (
@@ -73,13 +73,21 @@ def assert_port_available(host: str, port: int | None) -> None:
     if type(port) is not int or not 0 < port <= 65535:
         raise GeCoLaunchError("Port must be None, 0, or a valid TCP port.")
     try:
+        # Match Werkzeug's select_address_family()/get_sockaddr(): a host
+        # containing ':' selects IPv6; 'localhost' selects IPv4 even when
+        # a dual-stack resolver returns ::1 before 127.0.0.1.
+        family = (
+            socket.AF_INET6
+            if ":" in host and hasattr(socket, "AF_INET6")
+            else socket.AF_INET
+        )
         addresses = socket.getaddrinfo(
-            host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP,
+            host, port, family, socket.SOCK_STREAM, socket.IPPROTO_TCP,
         )
         if not addresses:
             raise GeCoLaunchError(f"Cannot resolve GeCo bind host {host!r}.")
-        family, sock_type, proto, _, address = addresses[0]
-        with socket.socket(family, sock_type, proto) as probe:
+        address = addresses[0][4]
+        with socket.socket(family, socket.SOCK_STREAM, socket.IPPROTO_TCP) as probe:
             exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
             if exclusive is not None:
                 probe.setsockopt(socket.SOL_SOCKET, exclusive, 1)
@@ -91,8 +99,10 @@ def assert_port_available(host: str, port: int | None) -> None:
 
 
 def _http_ready(url: str) -> bool:
+    # The child is a local HTTP server, not an outbound service. A notebook's
+    # configured proxy must never intercept this readiness request.
     try:
-        with urlopen(url, timeout=2) as response:
+        with build_opener(ProxyHandler({})).open(url, timeout=2) as response:
             return 200 <= response.status < 400
     except (OSError, URLError, ValueError):
         return False
