@@ -510,7 +510,10 @@ def test_same_lock_verifies_two_different_platform_specific_installations(
 def _spec_with_manifest(manifest):
     spec = software()
     spec["lock"]["manifest"] = manifest
-    canonical = environments._normalize_portable_manifest(manifest)
+    # For negative fixtures the strict normalizer must reject the manifest
+    # at registration; compute a structurally canonical digest without
+    # pre-validating its contradictory requirements.
+    canonical = environments._normalize_lock_manifest(manifest)
     spec["lock"]["sha256"] = hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
