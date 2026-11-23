@@ -561,6 +561,17 @@ class EnvironmentRegistry:
             return False
         return self._matches_portable(portable_id, observed)
 
+    def equivalent_executor_identities(self, expected: str, actual: str) -> bool:
+        """Check a same-installation observed/portable pair from the R0 registry."""
+        if expected == actual:
+            return True
+        for candidate in (expected, actual):
+            if self.get(candidate)["kind"] == "observed_unlocked":
+                return self.same_verified_realization(
+                    expected, actual, observed_id=candidate,
+                )
+        return False
+
     def is_current_interpreter(self, environment_id: str) -> bool:
         """Whether a selector is the verified running interpreter.
 
