@@ -312,3 +312,13 @@ def test_rediscovery_adopts_verified_cache_in_new_project(tmp_path, monkeypatch)
     assert registry._catalog.associations == [
         ("env_" + fingerprint_observation(observed), portable_id),
     ]
+
+
+def test_portable_identity_is_independent_of_local_cache_architecture(monkeypatch):
+    portable_id = "env_" + fingerprint_observation(_spec())
+    initial = locks._cache_request(portable_id)
+    monkeypatch.setattr(locks.platform, "machine", lambda: "other-architecture")
+    changed = locks._cache_request(portable_id)
+    assert initial["portable_environment_id"] == changed["portable_environment_id"]
+    assert initial != changed
+    assert fingerprint_observation(_spec()) == portable_id.removeprefix("env_")
