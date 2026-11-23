@@ -593,6 +593,8 @@ def translate(
 def resume_translate(
     project: Project,
     operation_id: str,
+    *,
+    coordinator_request_id: str | None = None,
 ) -> Mapping[str, BaseArtifact]:
     """Resume an incomplete translation operation from its durable plan.
 
@@ -707,6 +709,7 @@ def resume_translate(
             runtime.operation_id,
             environment_id=project.environments.opening_id,
             platform_id=project.platforms.opening_id,
+            coordinator_request_id=coordinator_request_id,
         )
         plan.reset_running_to_pending()
         if mode == "translate":
