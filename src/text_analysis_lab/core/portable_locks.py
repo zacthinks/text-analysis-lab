@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
+import sys
 from pathlib import Path
 import re
 import shutil
@@ -411,8 +413,15 @@ def import_specification(registry: Any, source: str | Path) -> str:
 
 
 def _cache_request(environment_id: str) -> dict[str, Any]:
-    return {"portable_environment_id": environment_id, "gpu": False,
-            "schema_version": PROFILE_SCHEMA}
+    # A frozen E1 identity is portable; its physical cache key is not.
+    # Include the local OS/architecture family, not device IDs, drivers,
+    # hostname or any machine observation in the shared specification.
+    return {
+        "portable_environment_id": environment_id,
+        "gpu": False, "schema_version": PROFILE_SCHEMA,
+        "host_system": sys.platform,
+        "host_architecture": platform.machine().strip().lower(),
+    }
 
 
 def _cache_target(environment_id: str) -> Path:
