@@ -32,10 +32,6 @@ def software(version="3.11.15", torch="2.14.1", teal_source="a" * 40):
             "version": "0.12.2",
             "source": {"vcs": "git", "commit": teal_source},
         },
-        "distributions": [
-            {"name": "torch", "version": torch},
-            {"name": "Text_Analysis.Lab", "version": "0.12.2"},
-        ],
         "extras": ["transformers", "parallel", "transformers"],
         "lock": {
             "kind": "uv",
@@ -66,7 +62,6 @@ def machine(os_name="Windows", driver="551.23"):
 def test_portable_software_id_ignores_host_and_package_order():
     a = software()
     b = copy.deepcopy(a)
-    b["distributions"].reverse()
     b["extras"].reverse()
     b["extras"].append("PARALLEL")
     assert fingerprint_observation(a) == fingerprint_observation(b)
@@ -79,7 +74,10 @@ def test_portable_software_id_ignores_host_and_package_order():
     c["teal"]["source"]["commit"] = "c" * 40
     assert fingerprint_observation(c) != fingerprint_observation(a)
     c = copy.deepcopy(a)
-    c["distributions"][0]["version"] = "2.14.2"
+    c["lock"]["manifest"]["requirements"]["torch"] = "2.14.2"
+    c["lock"]["sha256"] = hashlib.sha256(
+        json.dumps(c["lock"]["manifest"], sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     assert fingerprint_observation(c) != fingerprint_observation(a)
 
     # Platform data cannot accidentally join the software specification.
@@ -193,7 +191,6 @@ def test_verified_local_realization_is_same_logical_environment_across_platforms
         ],
     }
     spec = software(torch="2.14.1+cu130")
-    spec["distributions"] = copy.deepcopy(raw["distributions"])
     manifest = {
         "realizations": [{"distributions": copy.deepcopy(raw["distributions"])}],
     }
@@ -360,3 +357,92 @@ def test_fast_platform_probe_avoids_bitness_subprocess_and_duplicate_gpu_calls(m
     ))
     assert platforms.observe_platform()["accelerators"] == first["accelerators"]
     assert len(calls) == 2
+
+
+def test_locked_identity_ignores_platform_specific_top_level_distributions():
+    """One lock cannot fork into different software IDs for different wheels."""
+    a = software()
+    b = copy.deepcopy(a)
+    a["distributions"] = [{"name": "torch", "version": "2.14.1+cu130"}]
+    b["distributions"] = [{"name": "torch", "version": "2.14.1"}]
+    # Redundant fields are rejected, rather than independently fingerprinted.
+    for candidate in (a, b):
+        with pytest.raises(environments.EnvironmentRegistryError, match="Unexpected"):
+            fingerprint_observation(candidate)
+    clean = software()
+    assert "distributions" not in normalize_environment(clean)
+    assert fingerprint_observation(clean) == fingerprint_observation(software())
+
+
+@pytest.mark.parametrize("location,value", [
+    (("teal", "hostname"), "researcher-laptop"),
+    (("teal", "source", "origin"), "file:///home/researcher/pkg.whl"),
+    (("lock", "manifest", "home"), "/home/researcher"),
+    (("lock", "manifest", "realizations_extra"), ["hostname:my-pc"]),
+    (("lock", "manifest", "index_priority"), ["https://user:secret@example.org/simple"]),
+    (("lock", "manifest", "index_priority"), ["file:///home/researcher/simple"]),
+    (("lock", "manifest", "index_priority"), ["C:\\Users\\researcher\\index"]),
+    (("lock", "manifest", "requirements"), {"torch": "/home/researcher/torch.whl"}),
+    (("lock", "manifest", "packages"), [{"name": "torch", "version": "2", "hostname": "researcher-pc"}]),
+    (("lock", "manifest", "realizations"), [{"distributions": [
+        {"name": "torch", "version": "2", "url": "https://user:secret@example.org"}
+    ]}]),
+])
+def test_portable_registration_rejects_untrusted_nested_metadata(tmp_path, location, value):
+    """Unsafe metadata must fail before any project catalog row is persisted."""
+    spec = software()
+    current = spec
+    for key in location[:-1]:
+        if key == "packages" and key not in current:
+            current[key] = []
+        current = current[key]
+    current[location[-1]] = value
+    with Project.create(tmp_path / "study", "study") as project:
+        before = len(project.environments.list())
+        with pytest.raises(environments.EnvironmentRegistryError):
+            project.environments.register_portable_specification(spec)
+        assert len(project.environments.list()) == before
+
+
+def test_portable_realizations_allow_different_platform_wheels_under_one_id():
+    spec = software()
+    manifest = {"realizations": [
+        {"distributions": [{"name": "torch", "version": "2.14.1+cu130"}]},
+        {"distributions": [{"name": "torch", "version": "2.14.1"}]},
+    ]}
+    canonical = environments._normalize_portable_manifest(manifest)
+    spec["lock"]["manifest"] = manifest
+    spec["lock"]["sha256"] = hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    first = fingerprint_observation(spec)
+    reversed_spec = copy.deepcopy(spec)
+    reversed_spec["lock"]["manifest"]["realizations"].reverse()
+    assert fingerprint_observation(reversed_spec) == first
+    assert len(normalize_environment(spec)["lock"]["manifest"]["realizations"]) == 2
+
+
+def test_metadata_verification_is_not_artifact_verification(tmp_path, monkeypatch):
+    raw = {
+        "schema_version": 2,
+        "kind": "observed_unlocked",
+        "python": {"implementation": "cpython", "version": "3.11.15"},
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": "a" * 40},
+        ],
+    }
+    spec = software()
+    manifest = {"realizations": [{"distributions": copy.deepcopy(raw["distributions"])}]}
+    spec["lock"]["manifest"] = manifest
+    spec["lock"]["sha256"] = hashlib.sha256(
+        json.dumps(environments._normalize_portable_manifest(manifest),
+                   sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    monkeypatch.setattr(environments, "observe_environment", lambda: copy.deepcopy(raw))
+    with Project.create(tmp_path / "study", "study") as project:
+        env_id = project.environments.register_portable_specification(spec)
+        assert project.environments.get(env_id)["verification_level"] == "not_verified"
+        record = project.environments.verify_current_portable(env_id)
+        assert record["verification_level"] == "installed_metadata_match"
+        assert record["verification_level"] != "artifact_verified"
