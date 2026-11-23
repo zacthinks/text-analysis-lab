@@ -1,8 +1,8 @@
 """Real independent-interpreter acceptance for the R1 TextLength-only pilot.
 
 The secondary is an actual isolated venv with a distinct installed package
-inventory. On POSIX CI it shares test dependencies via PYTHONPATH solely to
-avoid reinstalling unrelated packages; TeAL never provisions environments.
+inventory. Test dependencies are shared via PYTHONPATH solely to avoid
+reinstalling unrelated packages; TeAL never provisions environments.
 Both interpreters use the same Python minor unless separately tested.
 """
 
@@ -40,11 +40,12 @@ from text_analysis_lab.translators import FeatureMatrix, TextLength
 
 @pytest.fixture
 def two_interpreters(tmp_path, monkeypatch):
-    if sys.platform == "win32":
-        pytest.skip("POSIX dependency-sharing fixture; Windows tested by Acceptance suite")
     directory = tmp_path / "other-venv"
     venv.EnvBuilder(with_pip=False, system_site_packages=False).create(directory)
-    executable = directory / "bin" / "python"
+    executable = (
+        directory / "Scripts" / "python.exe"
+        if sys.platform == "win32" else directory / "bin" / "python"
+    )
     result = subprocess.run(
         [str(executable), "-c", "import site; print(site.getsitepackages()[0])"],
         text=True, capture_output=True, check=True, timeout=30,
@@ -103,6 +104,7 @@ def _open_bound(two_interpreters):
     return project
 
 
+@pytest.mark.acceptance
 def test_secondary_sequential_translation_correct_artifact_and_provenance(two_interpreters):
     _, source_id, _, a, b, _ = two_interpreters
     with _open_bound(two_interpreters) as project:
@@ -501,6 +503,7 @@ def test_secondary_probe_evidence_and_code_compatibility(two_interpreters):
         assert project.catalog.operation_for_coordinator_request("missing") is None
 
 
+@pytest.mark.acceptance
 def test_portable_child_adopts_verified_realization_with_distinct_platform(
     two_interpreters, monkeypatch, tmp_path,
 ):
