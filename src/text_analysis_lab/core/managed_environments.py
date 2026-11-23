@@ -407,7 +407,9 @@ def _verified_cache(target: Path, request: dict[str, Any], uv: str) -> tuple[dic
     stored_request, marker = _read_cache_manifest(target)
     if stored_request != request:
         raise ManagedEnvironmentError("Managed cache request does not match.")
-    observation, gpu_state = _verify(target, request, uv)
+    # Preserve CPU-only execution for an already-published CPU fallback.
+    effective_request = {**request, "gpu": False} if marker.get("fallback_reason") else request
+    observation, gpu_state = _verify(target, effective_request, uv)
     if fingerprint_observation(observation) != marker["observed_fingerprint"]:
         raise ManagedEnvironmentError("Managed environment software inventory drifted.")
     fallback = marker.get("fallback_reason")
@@ -432,7 +434,9 @@ def find_cached_interpreter(environment_id: str) -> Path | None:
     root = _cache_root()
     if not root.is_dir():
         return None
-    candidates: list[Path] = []
+    first_valid: Path | None = None
+    first_failure: Exception | None = None
+    failures = 0
     current_commit: str | None = None
     # The request key describes installation preferences. Different keys
     # can legitimately produce the exact same observed software identity.
@@ -465,14 +469,23 @@ def find_cached_interpreter(environment_id: str) -> Path | None:
                     )
                 _verified_cache(target, request, _uv())
             except (OSError, ValueError, KeyError, ManagedEnvironmentError) as exc:
-                raise ManagedEnvironmentError(
-                    "Previously published managed interpreter failed re-verification; "
-                    "the installation was left untouched."
-                ) from exc
-            candidates.append(_interpreter(target))
-    # Every matching cache passed the same complete verification; choose the
-    # first deterministically. Never persist the host-local selection in SQLite.
-    return candidates[0] if candidates else None
+                # Another cache may have the same observed identity and still
+                # be valid. Do not let one drifted cache poison the others.
+                failures += 1
+                if first_failure is None:
+                    first_failure = exc
+                continue
+            if first_valid is None:
+                first_valid = _interpreter(target)
+    # Choose the first verified cache by deterministic request-key order.
+    if first_valid is not None:
+        return first_valid
+    if failures:
+        raise ManagedEnvironmentError(
+            "Previously published managed interpreters failed re-verification "
+            f"({failures} matching installation(s)); all were left untouched."
+        ) from first_failure
+    return None
 
 
 def create(
@@ -552,7 +565,9 @@ def create(
                                 "--torch-backend", "cpu", _source_requirement(request)]
                     try:
                         _run_command(cpu_args)
-                        verified = _verify(target, request, uv)
+                        # Keep gpu="auto" in the request identity while
+                        # enforcing CPU-only runtime verification.
+                        verified = _verify(target, {**request, "gpu": False}, uv)
                     except ManagedEnvironmentError as cpu_error:
                         raise ManagedEnvironmentError(
                             "GPU-preferred setup and CPU fallback both failed; "
@@ -565,9 +580,11 @@ def create(
                     )
                 if fallback_reason is not None:
                     observed, gpu_state = verified
-                    if gpu_state["status"] != "available":
-                        gpu_state = {**gpu_state, "reason": fallback_reason}
-                    verified = (observed, gpu_state)
+                    if gpu_state["status"] != "cpu":
+                        raise ManagedEnvironmentError(
+                            "CPU fallback did not verify a working CPU Torch runtime."
+                        )
+                    verified = (observed, {**gpu_state, "reason": fallback_reason})
                 temp_marker = target / "managed.json.pending"
                 temp_marker.write_text(
                     json.dumps({
