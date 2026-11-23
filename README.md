@@ -49,6 +49,39 @@ uncertain and records a new attempt. This history does not certify that every
 native checkpoint is portable.
 
 
+
+### Managed Python environments (opt-in preview)
+
+A Project can explicitly request an isolated `uv` environment through
+`project.environments.plan(python=None, teal=None, teal_extras=[], gpu="auto")`
+and `project.environments.create(...)`. Planning only inspects local metadata.
+Creation requires `uv` and a clean Git checkout of a compatible TeAL revision;
+it never changes the calling interpreter or installs during Project opening.
+The optional `teal` argument currently accepts only the exact active TeAL
+source commit. A package version label or an old release tag does not establish
+compatibility with the R1 secondary interpreter.
+
+Creation returns an environment ID, exact Python and TeAL source, requested
+extras, actual backend check, fallback reason, and whether a cached installation
+was reused. The runtime is staged and checked before it becomes available.
+For example:
+
+```python
+created = project.environments.create(teal_extras=["parallel"], gpu="auto")
+project.environments.set_default(created.environment_id)
+output = project.translate(TextLength({"text": "words"}), source)["output"]
+```
+
+The user-local installation is resolved automatically on later Project opens.
+`gpu="auto"` does not add Torch to a base installation; `gpu=True` requires
+a working accelerator and `gpu=False` requests CPU. A Torch backend is
+confirmed by an actual tensor computation. An installation's observed software
+inventory and tested device are **not** evidence of a universal cross-platform
+`uv.lock` or installation-artifact integrity; this initial managed creation
+path registers an honest `observed_unlocked` identity, not a fabricated
+`portable_locked` identity. Managed installs have no implied model-weight
+downloads and no GPU driver or OS modifications.
+
 ## Project environments
 
 Each TeAL project records an immutable, fingerprinted observation of the

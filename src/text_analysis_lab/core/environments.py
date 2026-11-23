@@ -638,6 +638,12 @@ class EnvironmentRegistry:
         self.get(environment_id)
         path = self._interpreter_bindings.get(environment_id)
         if path is None:
+            from text_analysis_lab.core.managed_environments import find_cached_interpreter
+
+            path = find_cached_interpreter(environment_id)
+            if path is not None:
+                self._interpreter_bindings[environment_id] = path
+        if path is None:
             raise EnvironmentRegistryError(
                 f"Environment {environment_id!r} has no bound Python interpreter. "
                 "Call project.environments.bind_interpreter(...)."
@@ -647,6 +653,26 @@ class EnvironmentRegistry:
                 f"Bound interpreter {str(path)!r} is missing or not executable."
             )
         return path
+
+    def plan(
+        self, *, python: str | None = None, teal: str | None = None,
+        teal_extras: list[str] | tuple[str, ...] | None = None,
+        gpu: str | bool = "auto",
+    ):
+        """Preview an immutable TeAL source and uv installation without side effects."""
+        from text_analysis_lab.core.managed_environments import plan
+
+        return plan(python=python, teal=teal, teal_extras=teal_extras, gpu=gpu)
+
+    def create(
+        self, *, python: str | None = None, teal: str | None = None,
+        teal_extras: list[str] | tuple[str, ...] | None = None,
+        gpu: str | bool = "auto",
+    ):
+        """Explicitly create or reuse and bind a verified host-local uv environment."""
+        from text_analysis_lab.core.managed_environments import create
+
+        return create(self, python=python, teal=teal, teal_extras=teal_extras, gpu=gpu)
 
     def register_portable_specification(self, specification: dict[str, Any]) -> str:
         """Record a supplied portable lock; do not assert it can run locally."""
