@@ -36,6 +36,7 @@ from text_analysis_lab.core.errors import (
     PipelineError,
 )
 from text_analysis_lab.core.environments import EnvironmentRegistry
+from text_analysis_lab.core.platforms import PlatformRegistry
 from text_analysis_lab.core.feature_subset import (
     FeatureSubsetFunction,
 )
@@ -159,6 +160,10 @@ class Project:
         self.catalog = ProjectCatalog(self.storage.catalog_dir)
         try:
             self.environments = EnvironmentRegistry(self.catalog)
+            self.platforms = PlatformRegistry(self.catalog)
+            self.catalog.set_execution_context(
+                self.environments.opening_id, self.platforms.opening_id,
+            )
             self.query = QueryEngine(self)
         except Exception:
             self.catalog.close()
