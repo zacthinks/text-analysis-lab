@@ -142,6 +142,8 @@ def _normalized_request(
         raise ManagedEnvironmentError("python must specify exact major.minor.patch.")
     if type(gpu) is not bool and gpu != "auto":
         raise ManagedEnvironmentError("gpu must be 'auto', True, or False.")
+    if teal_extras is None:
+        teal_extras = []
     if not isinstance(teal_extras, (tuple, list)):
         raise ManagedEnvironmentError("teal_extras must be a sequence of extra names.")
     extras: list[str] = []
