@@ -1037,7 +1037,7 @@ class Project:
         # R1: unsupported cross-interpreter requests are checked and delegated
         # before any local scientific work, ID allocation, or alias changes.
         selected = self.environments.resolve(environment)
-        if selected != self.environments.opening_id:
+        if not self.environments.is_current_interpreter(selected):
             if _coordinator_request_id is not None:
                 raise OperatorError("Nested secondary coordination is unsupported.")
             from text_analysis_lab.core.secondary_coordinator import delegate_translate
@@ -1137,7 +1137,7 @@ class Project:
             if operation["environment_id"] is not None
             else self.environments.resolve()
         )
-        if selected != self.environments.opening_id:
+        if not self.environments.is_current_interpreter(selected):
             if _coordinator_request_id is not None:
                 raise OperatorError("Nested secondary resume is unsupported.")
             from text_analysis_lab.core.secondary_coordinator import delegate_resume
