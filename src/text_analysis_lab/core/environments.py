@@ -206,6 +206,24 @@ def _normalize_lock_manifest(value: Any) -> Any:
     raise EnvironmentRegistryError("Invalid portable lock manifest value.")
 
 
+def _normalize_distribution_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize an exact installed inventory without depending on order."""
+    if not isinstance(records, list):
+        raise EnvironmentRegistryError("Distributions must be a list.")
+    distributions = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise EnvironmentRegistryError("Invalid package record.")
+        name, version = record.get("name"), record.get("version")
+        if (not isinstance(name, str) or not name.strip()
+                or not isinstance(version, str) or not version):
+            raise EnvironmentRegistryError("A package needs a name and version.")
+        normalized = dict(record)
+        normalized["name"] = _NAME_SEPARATOR.sub("-", name.strip()).lower()
+        distributions.append(normalized)
+    return sorted(distributions, key=_canonical_json)
+
+
 def normalize_environment(observation: dict[str, Any]) -> dict[str, Any]:
     """Canonical identity of software without original OS, GPU, drivers or ABI."""
     version = observation.get("schema_version") if isinstance(observation, dict) else None
@@ -227,25 +245,13 @@ def normalize_environment(observation: dict[str, Any]) -> dict[str, Any]:
         or not isinstance(teal.get("version"), str)
         or not teal["version"]):
         raise EnvironmentRegistryError("Invalid Python or TeAL identity.")
-    records = observation["distributions"]
-    if not isinstance(records, list):
-        raise EnvironmentRegistryError("Distributions must be a list.")
-    distributions = []
-    for record in records:
-        if not isinstance(record, dict):
-            raise EnvironmentRegistryError("Invalid package record.")
-        name, version = record.get("name"), record.get("version")
-        if not isinstance(name, str) or not name.strip() or not isinstance(version, str) or not version:
-            raise EnvironmentRegistryError("A package needs a name and version.")
-        copy = dict(record)
-        copy["name"] = _NAME_SEPARATOR.sub("-", name.strip()).lower()
-        distributions.append(copy)
+    distributions = _normalize_distribution_records(observation["distributions"])
     result = {
-        "schema_version": OBSERVATION_SCHEMA_VERSION,
+        "schema_version": version,
         "kind": kind,
         "python": dict(python_info),
         "teal": dict(teal),
-        "distributions": sorted(distributions, key=_canonical_json),
+        "distributions": distributions,
     }
     if kind == "portable_locked":
         extras, lock = observation.get("extras"), observation.get("lock")
