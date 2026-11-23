@@ -177,7 +177,10 @@ class ChildGeCoServer:
             if self._process.stdin is not None:
                 with suppress(OSError, ValueError):
                     self._process.stdin.close()
-            self._temporary.cleanup()
+            # Windows can briefly retain a handle to the child log after
+            # process exit. Cleanup is best-effort, not a server failure.
+            with suppress(OSError):
+                self._temporary.cleanup()
 
     def __enter__(self) -> ChildGeCoServer:
         return self
@@ -288,7 +291,10 @@ def launch(
             if process.stdin is not None:
                 with suppress(OSError, ValueError):
                     process.stdin.close()
-        temp.cleanup()
+        # Never mask the actual launch error (e.g. unavailable CUDA) with
+        # Windows' transient WinError 32 on a just-closed child log.
+        with suppress(OSError):
+            temp.cleanup()
         raise
 
 
