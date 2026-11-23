@@ -597,6 +597,134 @@ def test_auto_gpu_does_not_retry_unrelated_install_failure(
     assert not list((tmp_path / "managed").glob("*/managed.json"))
 
 
+
+@pytest.mark.parametrize("all_drifted", [False, True])
+def test_duplicate_cache_rediscovery_skips_drift_and_rejects_all_invalid(
+    parent_source, tmp_path, monkeypatch, all_drifted,
+):
+    """A bad cache cannot hide a separate valid installation with the same ID."""
+    from text_analysis_lab import Project
+
+    root = tmp_path / "managed"
+    monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(root))
+    monkeypatch.setattr(managed, "_uv", lambda: "uv")
+    installs = []
+
+    def command(args, **kwargs):
+        if args[:2] == ["uv", "venv"]:
+            installs.append(args)
+            exe = managed._interpreter(Path(args[2]))
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.touch()
+            exe.chmod(0o755)
+        return ""
+
+    monkeypatch.setattr(managed, "_run_command", command)
+    observation = {
+        "schema_version": 2, "kind": "observed_unlocked",
+        "python": {"implementation": sys.implementation.name,
+                   "version": ".".join(map(str, sys.version_info[:3]))},
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": COMMIT},
+        ],
+    }
+    drifted = copy.deepcopy(observation)
+    drifted["distributions"].append({"name": "unexpected-package", "version": "1"})
+    bad_keys = set()
+    seen = []
+
+    def verify(directory, request, uv):
+        seen.append(directory.name)
+        return (drifted if directory.name in bad_keys else observation), {
+            "status": "not_applicable", "backend": None, "reason": None,
+        }
+
+    monkeypatch.setattr(managed, "_verify", verify)
+    with Project.create(tmp_path / "project", "duplicate-uv") as project:
+        first = project.environments.create(gpu=False)
+        second = project.environments.create(gpu="auto")
+        assert first["environment_id"] == second["environment_id"]
+    keys = sorted(p.name for p in root.iterdir() if (p / "managed.json").is_file())
+    assert len(keys) == 2
+    bad_keys.update(keys if all_drifted else keys[:1])
+    seen.clear()
+
+    with Project.open(tmp_path / "project") as project:
+        if all_drifted:
+            with pytest.raises(ManagedEnvironmentError, match="failed re-verification"):
+                project.environments.bound_interpreter(first["environment_id"])
+            assert first["environment_id"] not in project.environments._interpreter_bindings
+        else:
+            chosen = project.environments.bound_interpreter(first["environment_id"])
+            assert chosen == managed._interpreter(root / keys[1])
+    assert seen == keys
+    assert len(installs) == 2
+    assert all((root / key / "managed.json").exists() for key in keys)
+
+
+def test_cpu_fallback_stays_cpu_only_on_create_reuse_and_rediscovery(
+    parent_source, tmp_path, monkeypatch,
+):
+    """An advertised but broken accelerator must not be retried after fallback."""
+    root = tmp_path / "managed"
+    monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(root))
+    monkeypatch.setattr(managed, "_uv", lambda: "uv")
+    installs, policies = [], []
+
+    def command(args, **kwargs):
+        if args[:2] == ["uv", "venv"]:
+            exe = managed._interpreter(Path(args[2]))
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.touch()
+            exe.chmod(0o755)
+        elif args[:3] == ["uv", "pip", "install"]:
+            installs.append(args[args.index("--torch-backend") + 1])
+        return ""
+
+    monkeypatch.setattr(managed, "_run_command", command)
+    observation = {
+        "schema_version": 2, "kind": "observed_unlocked",
+        "python": {"implementation": sys.implementation.name,
+                   "version": ".".join(map(str, sys.version_info[:3]))},
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": COMMIT},
+            {"name": "torch", "version": "2.14.1+cpu"},
+        ],
+    }
+    monkeypatch.setattr(managed, "_probe", lambda *args: observation)
+
+    def gpu_probe(exe, policy):
+        policies.append(policy)
+        if policy is not False:
+            raise managed.ManagedAcceleratorError("Advertised MPS failed tensor smoke")
+        return {"status": "cpu", "backend": "cpu", "reason": "CPU-only policy selected"}
+
+    monkeypatch.setattr(managed, "_gpu_probe", gpu_probe)
+
+    class Registry:
+        class Catalog:
+            def register_environment(self, *, fingerprint, **kwargs):
+                return "env_" + fingerprint
+        _catalog = Catalog()
+        def bind_interpreter(self, env, exe):
+            assert Path(exe).is_file()
+
+    registry = Registry()
+    first = managed.create(registry, teal_extras=["transformers"], gpu="auto")
+    assert first["gpu"]["status"] == "cpu"
+    assert "Torch runtime verification failed" in first["gpu"]["reason"]
+    assert policies == ["auto", False]
+    reused = managed.create(registry, teal_extras=["transformers"], gpu="auto")
+    assert reused["reused"] and reused["gpu"] == first["gpu"]
+    assert policies == ["auto", False, False]
+    assert managed.find_cached_interpreter(first["environment_id"]).is_file()
+    assert policies == ["auto", False, False, False]
+    assert installs == ["auto", "cpu"]
+    assert len(list(root.glob("*/managed.json"))) == 1
+
+
 def test_torch_accelerator_tensor_failure_triggers_error_not_silent_cpu(
     monkeypatch, tmp_path,
 ):
