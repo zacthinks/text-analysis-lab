@@ -501,6 +501,14 @@ def test_cpu_checkpoint_resumes_after_platform_driver_observation_changes(
         historical = project.get_operation(operation_id)
         assert historical["platform_id"] == initial_platform
         assert historical["environment_id"] == initial_software
+        attempts = project.execution_attempts(operation_id)
+        assert len(attempts) == 2
+        assert [attempt["outcome"] for attempt in attempts] == ["failed", "complete"]
+        assert attempts[0]["environment_id"] == initial_software
+        assert attempts[0]["platform_id"] == initial_platform
+        assert attempts[1]["environment_id"] == initial_software
+        assert attempts[1]["platform_id"] == project.platforms.opening_id
+        assert attempts[1]["platform_id"] != initial_platform
 
 
 def test_legacy_resumable_operation_obeys_active_default_without_backfilling(
