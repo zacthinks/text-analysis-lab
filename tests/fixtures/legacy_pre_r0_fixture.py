@@ -38,6 +38,11 @@ def main(root: Path) -> None:
             CountVectorizer(text_field="text", min_df=1), source
         )["output"]
         project.add_artifact_alias(counts, "legacy_counts")
+        linked = project.geco.create(
+            "legacy_coding", documents=source, text_field="text", geometry=counts
+        )
+        legacy_geometry_name = linked.coder.geometries()[0]["name"]
+        linked.close()
 
         # Inject failure after the original TeAL has persisted its durable plan,
         # so the candidate release must restore a genuinely old checkpoint.
@@ -81,6 +86,7 @@ def main(root: Path) -> None:
             "historical_operation_ids": [row["operation_id"] for row in operations],
             "counts_columns": counts.get_data_columns(),
             "counts_matrix": counts.get_matrix().toarray().tolist(),
+            "legacy_geometry_name": legacy_geometry_name,
         }
     (root.parent / "pre-r0-expected.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
