@@ -311,11 +311,19 @@ class EnvironmentRegistry:
         self._catalog = catalog
         observed = normalize_environment(observe_environment())
         fingerprint = fingerprint_observation(observed)
-        self._opening_id = catalog.register_environment(
+        self._observed_id = catalog.register_environment(
             fingerprint=fingerprint,
             schema_version=OBSERVATION_SCHEMA_VERSION,
             observation_json=_canonical_json(observed),
         )
+        self._opening_id = self._observed_id
+        matching = [
+            candidate for candidate in catalog.portable_realizations_for(self._observed_id)
+            if self._matches_portable(candidate, observed)
+        ]
+        # Do not select one of several ambiguous matched portable specifications.
+        if len(matching) == 1:
+            self._opening_id = matching[0]
         self._default_id = self._opening_id
         # Machine-local, per-Project references; never written to SQLite.
         self._interpreter_bindings: dict[str, Path] = {}
@@ -392,6 +400,68 @@ class EnvironmentRegistry:
             observation_json=_canonical_json(normalized),
         )
 
+    def _matches_portable(self, environment_id: str, observed: dict[str, Any]) -> bool:
+        """Verify an installed, local realization against one declared lock variant.
+
+        Portable spec identity alone does not establish executable compatibility;
+        all observed distribution records (including local wheel/build variants)
+        must match a recorded realization, and TeAL source must be immutable.
+        """
+        spec = self.get(environment_id)["observation"]
+        if (spec["kind"] != "portable_locked"
+                or spec["python"] != observed["python"]
+                or spec["teal"]["version"] != observed["teal"]["version"]):
+            return False
+        source = spec["teal"]["source"]
+        teal_package = next((
+            item for item in observed["distributions"]
+            if item["name"] == "text-analysis-lab"
+        ), None)
+        if teal_package is None:
+            return False
+        if source.get("commit") and teal_package.get("vcs_commit") != source["commit"].lower():
+            return False
+        if source.get("sha256") and teal_package.get("archive_sha256") != source["sha256"].lower():
+            return False
+        realizations = spec["lock"]["manifest"].get("realizations")
+        if not isinstance(realizations, list):
+            return False
+        for realization in realizations:
+            if not isinstance(realization, dict) or set(realization) != {"distributions"}:
+                continue
+            try:
+                candidate = _normalize_distribution_records(realization["distributions"])
+            except EnvironmentRegistryError:
+                continue
+            if candidate == observed["distributions"]:
+                return True
+        return False
+
+    def verify_current_portable(self, environment_id: str) -> dict[str, Any]:
+        """Adopt a portable software ID only after checking the actual interpreter.
+
+        The current physical platform remains a separate observation, unchanged.
+        The verification is remembered for this exact observed installation.
+        """
+        observed = normalize_environment(observe_environment())
+        if fingerprint_observation(observed) != self._catalog.get_environment(
+            self._observed_id
+        )["fingerprint"]:
+            raise EnvironmentRegistryError(
+                "Current Python installation changed after Project.open; reopen before verifying."
+            )
+        if not self._matches_portable(environment_id, observed):
+            raise EnvironmentRegistryError(
+                "Installed software does not match any verified portable lock realization."
+            )
+        self._catalog.record_environment_realization(self._observed_id, environment_id)
+        self._opening_id = environment_id
+        self._default_id = environment_id
+        current_platform = getattr(self._catalog, "_execution_platform_id", None)
+        if current_platform is not None:
+            self._catalog.set_execution_context(environment_id, current_platform)
+        return self.get(environment_id)
+
     def _public_row(self, row: dict[str, Any]) -> dict[str, Any]:
         try:
             observation = normalize_environment(json.loads(row["observation_json"]))
@@ -412,6 +482,8 @@ class EnvironmentRegistry:
             "readiness": (
                 "current_interpreter"
                 if row["environment_id"] == self._opening_id
+                else "current_observed_interpreter"
+                if row["environment_id"] == self._observed_id
                 else "unverified"
             ),
         }
