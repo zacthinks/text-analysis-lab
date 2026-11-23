@@ -412,15 +412,22 @@ def create(
                 if gpu is True and not _TORCH_EXTRAS.intersection(request["teal_extras"]):
                     args.append("torch")
                 fallback_reason = None
+                stage = "install"
                 try:
                     _run_command(args)
+                    stage = "verify"
+                    verified = _verify(target, request, uv)
                 except ManagedEnvironmentError as primary_error:
-                    if gpu != "auto" or not (
-                        _TORCH_EXTRAS.intersection(request["teal_extras"])
-                    ):
+                    # uv resolution errors may be retried under the existing
+                    # auto policy. AFTER installation only an actual Torch
+                    # import/device/tensor failure can trigger CPU rebuilding:
+                    # missing TeAL source, mismatched R1 protocol, uv pip check
+                    # and other general verification problems remain fatal.
+                    if (gpu != "auto"
+                            or not _TORCH_EXTRAS.intersection(request["teal_extras"])
+                            or not (stage == "install"
+                                    or isinstance(primary_error, ManagedAcceleratorError))):
                         raise
-                    # Only auto may retry with a CPU Torch build. Recreate
-                    # instead of reusing a partially modified installation.
                     shutil.rmtree(target)
                     target.mkdir()
                     _run_command([uv, "venv", str(target), "--python", request["python"]])
@@ -429,13 +436,17 @@ def create(
                                 "--torch-backend", "cpu", _source_requirement(request)]
                     try:
                         _run_command(cpu_args)
+                        verified = _verify(target, request, uv)
                     except ManagedEnvironmentError as cpu_error:
                         raise ManagedEnvironmentError(
-                            "GPU-preferred and CPU-fallback installation both failed; "
+                            "GPU-preferred setup and CPU fallback both failed; "
                             f"CPU error: {cpu_error}"
                         ) from primary_error
-                    fallback_reason = "GPU-preferred installation failed; CPU-only retry succeeded"
-                verified = _verify(target, request, uv)
+                    fallback_reason = (
+                        "GPU-preferred Torch runtime verification failed; CPU-only retry succeeded"
+                        if stage == "verify" else
+                        "GPU-preferred installation failed; CPU-only retry succeeded"
+                    )
                 if fallback_reason is not None:
                     observed, gpu_state = verified
                     if gpu_state["status"] != "available":
@@ -446,6 +457,7 @@ def create(
                     json.dumps({
                         "schema_version": _CACHE_SCHEMA, "request": request,
                         "observed_fingerprint": fingerprint_observation(verified[0]),
+                        "fallback_reason": fallback_reason,
                     }, sort_keys=True), encoding="utf-8",
                 )
                 temp_marker.replace(target / "managed.json")
