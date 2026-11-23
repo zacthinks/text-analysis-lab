@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import sqlite3
 
@@ -35,7 +36,16 @@ def software(version="3.11.15", torch="2.14.1", teal_source="a" * 40):
             {"name": "Text_Analysis.Lab", "version": "0.12.2"},
         ],
         "extras": ["transformers", "parallel", "transformers"],
-        "lock": {"sha256": "b" * 64, "kind": "uv"},
+        "lock": {
+            "kind": "uv",
+            "manifest": {"requirements": {"torch": torch, "teal": "0.12.2"}},
+            "sha256": hashlib.sha256(
+                json.dumps(
+                    {"requirements": {"teal": "0.12.2", "torch": torch}},
+                    sort_keys=True, separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+        },
     }
 
 
