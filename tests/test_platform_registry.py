@@ -381,6 +381,8 @@ def test_locked_identity_ignores_platform_specific_top_level_distributions():
     (("lock", "manifest", "realizations_extra"), ["hostname:my-pc"]),
     (("lock", "manifest", "index_priority"), ["https://user:secret@example.org/simple"]),
     (("lock", "manifest", "index_priority"), ["file:///home/researcher/simple"]),
+    (("lock", "manifest", "index_priority"), ["https://192.168.1.10/simple"]),
+    (("lock", "manifest", "index_priority"), ["https://[::1]/simple"]),
     (("lock", "manifest", "index_priority"), ["C:\\Users\\researcher\\index"]),
     (("lock", "manifest", "requirements"), {"torch": "/home/researcher/torch.whl"}),
     (("lock", "manifest", "packages"), [{"name": "torch", "version": "2", "hostname": "researcher-pc"}]),
