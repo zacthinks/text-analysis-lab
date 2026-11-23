@@ -64,7 +64,8 @@ def _run_command(args: list[str], *, timeout: int = 1800) -> str:
     if completed.returncode:
         message = (completed.stderr or completed.stdout).strip()
         # Never expose credential-bearing source URLs from resolver output.
-        message = re.sub(r"(?i)(https?://)[^/@\s]+:[^/@\s]+@", r"\1[redacted]@", message)
+        message = re.sub(r"(?i)(https?://)[^/@\s]+@", r"\1[redacted]@", message)
+        message = re.sub(r"(?i)(https?://[^?\s]+)\?[^\s]+", r"\1?[redacted]", message)
         raise ManagedEnvironmentError(
             f"Managed environment command failed (exit {completed.returncode}): "
             + message[-1800:]
@@ -140,6 +141,8 @@ def _normalized_request(
         python = ".".join(map(str, sys.version_info[:3]))
     if not isinstance(python, str) or not _PYTHON.fullmatch(python):
         raise ManagedEnvironmentError("python must specify exact major.minor.patch.")
+    if tuple(map(int, python.split("."))) < (3, 11, 0):
+        raise ManagedEnvironmentError("This TeAL source requires Python 3.11 or newer.")
     if type(gpu) is not bool and gpu != "auto":
         raise ManagedEnvironmentError("gpu must be 'auto', True, or False.")
     if teal_extras is None:
