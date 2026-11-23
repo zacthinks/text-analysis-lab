@@ -25,9 +25,9 @@ from text_analysis_lab.core.environments import (
 
 def observation(label: str, *, package_version: str = "1", name: str = "sample") -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "kind": "observed_unlocked",
         "python": {"implementation": "cpython", "version": "3.11.0"},
-        "platform": {"system": "Test", "machine": "testing"},
         "teal": {"version": "0.12.2"},
         "distributions": [{"name": name, "version": package_version}, {"name": "teal", "version": label}],
     }
