@@ -501,6 +501,12 @@ def translate(
     )
     plan: _ExecutionPlan | None = None
     try:
+        project.catalog.begin_execution_attempt(
+            runtime.operation_id,
+            environment_id=project.environments.opening_id,
+            platform_id=project.platforms.opening_id,
+            coordinator_request_id=coordinator_request_id,
+        )
         _save_operation_metadata(
             runtime=runtime,
             translator=translator,
@@ -693,9 +699,16 @@ def resume_translate(
         output_specs=output_specs,
     )
     plan = _ExecutionPlan(runtime.operation_dir)
-    plan.reset_running_to_pending()
 
     try:
+        # Checkpoint restoration/compatibility above this point must finish
+        # before a new attempt is counted as actual scientific execution.
+        project.catalog.begin_execution_attempt(
+            runtime.operation_id,
+            environment_id=project.environments.opening_id,
+            platform_id=project.platforms.opening_id,
+        )
+        plan.reset_running_to_pending()
         if mode == "translate":
             _serialize_pending_operator_snapshot(
                 project, translator, runtime,
@@ -2515,6 +2528,7 @@ def _complete_runtime(project: Project, runtime: _Runtime) -> None:
         project.catalog.mark_artifact_complete(runtime.output_artifact_ids[label])
     _update_operation_metadata_status(runtime, "complete")
     project.catalog.mark_operation_complete(runtime.operation_id)
+    project.catalog.finish_execution_attempt(runtime.operation_id, outcome="complete")
     _cleanup_completed_operation_temp(runtime)
 
 
@@ -2551,6 +2565,9 @@ def _fail_runtime(project: Project, runtime: _Runtime, error: Exception) -> None
         finally:
             project.catalog.mark_artifact_failed(runtime.output_artifact_ids[label])
     project.catalog.mark_operation_failed(runtime.operation_id, error)
+    project.catalog.finish_execution_attempt(
+        runtime.operation_id, outcome="failed", error=error,
+    )
     if runtime.operator_snapshot_pending and not runtime.resumable:
         project.catalog.mark_operator_snapshot_failed(runtime.operator_id)
     _update_operation_metadata_status(runtime, "failed", error=error)
