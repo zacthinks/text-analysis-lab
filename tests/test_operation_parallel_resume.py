@@ -1272,6 +1272,7 @@ def test_checkpoint_swap_discards_stale_previous_when_target_is_complete(
     assert not previous.exists()
 
 
+@pytest.mark.acceptance
 def test_concurrent_resume_does_not_displace_live_owner(tmp_path: Path, monkeypatch) -> None:
     """Two Project sessions cannot manipulate the same live checkpoint."""
     import text_analysis_lab as teal
@@ -1343,6 +1344,7 @@ def test_concurrent_resume_does_not_displace_live_owner(tmp_path: Path, monkeypa
         assert [a["outcome"] for a in attempts] == ["failed", "complete"]
 
 
+@pytest.mark.acceptance
 def test_operation_lock_is_exclusive_across_independent_processes(tmp_path: Path):
     """The OS lock (not just a Python thread flag) excludes another process."""
     from text_analysis_lab.core.execution_ownership import exclusive_operation_execution
