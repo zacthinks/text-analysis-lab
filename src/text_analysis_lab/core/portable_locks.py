@@ -347,7 +347,11 @@ def matches_installed(spec: dict[str, Any], observed: dict[str, Any]) -> bool:
     for dist in observed["distributions"]:
         if dist["name"] in actual or dist.get("editable") or dist.get("local_install"):
             return False
-        if dist["name"] != "text-analysis-lab" and dist.get("vcs"):
+        # A registry-locked package silently replaced by an arbitrary direct
+        # URL (even with the same version) is source drift, not a valid match.
+        if (dist["name"] != "text-analysis-lab"
+                and (dist.get("direct_install") or dist.get("vcs")
+                     or dist.get("archive_sha256"))):
             return False
         actual[dist["name"]] = Version(dist["version"])
     return actual == expected
