@@ -115,7 +115,7 @@ def _local_source_commit() -> str:
         commit = vcs.get("commit_id") if isinstance(vcs, dict) else None
         if (isinstance(origin, str)
                 and re.fullmatch(
-                    r"https://github\\.com/zacthinks/text-analysis-lab(?:\\.git)?/?",
+                    r"https://github\.com/zacthinks/text-analysis-lab(?:\.git)?/?",
                     origin,
                 )
                 and isinstance(vcs, dict)
