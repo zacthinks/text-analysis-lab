@@ -255,7 +255,7 @@ def _interpreter(directory: Path) -> Path:
 def _probe(executable: Path, request: dict[str, Any]) -> dict[str, Any]:
     if not executable.is_file():
         raise ManagedEnvironmentError("Managed interpreter is missing.")
-    exit_code, payload, stderr = _run(executable, "--probe", timeout=120)
+    exit_code, payload, stderr = _run(executable, "--probe", timeout=120, isolated=True)
     if exit_code or payload is None:
         raise ManagedEnvironmentError(f"Managed TeAL child probe failed: {stderr[-500:]}")
     if payload.get("protocol_version") != PROTOCOL_VERSION:
@@ -301,7 +301,7 @@ def _gpu_probe(executable: Path, policy: str | bool) -> dict[str, Any]:
         "'backend':('rocm' if device=='cuda' and torch.version.hip else device),"
         "'reason':None if device!='cpu' else 'No verified accelerator'}))\n"
     )
-    output = _run_command([str(executable), "-c", script], timeout=120)
+    output = _run_command([str(executable), "-I", "-c", script], timeout=120)
     try:
         state = json.loads(output.splitlines()[-1])
     except (ValueError, IndexError) as exc:
