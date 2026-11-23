@@ -175,3 +175,77 @@ def test_local_operations_write_both_ids_catalog_and_descriptors(tmp_path, monke
         assert row["platform_id"] == original_id
         assert project.platforms.opening_id != original_id
         assert project.environments.opening_id == row["environment_id"]
+
+
+def test_verified_local_realization_is_same_logical_environment_across_platforms(
+    tmp_path, monkeypatch,
+):
+    """A verified, pinned software recipe is the execution ID on both hosts."""
+    raw = {
+        "schema_version": 2,
+        "kind": "observed_unlocked",
+        "python": {"implementation": "cpython", "version": "3.11.15"},
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "Text-Analysis-Lab", "version": "0.12.2", "vcs_commit": "a" * 40},
+            {"name": "torch", "version": "2.14.1+cu130"},
+        ],
+    }
+    spec = software(torch="2.14.1+cu130")
+    spec["distributions"] = copy.deepcopy(raw["distributions"])
+    manifest = {
+        "realizations": [{"distributions": copy.deepcopy(raw["distributions"])}],
+    }
+    canonical_manifest = environments._normalize_lock_manifest(manifest)
+    spec["lock"] = {
+        "kind": "uv",
+        "manifest": manifest,
+        "sha256": hashlib.sha256(
+            json.dumps(
+                canonical_manifest, sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+
+    monkeypatch.setattr(environments, "observe_environment", lambda: copy.deepcopy(raw))
+    current = {"value": machine("Windows")}
+    monkeypatch.setattr(platforms, "observe_platform", lambda: current["value"])
+    directory = tmp_path / "study"
+    with Project.create(directory, "study") as project:
+        observed_id = project.environments.opening_id
+        portable_id = project.environments.register_portable_specification(spec)
+        assert portable_id != observed_id
+        assert project.environments.get(portable_id)["readiness"] == "unverified"
+        project.environments.verify_current_portable(portable_id)
+        assert project.environments.default["environment_id"] == portable_id
+
+        source = tmp_path / "texts.csv"
+        pd.DataFrame({"text": ["one two"]}).to_csv(source, index=False)
+        artifact = project.read_csv(source, text_fields="text", metadata_fields=None)
+        operation = project.operation_for_artifact(artifact)
+        assert operation["environment_id"] == portable_id
+        assert operation["platform_id"] == project.platforms.opening_id
+        windows_platform_id = project.platforms.opening_id
+
+    current["value"] = machine("Darwin")
+    with Project.open(directory) as project:
+        assert project.environments.opening_id == portable_id
+        assert project.environments.default["environment_id"] == portable_id
+        assert project.platforms.opening_id != windows_platform_id
+        assert project.environments.get(observed_id)["kind"] == "observed_unlocked"
+        assert project.environments.get(portable_id)["kind"] == "portable_locked"
+        assert len(project.environments.list()) == 2
+
+    raw["distributions"][1]["version"] = "2.15.0"
+    with Project.open(directory) as project:
+        assert project.environments.opening_id != portable_id
+        assert project.environments.default["kind"] == "observed_unlocked"
+        with pytest.raises(environments.EnvironmentRegistryError, match="does not match"):
+            project.environments.verify_current_portable(portable_id)
+
+
+def test_portable_manifest_requires_real_matching_digest():
+    spec = software()
+    spec["lock"]["sha256"] = "0" * 64
+    with pytest.raises(environments.EnvironmentRegistryError, match="does not match"):
+        fingerprint_observation(spec)
