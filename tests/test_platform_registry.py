@@ -267,3 +267,37 @@ def test_concurrent_platform_registration_reuses_one_row(tmp_path, monkeypatch):
     assert set(values) == {expected}
     with Project.open(directory) as project:
         assert len(project.platforms.list()) == 1
+
+
+def test_portable_index_priority_is_not_order_independent():
+    """Package sets are unordered, but index selection priority may not be."""
+    template = software()
+    template["lock"]["manifest"] = {
+        "packages": [
+            {"name": "torch", "version": "2.14.1"},
+            {"name": "teal", "version": "0.12.2"},
+        ],
+        "index_priority": ["trusted-first", "trusted-second"],
+    }
+
+    def frozen(request):
+        normalized = environments._normalize_lock_manifest(request["lock"]["manifest"])
+        request["lock"]["sha256"] = hashlib.sha256(json.dumps(
+            normalized, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        return fingerprint_observation(request)
+
+    first = frozen(copy.deepcopy(template))
+    reversed_packages = copy.deepcopy(template)
+    reversed_packages["lock"]["manifest"]["packages"].reverse()
+    assert frozen(reversed_packages) == first
+    reversed_priority = copy.deepcopy(template)
+    reversed_priority["lock"]["manifest"]["index_priority"].reverse()
+    assert frozen(reversed_priority) != first
+
+
+def test_portable_source_cannot_embed_original_hostname():
+    spec = software()
+    spec["teal"]["source"]["hostname"] = "original-workstation"
+    with pytest.raises(environments.EnvironmentRegistryError, match="immutable"):
+        fingerprint_observation(spec)
