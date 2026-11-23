@@ -45,4 +45,4 @@ jobs:
         env:
           TEAL_RUN_MANAGED_INSTALL_ACCEPTANCE: "1"
         run: |
-          "$PYTHON_EXE" -m pytest tests/test_managed_environments.py -m acceptance -q -rs
+          "$PYTHON_EXE" -m pytest --acceptance tests/test_managed_environments.py -m acceptance -q -rs
