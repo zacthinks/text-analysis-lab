@@ -274,6 +274,59 @@ def test_auto_gpu_install_failure_retries_cpu(parent_source, tmp_path, monkeypat
     assert result["gpu"]["status"] == "cpu"
     assert "CPU-only retry succeeded" in result["gpu"]["reason"]
 
+
+@pytest.mark.acceptance
+def test_concurrent_managed_create_reuses_one_install(
+    parent_source, tmp_path, monkeypatch,
+):
+    """Threads sharing one cache request cannot publish duplicate installs."""
+    from concurrent.futures import ThreadPoolExecutor
+    import time
+
+    monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(tmp_path / "managed"))
+    monkeypatch.setattr(managed, "_uv", lambda: "uv")
+    installs = []
+    def command(args, **kwargs):
+        if args[:2] == ["uv", "venv"]:
+            installs.append(args)
+            exe = managed._interpreter(Path(args[2]))
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.touch()
+            time.sleep(0.1)
+        return ""
+    monkeypatch.setattr(managed, "_run_command", command)
+    observation = {
+        "schema_version": 2, "kind": "observed_unlocked",
+        "python": {
+            "implementation": sys.implementation.name,
+            "version": ".".join(map(str, sys.version_info[:3])),
+        },
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": COMMIT},
+        ],
+    }
+    monkeypatch.setattr(
+        managed, "_verify", lambda *args: (
+            observation, {"status": "not_applicable", "backend": None, "reason": None},
+        ),
+    )
+    class Registry:
+        class Catalog:
+            def register_environment(self, *, fingerprint, **kwargs):
+                return "env_" + fingerprint
+        _catalog = Catalog()
+        def bind_interpreter(self, env, exe):
+            assert Path(exe).is_file()
+
+    registry = Registry()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(managed.create, registry) for _ in range(2)]
+        results = [f.result(timeout=30) for f in futures]
+    assert len(installs) == 1
+    assert sorted(result["reused"] for result in results) == [False, True]
+    assert results[0]["environment_id"] == results[1]["environment_id"]
+
 @pytest.mark.acceptance
 def test_real_uv_managed_child_textlength(tmp_path, monkeypatch):
     """End-to-end isolated Git-sourced child, no PYTHONPATH dependency sharing."""
