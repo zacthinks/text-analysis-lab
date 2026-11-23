@@ -53,6 +53,7 @@ def test_plan_has_no_install_side_effects(parent_source, monkeypatch):
 
 @pytest.mark.parametrize("kwargs", [
     {"python": "3.11"},
+    {"python": "3.10.16"},
     {"python": "3.11.15.1"},
     {"teal": "v0.12.2"},
     {"teal": "b" * 40},
@@ -197,6 +198,24 @@ def test_cached_package_drift_is_rejected_without_touching_live_install(parent_s
     ).hexdigest()
     assert (tmp_path / "managed" / cache_key / "managed.json").is_file()
 
+
+
+
+def test_install_failure_redacts_authenticated_urls(monkeypatch):
+    import subprocess
+    monkeypatch.setattr(
+        managed.subprocess, "run",
+        lambda args, **kwargs: subprocess.CompletedProcess(
+            args, returncode=1, stdout="",
+            stderr="Could not fetch https://secret-token@example.com/simple?token=private-value",
+        ),
+    )
+    with pytest.raises(managed.ManagedEnvironmentError) as caught:
+        managed._run_command(["uv", "pip", "install", "test"])
+    message = str(caught.value)
+    assert "secret-token" not in message
+    assert "private-value" not in message
+    assert "[redacted]" in message
 
 
 def test_strict_gpu_never_reports_cpu_ready(monkeypatch, tmp_path):
