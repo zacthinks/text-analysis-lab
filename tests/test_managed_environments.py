@@ -548,3 +548,40 @@ def test_managed_cache_discovery_rejects_drift_without_binding(
         with pytest.raises(managed.ManagedEnvironmentError, match="failed re-verification"):
             reopened.environments.bound_interpreter(managed_id)
         assert managed_id not in reopened.environments._interpreter_bindings
+
+
+def test_torch_probe_classifies_import_crash_as_accelerator_failure(tmp_path, monkeypatch):
+    executable = tmp_path / "python"
+    executable.touch()
+
+    def failed_torch_command(*args, **kwargs):
+        raise ManagedEnvironmentError("Torch failed to load a CUDA native library")
+
+    monkeypatch.setattr(managed, "_run_command", failed_torch_command)
+    with pytest.raises(managed.ManagedAcceleratorError, match="Torch runtime"):
+        managed._gpu_probe(executable, "auto")
+
+
+def test_auto_gpu_does_not_retry_unrelated_install_failure(
+    parent_source, tmp_path, monkeypatch,
+):
+    """A broken TeAL source/index is not evidence of a GPU problem."""
+    monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(tmp_path / "managed"))
+    monkeypatch.setattr(managed, "_uv", lambda: "uv")
+    installed = []
+
+    def fake_command(args, **kwargs):
+        if args[:2] == ["uv", "venv"]:
+            executable = managed._interpreter(Path(args[2]))
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.touch()
+        elif args[:3] == ["uv", "pip", "install"]:
+            installed.append(args[args.index("--torch-backend") + 1])
+            raise ManagedEnvironmentError("Invalid immutable TeAL Git source")
+        return ""
+
+    monkeypatch.setattr(managed, "_run_command", fake_command)
+    with pytest.raises(ManagedEnvironmentError, match="TeAL Git source"):
+        managed.create(object(), gpu="auto", teal_extras=["transformers"])
+    assert installed == ["auto"]
+    assert not list((tmp_path / "managed").glob("*/managed.json"))
