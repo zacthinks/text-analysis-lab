@@ -6,6 +6,10 @@ on:
       - implement/r0-software-platform-registries
   workflow_dispatch:
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   r0:
     runs-on: ubuntu-latest
@@ -23,11 +27,46 @@ jobs:
           enable-cache: true
       - name: Install Python
         run: uv python install 3.11
-      - name: Install TeAL with test dependencies
+      - id: setup
+        name: Install TeAL with test dependencies
         run: uv sync --python 3.11 --all-extras
       - name: Compile modified registry modules
+        if: steps.setup.outcome == 'success'
         run: uv run python -m compileall -q src/text_analysis_lab/core
-      - name: Focused R0 registry and provenance tests
-        run: uv run pytest -q tests/test_environment_registry.py tests/test_operation_environment_provenance.py tests/test_platform_registry.py
-      - name: Full test suite
-        run: uv run pytest -q
+      - id: focused
+        name: Focused R0 registry and provenance tests
+        if: steps.setup.outcome == 'success'
+        run: |
+          set -o pipefail
+          uv run pytest -q tests/test_environment_registry.py tests/test_operation_environment_provenance.py tests/test_platform_registry.py 2>&1 | tee "$RUNNER_TEMP/focused.log"
+      - id: full
+        name: Full test suite
+        if: always() && steps.setup.outcome == 'success'
+        run: |
+          set -o pipefail
+          uv run pytest -q 2>&1 | tee "$RUNNER_TEMP/full.log"
+      - name: Report R0 checkpoint outcome
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SETUP_OUTCOME: ${{ steps.setup.outcome }}
+          FOCUSED_OUTCOME: ${{ steps.focused.outcome }}
+          FULL_OUTCOME: ${{ steps.full.outcome }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            printf 'R0 checkpoint validation on commit %s.\n\n' "$COMMIT_SHA"
+            printf 'Environment setup: **%s**; focused R0 tests: **%s**; full pytest: **%s**.\n\n' "$SETUP_OUTCOME" "$FOCUSED_OUTCOME" "$FULL_OUTCOME"
+            if [ "$FOCUSED_OUTCOME" != success ] && [ -f "$RUNNER_TEMP/focused.log" ]; then
+              printf '\nFocused-test failure excerpt:\n~~~~\n'
+              tail -n 45 "$RUNNER_TEMP/focused.log"
+              printf '\n~~~~\n'
+            fi
+            if [ "$FULL_OUTCOME" != success ] && [ -f "$RUNNER_TEMP/full.log" ]; then
+              printf '\nFull-suite failure excerpt:\n~~~~\n'
+              tail -n 45 "$RUNNER_TEMP/full.log"
+              printf '\n~~~~\n'
+            fi
+          } > "$RUNNER_TEMP/r0-result.txt"
+          gh api "repos/$GITHUB_REPOSITORY/issues/85/comments" \
+            -X POST -F "body=@$RUNNER_TEMP/r0-result.txt"
