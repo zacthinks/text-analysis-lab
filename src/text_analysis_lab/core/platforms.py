@@ -9,7 +9,10 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import struct
 import subprocess
+import time
+from threading import RLock
 from typing import TYPE_CHECKING, Any
 
 from text_analysis_lab.core.errors import TeALError
@@ -38,7 +41,15 @@ def _safe_label(value: object, *, length: int = 160) -> str:
     return "".join(ch for ch in raw if ch.isprintable() and ch not in "\r\n")[:length]
 
 
-def _nvidia_devices() -> list[dict[str, str]]:
+# The GPU subprocess is comparatively expensive (especially on Windows), and
+# constructing a Project must not launch it repeatedly in a tight loop.
+# This best-effort observation is refreshed periodically, not a live driver monitor.
+_GPU_PROBE_TTL_SECONDS = 30.0
+_GPU_PROBE_LOCK = RLock()
+_GPU_PROBE_CACHE: tuple[float, list[dict[str, str]]] | None = None
+
+
+def _query_nvidia_devices() -> list[dict[str, str]]:
     """Best-effort GPU/driver query: no UUID, serial, bus ID or utilization."""
     try:
         result = subprocess.run(
@@ -67,6 +78,18 @@ def _nvidia_devices() -> list[dict[str, str]]:
         return []
 
 
+def _nvidia_devices() -> list[dict[str, str]]:
+    """Amortize the optional device subprocess across short-lived Projects."""
+    global _GPU_PROBE_CACHE
+    with _GPU_PROBE_LOCK:
+        now = time.monotonic()
+        if _GPU_PROBE_CACHE is not None and now - _GPU_PROBE_CACHE[0] < _GPU_PROBE_TTL_SECONDS:
+            return [device.copy() for device in _GPU_PROBE_CACHE[1]]
+        devices = _query_nvidia_devices()
+        _GPU_PROBE_CACHE = (time.monotonic(), devices)
+        return [device.copy() for device in devices]
+
+
 def observe_platform() -> dict[str, Any]:
     """Collect stable, non-identifying facts; missing GPU data is acceptable.
 
@@ -87,7 +110,9 @@ def observe_platform() -> dict[str, Any]:
             "kernel": optional(platform.version),
         },
         "architecture": optional(platform.machine),
-        "python_architecture": optional(lambda: platform.architecture()[0]),
+        # platform.architecture() can spawn 'file' on POSIX on *every* call.
+        # Pointer width is the actual running interpreter bitness, no process spawn.
+        "python_architecture": f"{struct.calcsize('P') * 8}bit",
         "cpu": {"processor": optional(platform.processor)},
         "accelerators": _nvidia_devices(),
     }
