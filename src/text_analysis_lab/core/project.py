@@ -1125,6 +1125,14 @@ class Project:
     ) -> Mapping[str, BaseArtifact]:
         """Resume a previously recorded resumable operation as configured."""
         operation = self.catalog.get_operation(str(operation_id))
+        original_platform = operation.get("platform_id")
+        if original_platform is not None and original_platform != self.platforms.opening_id:
+            raise OperatorError(
+                f"Operation {operation_id!r} was started under execution platform "
+                f"{original_platform!r}, not the current platform "
+                f"{self.platforms.opening_id!r}. Cross-platform checkpoint resume "
+                "is not verified; replay as a new operation instead."
+            )
         operation_type = str(operation["operation_type"])
         selected = (
             operation["environment_id"]
