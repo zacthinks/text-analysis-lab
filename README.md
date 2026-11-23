@@ -174,7 +174,7 @@ python -m wn download 'oewn:2025+'
 
 ### GPU-enabled PyTorch
 
-TeAL does not choose a CUDA, ROCm, or CPU PyTorch build for downstream projects. If your workflow uses GPU-backed transformer models, let the research project that owns the environment specify the appropriate PyTorch build in its own `pyproject.toml` / lockfile. See the [`uv` PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/) for current backend options.
+For manually provisioned environments, TeAL leaves PyTorch build selection to the environment owner and its dependency specification. Explicit `project.environments.create(..., gpu="auto" | True | False)` uses `uv` to select a supported Torch backend and verifies the actual child runtime before declaring it usable; `gpu="auto"` may fall back to CPU and `gpu=True` fails rather than silently running on CPU. This observed managed-installation path is **not** the CPU-only portable-lock path, and it does not install GPU drivers. See the [`uv` PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/) for backend-specific installation considerations.
 
 ## Quick start
 
