@@ -1542,7 +1542,14 @@ def test_observed_operation_resumes_locally_after_verified_portable_adoption(
         }
         second = project.environments.register_portable_specification(spec)
         assert first != second
+        assert not project.environments.equivalent_executor_identities(first, second)
+        unverified_spec = copy.deepcopy(spec)
+        unverified_spec["extras"] = ["unverified-alternative"]
+        unverified = project.environments.register_portable_specification(unverified_spec)
+        assert unverified not in {first, second}
         project.environments.verify_current_portable(second)
+        assert not project.environments.equivalent_executor_identities(first, unverified)
+        assert not project.environments.equivalent_executor_identities(second, unverified)
         assert project.environments.opening_id == second
         assert project.environments.is_current_interpreter(first)
         assert project.environments.equivalent_executor_identities(first, second)
