@@ -318,8 +318,36 @@ def create(
                 args.append(_source_requirement(request))
                 if gpu is True and not _TORCH_EXTRAS.intersection(request["teal_extras"]):
                     args.append("torch")
-                _run_command(args)
+                fallback_reason = None
+                try:
+                    _run_command(args)
+                except ManagedEnvironmentError as primary_error:
+                    if gpu != "auto" or not (
+                        _TORCH_EXTRAS.intersection(request["teal_extras"])
+                    ):
+                        raise
+                    # Only auto may retry with a CPU Torch build. Recreate
+                    # instead of reusing a partially modified installation.
+                    shutil.rmtree(target)
+                    target.mkdir()
+                    _run_command([uv, "venv", str(target), "--python", request["python"]])
+                    executable = _interpreter(target)
+                    cpu_args = [uv, "pip", "install", "--python", str(executable),
+                                "--torch-backend", "cpu", _source_requirement(request)]
+                    try:
+                        _run_command(cpu_args)
+                    except ManagedEnvironmentError as cpu_error:
+                        raise ManagedEnvironmentError(
+                            "GPU-preferred and CPU-fallback installation both failed; "
+                            f"CPU error: {cpu_error}"
+                        ) from primary_error
+                    fallback_reason = "GPU-preferred installation failed; CPU-only retry succeeded"
                 verified = _verify(target, request, uv)
+                if fallback_reason is not None:
+                    observed, gpu_state = verified
+                    if gpu_state["status"] != "available":
+                        gpu_state = {**gpu_state, "reason": fallback_reason}
+                    verified = (observed, gpu_state)
                 temp_marker = target / "managed.json.pending"
                 temp_marker.write_text(
                     json.dumps({"schema_version": _CACHE_SCHEMA, "request": request},
