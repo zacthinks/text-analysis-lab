@@ -733,6 +733,48 @@ Analyses performed outside TeAL can still be registered as project Artifacts.
 
 Use `Project.from_keyed_frame(...)` when external measurements attach new columns to an existing key universe. Use `Project.register_external(...)` when you need more explicit control over provenance and structural basis.
 
+## Portable software-environment locks (experimental integration branch)
+
+A TeAL Project can freeze a **software specification** and share it without
+requiring collaborators to reproduce its host operating system, device, drivers,
+or local virtual-environment paths. A portable ID identifies the frozen
+resolved specification; the Project separately records each verified installed
+realization and the actual execution platform.
+
+```python
+# On the originating computer, from a clean, committed TeAL Git checkout:
+locked = project.environments.create_specification(
+    teal_extras=["parallel"], gpu=False,
+)
+portable_id = locked["environment_id"]
+project.environments.export_specification(portable_id, "teal-software-lock.json")
+
+# On the receiving computer, with access to the same TeAL source commit:
+portable_id = project.environments.import_specification("teal-software-lock.json")
+local = project.environments.create_from_specification(portable_id)
+project.environments.set_default(portable_id)
+```
+
+`import_specification()` validates and records a specification **without
+installing packages or executing downloaded code**. Reconstruction is a separate
+explicit operation: `create_from_specification()` uses a frozen `uv.lock`,
+verifies the exact Python patch and immutable TeAL Git origin, compares installed
+package metadata to the applicable locked resolution, and binds a verified
+host-local interpreter for R1 delegation. A reopened Project can rediscover a
+verified installation without reinstalling it. Local cache paths do not enter
+the shared specification or Project registry.
+
+The initial profile supports base TeAL and the `parallel` extra under a
+CPU-only policy. Unsupported extras, GPU backends, unpinned sources and
+unresolved platform variants fail rather than being substituted silently.
+A successful frozen installation is **not** a promise of bit-identical
+scientific results, locally rebuilt wheel bytes or cross-accelerator numerical
+equivalence. Scientific model weights and other external resources remain under
+their own provenance contracts. The older
+`project.environments.create(..., gpu="auto")` continues to create verified
+**observed/unlocked** installations until richer GPU portable resolutions can
+be substantiated.
+
 ## Development and testing
 
 To contribute or run the test suite:
