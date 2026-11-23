@@ -354,6 +354,9 @@ _FALLBACK_REASONS = {
     "GPU-preferred installation failed; CPU-only retry succeeded",
     "GPU-preferred Torch runtime verification failed; CPU-only retry succeeded",
 }
+_ACCELERATOR_INSTALL_ERROR = re.compile(
+    r"(?i)\b(torch|pytorch|cuda|cudnn|rocm|hip|nvidia|mps|xpu|triton|gpu)\b"
+)
 
 
 def _request_key(request: dict[str, Any]) -> str:
@@ -517,15 +520,18 @@ def create(
                     stage = "verify"
                     verified = _verify(target, request, uv)
                 except ManagedEnvironmentError as primary_error:
-                    # uv resolution errors may be retried under the existing
-                    # auto policy. AFTER installation only an actual Torch
+                    # Only recognizable accelerator-related uv install errors
+                    # may be retried. AFTER installation only an actual Torch
                     # import/device/tensor failure can trigger CPU rebuilding:
                     # missing TeAL source, mismatched R1 protocol, uv pip check
                     # and other general verification problems remain fatal.
                     if (gpu != "auto"
                             or not _TORCH_EXTRAS.intersection(request["teal_extras"])
-                            or not (stage == "install"
-                                    or isinstance(primary_error, ManagedAcceleratorError))):
+                            or not (
+                                (stage == "install"
+                                 and _ACCELERATOR_INSTALL_ERROR.search(str(primary_error)))
+                                or isinstance(primary_error, ManagedAcceleratorError)
+                            )):
                         raise
                     shutil.rmtree(target)
                     target.mkdir()
