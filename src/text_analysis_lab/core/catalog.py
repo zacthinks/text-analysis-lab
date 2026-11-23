@@ -248,6 +248,23 @@ class ProjectCatalog:
                     registered_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS operation_execution_attempts (
+                    attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    operation_id TEXT NOT NULL REFERENCES operations(operation_id),
+                    environment_id TEXT REFERENCES project_environments(environment_id),
+                    platform_id TEXT REFERENCES project_platforms(platform_id),
+                    coordinator_request_id TEXT,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    outcome TEXT NOT NULL CHECK (
+                        outcome IN ('running', 'complete', 'failed', 'uncertain')
+                    ),
+                    error TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_operation_attempts_operation
+                ON operation_execution_attempts(operation_id, attempt_id);
+
                 CREATE TABLE IF NOT EXISTS memos (
                     memo_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     target_type TEXT NOT NULL,
@@ -946,6 +963,69 @@ class ProjectCatalog:
                     coordinator_request_id,
                 ),
             )
+
+    def begin_execution_attempt(
+        self, operation_id: str, *, environment_id: str, platform_id: str,
+        coordinator_request_id: str | None = None,
+    ) -> int:
+        """Append an actual translation execution context, preserving original provenance.
+
+        A previous unfinished row is *uncertain*, not silently marked failed:
+        process termination cannot establish how far a native checkpoint ran.
+        Calling resume_operation is the explicit recovery decision.
+        """
+        with self.con as con:
+            con.execute(
+                "UPDATE operation_execution_attempts SET outcome = 'uncertain' "
+                "WHERE operation_id = ? AND outcome = 'running'",
+                (str(operation_id),),
+            )
+            result = con.execute(
+                "INSERT INTO operation_execution_attempts "
+                "(operation_id, environment_id, platform_id, coordinator_request_id, "
+                "started_at, outcome) VALUES (?, ?, ?, ?, ?, 'running')",
+                (str(operation_id), environment_id, platform_id,
+                 coordinator_request_id, utc_now_iso()),
+            )
+            return int(result.lastrowid)
+
+    def finish_execution_attempt(
+        self, operation_id: str, *, outcome: str, error: Exception | None = None,
+    ) -> None:
+        """Finish only the most recent active attempt; never change older history."""
+        if outcome not in {"complete", "failed"}:
+            raise ValueError("Invalid completed execution-attempt outcome.")
+        with self.con as con:
+            con.execute(
+                "UPDATE operation_execution_attempts SET outcome = ?, "
+                "finished_at = ?, error = ? WHERE attempt_id = ("
+                "SELECT MAX(attempt_id) FROM operation_execution_attempts "
+                "WHERE operation_id = ? AND outcome = 'running')",
+                (outcome, utc_now_iso(), None if error is None else str(error),
+                 str(operation_id)),
+            )
+
+    def list_execution_attempts(self, operation_id: str) -> list[dict[str, Any]]:
+        """Return append-only attempt contexts, including unknown prior outcomes."""
+        return self._dicts(self.con.execute(
+            "SELECT * FROM operation_execution_attempts "
+            "WHERE operation_id = ? ORDER BY attempt_id",
+            (str(operation_id),),
+        ).fetchall())
+
+    def operation_for_attempt_request(
+        self, request_id: str,
+    ) -> dict[str, Any] | None:
+        """Resolve a resume request without rewriting the original operation ID."""
+        row = self.con.execute(
+            "SELECT operations.* FROM operations "
+            "JOIN operation_execution_attempts AS attempts "
+            "ON attempts.operation_id = operations.operation_id "
+            "WHERE attempts.coordinator_request_id = ? "
+            "ORDER BY attempts.attempt_id DESC LIMIT 1",
+            (str(request_id),),
+        ).fetchone()
+        return self._dict(row)
 
     def operation_for_coordinator_request(
         self, request_id: str
