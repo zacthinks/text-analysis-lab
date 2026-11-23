@@ -43,6 +43,10 @@ class ManagedEnvironmentError(EnvironmentRegistryError):
     """Unable to create or verify a managed local Python environment."""
 
 
+class ManagedAcceleratorError(ManagedEnvironmentError):
+    """Torch import/tensor/backend failed after software and source verification."""
+
+
 def _cache_root() -> Path:
     override = os.environ.get("TEAL_MANAGED_ENVIRONMENTS_HOME")
     if override:
@@ -306,11 +310,23 @@ def _gpu_probe(executable: Path, policy: str | bool) -> dict[str, Any]:
         "'backend':('rocm' if device=='cuda' and torch.version.hip else device),"
         "'reason':None if device!='cpu' else 'No verified accelerator'}))\n"
     )
-    output = _run_command([str(executable), "-I", "-c", script], timeout=120)
+    try:
+        output = _run_command([str(executable), "-I", "-c", script], timeout=120)
+    except ManagedEnvironmentError as exc:
+        # This child command does ONLY Torch import and tensor/backend checks.
+        # TeAL source and protocol verification and uv pip check occur outside
+        # this boundary and must never trigger an automatic CPU fallback.
+        raise ManagedAcceleratorError("Torch runtime verification failed.") from exc
     try:
         state = json.loads(output.splitlines()[-1])
     except (ValueError, IndexError) as exc:
-        raise ManagedEnvironmentError("Invalid Torch device verification result.") from exc
+        raise ManagedAcceleratorError("Invalid Torch runtime verification result.") from exc
+    if (not isinstance(state, dict)
+            or state.get("status") not in {"not_applicable", "available", "cpu"}
+            or state.get("backend") not in {None, "cpu", "cuda", "mps", "xpu", "rocm"}
+            or state.get("reason") is not None
+            and not isinstance(state["reason"], str)):
+        raise ManagedAcceleratorError("Malformed Torch runtime verification result.")
     if policy is False and state["status"] == "cpu":
         state["reason"] = "CPU-only policy selected"
     if policy is True and state["status"] != "available":
