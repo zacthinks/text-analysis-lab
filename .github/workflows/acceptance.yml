@@ -38,3 +38,67 @@ jobs:
         env:
           TEAL_REAL_MANAGED_ACCEPTANCE: "1"
         run: uv run pytest --acceptance -m acceptance -q -rs
+
+  portable-lock-origin:
+    name: portable lock origin (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.11
+
+      - name: Install TeAL and dependencies
+        run: uv sync --python 3.11 --all-extras
+
+      - name: Resolve and reconstruct on origin
+        env:
+          TEAL_REAL_MANAGED_ACCEPTANCE: "1"
+          TEAL_PORTABLE_SPEC_OUTPUT: ${{ github.workspace }}/portable-r2b.json
+        run: uv run pytest --acceptance -m acceptance -k test_real_uv_portable_lock_reconstruct_and_delegate -q -rs
+
+      - name: Upload frozen lock specification
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2b-portable-ubuntu-lock
+          path: portable-r2b.json
+          if-no-files-found: error
+
+  portable-lock-receiver:
+    name: portable lock receiver (Windows from Ubuntu)
+    needs: portable-lock-origin
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.11
+
+      - name: Install TeAL and dependencies
+        run: uv sync --python 3.11 --all-extras
+
+      - name: Download exact Ubuntu frozen specification
+        uses: actions/download-artifact@v4
+        with:
+          name: r2b-portable-ubuntu-lock
+          path: .
+
+      - name: Import, reconstruct and execute on Windows
+        env:
+          TEAL_REAL_MANAGED_ACCEPTANCE: "1"
+          TEAL_PORTABLE_SPEC_INPUT: ${{ github.workspace }}/portable-r2b.json
+        run: uv run pytest --acceptance -m acceptance -k test_real_uv_portable_lock_reconstruct_and_delegate -q -rs
