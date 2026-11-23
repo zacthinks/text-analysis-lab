@@ -279,6 +279,7 @@ def normalize_environment(observation: dict[str, Any]) -> dict[str, Any]:
             raise EnvironmentRegistryError("Portable lock content hash does not match manifest.")
         source = teal.get("source")
         if (not isinstance(source, dict)
+            or set(source) - {"vcs", "commit", "sha256"}
             or not any(
                 isinstance(source.get(field), str)
                 and re.fullmatch(r"[a-fA-F0-9]{40,64}", source[field])
