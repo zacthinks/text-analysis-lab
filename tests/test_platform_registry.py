@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import sqlite3
@@ -249,3 +250,20 @@ def test_portable_manifest_requires_real_matching_digest():
     spec["lock"]["sha256"] = "0" * 64
     with pytest.raises(environments.EnvironmentRegistryError, match="does not match"):
         fingerprint_observation(spec)
+
+
+def test_concurrent_platform_registration_reuses_one_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(platforms, "observe_platform", lambda: machine())
+    directory = tmp_path / "parallel"
+    with Project.create(directory, "parallel") as project:
+        expected = project.platforms.opening_id
+
+    def open_once(_):
+        with Project.open(directory) as project:
+            return project.platforms.opening_id
+
+    with ThreadPoolExecutor(max_workers=6) as workers:
+        values = list(workers.map(open_once, range(6)))
+    assert set(values) == {expected}
+    with Project.open(directory) as project:
+        assert len(project.platforms.list()) == 1
