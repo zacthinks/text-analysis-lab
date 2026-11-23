@@ -1469,3 +1469,110 @@ def test_stale_attempt_id_cannot_finish_new_recovery(tmp_path: Path):
         assert [a["outcome"] for a in project.execution_attempts("oper_stale")] == [
             "uncertain", "complete",
         ]
+
+
+def test_observed_operation_resumes_locally_after_verified_portable_adoption(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """E1 history remains runnable locally after the same interpreter adopts E2."""
+    import copy
+    import hashlib
+    import json
+    import platform
+    import sys
+
+    import text_analysis_lab as teal
+    from text_analysis_lab.core import environments
+    from text_analysis_lab.core import secondary_coordinator
+
+    _install_pickle_parquet(monkeypatch)
+    rows = pd.DataFrame({"id": list(range(6))})
+    _install_fake_source_queries(monkeypatch, rows)
+    observed = {
+        "schema_version": 2,
+        "kind": "observed_unlocked",
+        "python": {
+            "implementation": sys.implementation.name,
+            "version": platform.python_version(),
+        },
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": "a" * 40},
+            {"name": "r1-portable-probe", "version": "1.0"},
+        ],
+    }
+    monkeypatch.setattr(
+        environments, "observe_environment", lambda: copy.deepcopy(observed),
+    )
+    location = tmp_path / "observed-to-portable"
+    with teal.Project.create(location, name="observed_to_portable") as project:
+        source = _seed_source_artifact(project, rows)
+        first = project.environments.opening_id
+        with pytest.raises(RuntimeError, match="transient unit 0"):
+            project.translate(
+                _TransientResumableTranslator(
+                    str(tmp_path / "fail-once"), fail_unit=0,
+                ),
+                source, batch_size=2, workers=1,
+            )
+        operation_id = project.catalog.list_operations()[-1]["operation_id"]
+        assert project.get_operation(operation_id)["environment_id"] == first
+        assert project.execution_attempts(operation_id)[0]["environment_id"] == first
+
+        manifest = {
+            "realizations": [
+                {"distributions": copy.deepcopy(observed["distributions"])},
+            ],
+        }
+        canonical = environments._normalize_portable_manifest(manifest)
+        spec = {
+            "schema_version": 2, "kind": "portable_locked",
+            "python": copy.deepcopy(observed["python"]),
+            "teal": {
+                "version": observed["teal"]["version"],
+                "source": {"vcs": "git", "commit": "a" * 40},
+            },
+            "extras": [],
+            "lock": {
+                "kind": "uv", "manifest": manifest,
+                "sha256": hashlib.sha256(json.dumps(
+                    canonical, sort_keys=True, separators=(",", ":"),
+                ).encode("utf-8")).hexdigest(),
+            },
+        }
+        second = project.environments.register_portable_specification(spec)
+        assert first != second
+        project.environments.verify_current_portable(second)
+        assert project.environments.opening_id == second
+        assert project.environments.is_current_interpreter(first)
+        assert project.environments.equivalent_executor_identities(first, second)
+
+        # Regression: routing through a secondary interpreter would fail here
+        # because the user never bound one. There must be no process launch.
+        def forbidden_secondary(*args, **kwargs):
+            raise AssertionError("An already-local observed E1 must not delegate.")
+
+        monkeypatch.setattr(secondary_coordinator, "delegate_resume", forbidden_secondary)
+        result = project.resume_operation(operation_id)["output"]
+        assert result.status == "complete"
+        assert result.n_rows == 6
+        historical = project.get_operation(operation_id)
+        assert historical["environment_id"] == first
+        descriptor = json.loads(
+            project.storage.operation_descriptor_path(operation_id).read_text()
+        )
+        assert descriptor["environment_id"] == first
+        attempts = project.execution_attempts(operation_id)
+        assert [attempt["outcome"] for attempt in attempts] == ["failed", "complete"]
+        assert [attempt["environment_id"] for attempt in attempts] == [first, second]
+
+    with teal.Project.open(location) as reopened:
+        assert reopened.environments.opening_id == second
+        assert reopened.environments.is_current_interpreter(first)
+        assert reopened.get_operation(operation_id)["environment_id"] == first
+
+    # A mutated inventory cannot rely on an association made under E1.
+    observed["distributions"][1]["version"] = "2.0"
+    with teal.Project.open(location) as changed:
+        assert changed.environments.opening_id not in {first, second}
+        assert not changed.environments.is_current_interpreter(first)
