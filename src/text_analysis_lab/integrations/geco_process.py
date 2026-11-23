@@ -153,7 +153,7 @@ def launch(
 ) -> ChildGeCoServer:
     """Start, verify, and own exactly one child server."""
     # This verifies actual installed inventory and compatible R1 TeAL source.
-    executable = _verified_executable(project, environment)
+    executable = _verified_executable(project, environment, isolated=True)
     temp = tempfile.TemporaryDirectory(prefix="teal-geco-")
     directory = Path(temp.name)
     status = directory / "status.json"
