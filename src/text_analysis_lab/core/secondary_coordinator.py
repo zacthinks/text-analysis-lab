@@ -29,7 +29,7 @@ from text_analysis_lab.core.errors import OperatorError
 if TYPE_CHECKING:
     from text_analysis_lab.core.project import Project
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 TRANSLATOR_TYPE = "TextLength"
 TRANSLATOR_MODULE = "text_analysis_lab.translators.text_length"
 
