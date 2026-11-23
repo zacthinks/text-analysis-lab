@@ -107,4 +107,28 @@ def test_real_uv_managed_base_and_r1_textlength(tmp_path, monkeypatch):
         operation = project.operation_for_artifact(output)
         assert operation["environment_id"] == result.environment_id
         assert project.execution_attempts(operation["operation_id"])[-1]["outcome"] == "complete"
-        assert project.environments.bound_interpreter(result.environment_id).is_file()
+        executable = project.environments.bound_interpreter(result.environment_id)
+        assert executable.is_file()
+        # uv entrypoints embed an absolute interpreter path; publishing the
+        # cache index must not relocate that interpreter after installation.
+        entrypoint = executable.parent / ("teal.exe" if os.name == "nt" else "teal")
+        cli = subprocess.run(
+            [str(entrypoint), "--help"], capture_output=True, text=True,
+            timeout=60, check=False,
+        )
+        assert cli.returncode == 0, cli.stderr
+        assert "Text Analysis Lab" in cli.stdout
+
+    with Project.open(tmp_path / "project") as reopened:
+        reopened.environments.set_default(result.environment_id)
+        assert reopened.environments.bound_interpreter(result.environment_id) == executable
+        repeat = reopened.translate(
+            TextLength({"text": "words"}), source.artifact_id,
+            alias="managed_lengths",
+        )["output"]
+        assert repeat.n_rows == 2
+        reused_alias = reopened.translate(
+            TextLength({"text": "words"}), source.artifact_id,
+            alias="managed_lengths",
+        )["output"]
+        assert reused_alias.artifact_id == repeat.artifact_id
