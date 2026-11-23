@@ -8,6 +8,35 @@ A TeAL `Project` owns durable, keyed `Artifacts` and records the lineage, operat
 
 For the broader motivation, architecture, and current project overview, see the [TeAL website](https://zacthinks.github.io/teal/).
 
+## Software environments and execution platforms (R0 checkpoint)
+
+TeAL records two separate, immutable kinds of project-level provenance:
+
+- **Software environment:** the interpreter version, TeAL software identity and installed
+  dependencies. Automatically observed/unlocked inventories do not claim a universal
+  reproducible lock. An explicit portable-locked specification can be registered using
+  a canonical, content-hashed manifest. The environment ID excludes the originating
+  operating system, hardware, drivers and local executable path.
+- **Execution platform:** best-effort, privacy-limited observations of the operating
+  system, processor architecture, and detectable GPU/driver information.
+  No hostname, serial number or unique physical-machine identifier is collected.
+  Missing GPU/firmware details do not block normal work.
+
+```python
+project = Project.open("my-project")
+software = project.environments.default
+platforms = project.platforms.list()
+current_platform_id = project.platforms.opening_id
+
+# New scientific operations record both environment_id and platform_id.
+```
+
+The active software environment default remains specific to each open Project
+instance. Platforms are not selectable or provisionable. The recorded fingerprint
+does not by itself certify that an accelerator works, or that checkpoints can safely
+resume on another computer. Portable creation, imports, GPU setup and resource
+bundling remain separate future work; the R0 registry does not download software.
+
 ## Project environments
 
 Each TeAL project records an immutable, fingerprinted observation of the
@@ -24,19 +53,44 @@ entry = project.environments.get(current["environment_id"])
 project.environments.set_default(history[0]["environment_id"])
 ```
 
-Each entry includes `environment_id`, `fingerprint`, `registered_at`,
-`observation`, and `readiness`. The versioned observation includes Python
-implementation/version, platform/architecture, the installed TeAL version,
-and a normalized installed-Python-distribution name/version inventory (including
-package-installed models such as spaCy model distributions), with limited sanitized
-editable/local/VCS and archive metadata. Fingerprints describe the installed
-software, **not** source-file contents or exact build lockfiles. Downloaded model
-assets and scientific JSON rule/configuration files are not inventoried here;
-their identities belong to model management and scientific operation provenance.
-`readiness="current_interpreter"` indicates the entry matched the interpreter
-that opened this Project; `"unverified"` means historical membership only.
-Even a currently matching record is not a guarantee that every package/model
-can run successfully.
+Each environment entry includes its deterministic environment ID, normalized
+software observation/specification, whether it is an observed/unlocked or
+portable-locked record, and local readiness. Observed entries contain the exact
+Python version, TeAL version and normalized installed distributions (including
+package-installed models), but no OS/kernel/driver or local executable path.
+A portable-locked entry additionally carries immutable TeAL source identity,
+requested extras and a content-verified manifest that may encode conditional
+realizations. It requires an exact Python `major.minor.micro` version and checks
+that each declared realization satisfies any accompanying exact package pins
+(PEP 440 semantics allow a pinned `torch==2.14.1` to match `2.14.1+cu130`). It does **not** contain a separate top-level installed-distribution
+inventory: that would make the same portable lock have multiple identities.
+Only supported, portable manifest fields can be registered; arbitrary metadata,
+private local paths and credential-bearing origins are rejected before storage.
+Neither category absorbs downloaded model weights or scientific rule files;
+those belong in scientific/resource provenance.
+
+A supplied portable specification is initially unverified. Only when the
+actual local interpreter exactly matches a recorded lock realization can it
+be adopted as the executing software identity:
+
+```python
+portable_id = project.environments.register_portable_specification(specification)
+project.environments.verify_current_portable(portable_id)  # metadata match, not wheel hashing
+```
+
+Reopening the same unchanged verified interpreter can reuse this portable
+logical identity, even when observed platform details differ. A changed package
+inventory or different TeAL source requires fresh verification. The registry's
+readiness states include `current_interpreter`, `current_observed_interpreter`,
+and `unverified`. The `verification_level` reports `installed_metadata_match`
+for a locally matched portable lock; this is **not** artifact verification.
+R2 must establish trusted installation/wheel hash evidence before claiming an
+exact binary reproduction. A metadata match is not a GPU probe and does not prove
+that an arbitrary cross-machine scientific checkpoint can safely resume. Platform
+observations are historical provenance, **not an unconditional resume gate**;
+compatibility and frozen scientific device/backend requirements remain the
+execution layer's responsibility.
+
 
 `set_default()` only changes the active default of that *open Project
 instance*. Reopening always selects the actual opening interpreter again.
@@ -57,9 +111,11 @@ lengths = project.translate(
 )["output"]
 ```
 
-The executable binding is **not stored** in project history. TeAL probes the
-bound interpreter's complete installed-distribution fingerprint and requires
-matching registry identity and compatible protocol/TeAL versions. If B is
+The executable binding is **not stored** in project history. This is the
+earlier R1 TextLength-only pilot, retained on the integration branch for a
+separate R1 checkpoint review. Its exact interpreter probe will need to be
+adapted to verified portable software identity without treating matching
+software as proof of identical native-checkpoint compatibility. If B is
 unavailable or changed, execution rejects explicitly rather than running in A.
 B runs a single, separate TeAL coordinator process that owns the complete
 operation, its artifacts, checkpoints, and environment provenance. Its ordinary

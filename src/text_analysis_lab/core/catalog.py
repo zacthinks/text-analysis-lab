@@ -102,6 +102,7 @@ class ProjectCatalog:
                     completed_at TEXT,
                     error TEXT,
                     environment_id TEXT REFERENCES project_environments(environment_id),
+                    platform_id TEXT REFERENCES project_platforms(platform_id),
                     coordinator_request_id TEXT UNIQUE,
                     FOREIGN KEY (operator_id) REFERENCES operators(operator_id)
                 );
@@ -228,6 +229,25 @@ class ProjectCatalog:
                     registered_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS environment_realizations (
+                    observed_environment_id TEXT NOT NULL,
+                    portable_environment_id TEXT NOT NULL,
+                    verified_at TEXT NOT NULL,
+                    PRIMARY KEY (observed_environment_id, portable_environment_id),
+                    FOREIGN KEY (observed_environment_id)
+                        REFERENCES project_environments(environment_id),
+                    FOREIGN KEY (portable_environment_id)
+                        REFERENCES project_environments(environment_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS project_platforms (
+                    platform_id TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    schema_version INTEGER NOT NULL,
+                    observation_json TEXT NOT NULL,
+                    registered_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS memos (
                     memo_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     target_type TEXT NOT NULL,
@@ -261,6 +281,12 @@ class ProjectCatalog:
                 table="operations",
                 column="environment_id",
                 definition="TEXT REFERENCES project_environments(environment_id)",
+            )
+            self._ensure_column(
+                con,
+                table="operations",
+                column="platform_id",
+                definition="TEXT REFERENCES project_platforms(platform_id)",
             )
             self._ensure_column(
                 con,
@@ -802,6 +828,73 @@ class ProjectCatalog:
             if cur.rowcount == 0:
                 raise KeyError(str(operation_id))
 
+    def record_environment_realization(
+        self, observed_environment_id: str, portable_environment_id: str,
+    ) -> None:
+        """Persist an explicitly verified portable-to-local software association."""
+        with self.con as con:
+            con.execute(
+                "INSERT OR IGNORE INTO environment_realizations "
+                "(observed_environment_id, portable_environment_id, verified_at) "
+                "VALUES (?, ?, ?)",
+                (observed_environment_id, portable_environment_id, utc_now_iso()),
+            )
+
+    def portable_realizations_for(self, observed_environment_id: str) -> list[str]:
+        rows = self.con.execute(
+            "SELECT portable_environment_id FROM environment_realizations "
+            "WHERE observed_environment_id = ? ORDER BY portable_environment_id",
+            (observed_environment_id,),
+        ).fetchall()
+        return [str(row["portable_environment_id"]) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Immutable observed execution platforms
+    # ------------------------------------------------------------------
+
+    def register_platform(
+        self, *, fingerprint: str, schema_version: int, observation_json: str,
+    ) -> str:
+        """Atomically register/reuse an immutable non-identifying platform observation."""
+        platform_id = "platform_" + fingerprint
+        con = self.con
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT * FROM project_platforms WHERE fingerprint = ?", (fingerprint,),
+            ).fetchone()
+            if row is None:
+                con.execute(
+                    "INSERT INTO project_platforms "
+                    "(platform_id,fingerprint,schema_version,observation_json,registered_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (platform_id, fingerprint, schema_version, observation_json, utc_now_iso()),
+                )
+            elif (row["platform_id"] != platform_id
+                  or row["schema_version"] != schema_version
+                  or row["observation_json"] != observation_json):
+                raise ValueError("Stored platform fingerprint conflicts with observation.")
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+        return platform_id
+
+    def get_platform(self, platform_id: str) -> dict[str, Any] | None:
+        return self._dict(self.con.execute(
+            "SELECT * FROM project_platforms WHERE platform_id = ?", (platform_id,),
+        ).fetchone())
+
+    def list_platforms(self) -> list[dict[str, Any]]:
+        return self._dicts(self.con.execute(
+            "SELECT * FROM project_platforms ORDER BY registered_at, rowid",
+        ).fetchall())
+
+    def set_execution_context(self, environment_id: str, platform_id: str) -> None:
+        """A Project instance's actual local executor, used by operation registration."""
+        self._execution_environment_id = environment_id
+        self._execution_platform_id = platform_id
+
     # ------------------------------------------------------------------
     # Operations
     # ------------------------------------------------------------------
@@ -815,9 +908,15 @@ class ProjectCatalog:
         status: OperationStatus | str = "incomplete",
         created_at: str | None = None,
         environment_id: str | None = None,
+        platform_id: str | None = None,
         coordinator_request_id: str | None = None,
     ) -> None:
-        """Register execution provenance, or NULL for historical/unknown executors."""
+        """Register executor references, or NULL for historical/unknown records."""
+        if environment_id is not None and platform_id is None:
+            # All TeAL operation creators provide the current actual executor.
+            # Keep raw catalog historical registrations NULL unless explicitly given.
+            if environment_id == getattr(self, "_execution_environment_id", None):
+                platform_id = getattr(self, "_execution_platform_id", None)
         operation_type_value = self._validate_operation_type(str(operation_type))
         status_value = self._validate_operation_status(str(status))
         with self.con as con:
@@ -832,8 +931,9 @@ class ProjectCatalog:
                     completed_at,
                     error,
                     environment_id,
+                    platform_id,
                     coordinator_request_id
-                ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
                 """,
                 (
                     str(operation_id),
@@ -842,6 +942,7 @@ class ProjectCatalog:
                     status_value,
                     created_at or utc_now_iso(),
                     None if environment_id is None else str(environment_id),
+                    None if platform_id is None else str(platform_id),
                     coordinator_request_id,
                 ),
             )

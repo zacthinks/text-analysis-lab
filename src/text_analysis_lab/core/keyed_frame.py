@@ -207,6 +207,7 @@ def from_keyed_frame(
         "schema_version": 1,
         "operation_id": operation_id,
         "environment_id": project.environments.opening_id,
+        "platform_id": project.platforms.opening_id,
         "operation_type": "translate",
         "operator_id": operator_id,
         "kind": "from_keyed_frame",

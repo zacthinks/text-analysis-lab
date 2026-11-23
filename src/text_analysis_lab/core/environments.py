@@ -7,24 +7,27 @@ No machine-local executable path or installer state is stored in project data.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import platform
 import re
 import sys
-import sysconfig
 from importlib import metadata
 from pathlib import Path
 from threading import RLock
 from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, Any
 
+from packaging.specifiers import SpecifierSet
+from packaging.version import InvalidVersion, Version
+
 from text_analysis_lab.core.errors import TeALError
 
 if TYPE_CHECKING:
     from text_analysis_lab.core.catalog import ProjectCatalog
 
-OBSERVATION_SCHEMA_VERSION = 1
+OBSERVATION_SCHEMA_VERSION = 2
 _NAME_SEPARATOR = re.compile(r"[-_.]+")
 _SAFE_COMMIT = re.compile(r"^[a-fA-F0-9]{7,64}$")
 
@@ -163,7 +166,7 @@ def observe_environment() -> dict[str, Any]:
 
     Captures the whole installed distribution inventory so that changing any
     installed package version produces a new historical identity. Version 1
-    fingerprints are portable software/platform observations, not lockfiles.
+    fingerprints are software observations, not a portable lockfile.
     """
     try:
         distributions = _installed_distributions()
@@ -173,17 +176,10 @@ def observe_environment() -> dict[str, Any]:
             teal_version = "0+unknown"
         return {
             "schema_version": OBSERVATION_SCHEMA_VERSION,
+            "kind": "observed_unlocked",
             "python": {
                 "implementation": sys.implementation.name,
                 "version": platform.python_version(),
-                "implementation_version": list(sys.implementation.version[:3]),
-                "abi": str(sysconfig.get_config_var("SOABI") or ""),
-            },
-            "platform": {
-                "system": platform.system(),
-                "release": platform.release(),
-                "machine": platform.machine(),
-                "architecture": platform.architecture()[0],
             },
             "teal": {
                 "version": teal_version,
@@ -198,29 +194,309 @@ def observe_environment() -> dict[str, Any]:
         ) from exc
 
 
+def _normalize_lock_manifest(value: Any, *, field: str | None = None) -> Any:
+    """Sort only dependency-set arrays; preserve potentially meaningful index order.
+
+    A lock specification may have ordered indexes/priorities. Sorting every
+    array would incorrectly identify distinct resolutions as equivalent.
+    """
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            raise EnvironmentRegistryError("Invalid portable lock field name.")
+        return {
+            key: _normalize_lock_manifest(item, field=key)
+            for key, item in sorted(value.items())
+        }
+    if isinstance(value, list):
+        items = [_normalize_lock_manifest(item) for item in value]
+        if field in {"packages", "distributions", "realizations", "dependencies", "extras"}:
+            return sorted(
+                items, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+            )
+        return items
+    if value is None or type(value) in {bool, str, int, float}:
+        return value
+    raise EnvironmentRegistryError("Invalid portable lock manifest value.")
+
+
+_PORTABLE_PACKAGE_FIELDS = frozenset({
+    "name", "version", "direct_install", "editable", "local_install",
+    "vcs", "vcs_commit", "archive_sha256",
+})
+_PORTABLE_MANIFEST_FIELDS = frozenset({
+    "requirements", "realizations", "packages", "index_priority", "extras",
+})
+_PACKAGE_NAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
+_PINNED_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.!+_-]*$")
+_SAFE_INDEX_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _portable_name(value: Any, *, label: str) -> str:
+    if not isinstance(value, str) or not _PACKAGE_NAME.fullmatch(value):
+        raise EnvironmentRegistryError(f"Invalid portable {label}; local paths are not allowed.")
+    return _NAME_SEPARATOR.sub("-", value).lower()
+
+
+def _portable_version(value: Any) -> str:
+    if not isinstance(value, str) or not _PINNED_VERSION.fullmatch(value):
+        raise EnvironmentRegistryError("Portable versions must be pinned package versions, not URLs or paths.")
+    try:
+        Version(value)
+    except InvalidVersion as exc:
+        raise EnvironmentRegistryError("Invalid pinned package version.") from exc
+    return value
+
+
+def _exact_python_version(value: Any) -> str:
+    """Require Python's explicit major.minor.micro, not a minor-only request."""
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[0-9]+\.[0-9]+\.[0-9]+(?:a[0-9]+|b[0-9]+|rc[0-9]+)?", value
+    ):
+        raise EnvironmentRegistryError("Portable Python version must include major.minor.micro.")
+    return value
+
+
+def _requirement_satisfied(pin: str, installed_version: str) -> bool:
+    """PEP 440 == pins accept local build variants when pin has no local tag."""
+    return SpecifierSet(f"=={pin}").contains(installed_version)
+
+
+
+def _normalize_distribution_records(
+    records: list[dict[str, Any]], *, portable: bool = False,
+) -> list[dict[str, Any]]:
+    """Canonicalize observed inventory or strictly validated locked realizations."""
+    if not isinstance(records, list):
+        raise EnvironmentRegistryError("Distributions must be a list.")
+    distributions = []
+    for record in records:
+        if not isinstance(record, dict):
+            raise EnvironmentRegistryError("Invalid package record.")
+        if set(record) - _PORTABLE_PACKAGE_FIELDS:
+            raise EnvironmentRegistryError("Unexpected distribution metadata field.")
+        name, version = record.get("name"), record.get("version")
+        if (not isinstance(name, str) or not name.strip()
+                or not isinstance(version, str) or not version):
+            raise EnvironmentRegistryError("A package needs a name and version.")
+        normalized = dict(record)
+        normalized["name"] = (
+            _portable_name(name, label="package name") if portable
+            else _NAME_SEPARATOR.sub("-", name.strip()).lower()
+        )
+        if portable:
+            normalized["version"] = _portable_version(version)
+        for flag in ("direct_install", "editable", "local_install"):
+            if flag in record and type(record[flag]) is not bool:
+                raise EnvironmentRegistryError(f"Invalid {flag} package flag.")
+        if portable and (record.get("editable") or record.get("local_install")):
+            raise EnvironmentRegistryError("Portable locks cannot reference editable/local installations.")
+        if "vcs" in record and record["vcs"] not in {"git", "hg", "svn", "bzr"}:
+            raise EnvironmentRegistryError("Invalid package VCS.")
+        if "vcs_commit" in record:
+            commit = record["vcs_commit"]
+            if not isinstance(commit, str) or not _SAFE_COMMIT.fullmatch(commit):
+                raise EnvironmentRegistryError("Invalid package VCS commit.")
+            normalized["vcs_commit"] = commit.lower()
+        if "archive_sha256" in record:
+            digest = record["archive_sha256"]
+            if not isinstance(digest, str) or not re.fullmatch(r"[a-fA-F0-9]{64}", digest):
+                raise EnvironmentRegistryError("Invalid package archive digest.")
+            normalized["archive_sha256"] = digest.lower()
+        distributions.append(normalized)
+    return sorted(distributions, key=_canonical_json)
+
+
+def _portable_index_reference(value: Any) -> str:
+    """Permit public HTTPS indexes or symbolic labels; never persist credentials."""
+    if not isinstance(value, str) or not value:
+        raise EnvironmentRegistryError("Invalid portable index reference.")
+    if _SAFE_INDEX_LABEL.fullmatch(value):
+        if value.lower() in {"localhost", "home", "users"} or value.lower().endswith(".local"):
+            raise EnvironmentRegistryError("A local host is not a portable index.")
+        return value
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+    except ValueError as exc:
+        raise EnvironmentRegistryError("Malformed portable index URL.") from exc
+    if (parsed.scheme != "https" or not host or parsed.username is not None
+            or parsed.password is not None or parsed.query or parsed.fragment
+            or host.lower() == "localhost"
+            or host.lower().endswith((".local", ".localhost", ".internal", ".lan"))):
+        raise EnvironmentRegistryError("Portable index must be a public HTTPS URL without credentials.")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        pass  # Public DNS names remain permitted; no network resolution in R0.
+    else:
+        if not address.is_global:
+            raise EnvironmentRegistryError("Private/local IP addresses are not portable indexes.")
+    if "\\" in value or any(part in {"..", "~"} for part in parsed.path.split("/")):
+        raise EnvironmentRegistryError("Portable index URL contains a local path.")
+    return value
+
+
+def _normalize_portable_manifest(manifest: Any) -> dict[str, Any]:
+    """R0's small, explicit manifest contract; R2 owns true uv lock parsing."""
+    if (not isinstance(manifest, dict) or not manifest
+            or set(manifest) - _PORTABLE_MANIFEST_FIELDS):
+        raise EnvironmentRegistryError("Unsupported portable lock manifest field.")
+    if not set(manifest) & {"requirements", "realizations", "packages"}:
+        raise EnvironmentRegistryError("Portable lock needs pinned requirements or realizations.")
+    result: dict[str, Any] = {}
+    if "requirements" in manifest:
+        reqs = manifest["requirements"]
+        if not isinstance(reqs, dict):
+            raise EnvironmentRegistryError("Portable requirements must be a name/version mapping.")
+        normalized_reqs: dict[str, str] = {}
+        for name, version in reqs.items():
+            canonical = _portable_name(name, label="requirement name")
+            if canonical in normalized_reqs:
+                raise EnvironmentRegistryError("Duplicate normalized portable requirement.")
+            normalized_reqs[canonical] = _portable_version(version)
+        result["requirements"] = dict(sorted(normalized_reqs.items()))
+    if "packages" in manifest:
+        result["packages"] = _normalize_distribution_records(manifest["packages"], portable=True)
+    if "realizations" in manifest:
+        realizations = manifest["realizations"]
+        if not isinstance(realizations, list):
+            raise EnvironmentRegistryError("Portable realizations must be a list.")
+        result["realizations"] = []
+        for realization in realizations:
+            if not isinstance(realization, dict) or set(realization) != {"distributions"}:
+                raise EnvironmentRegistryError("Unsupported portable realization field.")
+            result["realizations"].append({
+                "distributions": _normalize_distribution_records(
+                    realization["distributions"], portable=True,
+                ),
+            })
+        result["realizations"].sort(key=_canonical_json)
+    if "requirements" in result and "realizations" in result:
+        pins = result["requirements"]
+        for realization in result["realizations"]:
+            inventory = {}
+            for distribution in realization["distributions"]:
+                name = distribution["name"]
+                if name in inventory:
+                    raise EnvironmentRegistryError(
+                        f"Duplicate package {name!r} in portable realization."
+                    )
+                inventory[name] = distribution["version"]
+            for name, pin in pins.items():
+                if name not in inventory or not _requirement_satisfied(pin, inventory[name]):
+                    raise EnvironmentRegistryError(
+                        f"Portable realization contradicts exact requirement {name}=={pin}."
+                    )
+    if "index_priority" in manifest:
+        entries = manifest["index_priority"]
+        if not isinstance(entries, list):
+            raise EnvironmentRegistryError("Portable index priority must be a list.")
+        # Priority is meaningful and must not be sorted.
+        result["index_priority"] = [_portable_index_reference(x) for x in entries]
+    if "extras" in manifest:
+        extras = manifest["extras"]
+        if not isinstance(extras, list):
+            raise EnvironmentRegistryError("Portable extras must be a list.")
+        result["extras"] = sorted({_portable_name(x, label="extra") for x in extras})
+    return result
+
+
+def normalize_environment(observation: dict[str, Any]) -> dict[str, Any]:
+    """Canonicalize a software observation or a platform-independent lock."""
+    version = observation.get("schema_version") if isinstance(observation, dict) else None
+    if type(version) is not int or version < 2 or version > OBSERVATION_SCHEMA_VERSION:
+        raise EnvironmentRegistryError("Unsupported software observation schema.")
+    kind = observation.get("kind")
+    if kind not in {"observed_unlocked", "portable_locked"}:
+        raise EnvironmentRegistryError("Unknown software environment kind.")
+    expected = {"schema_version", "kind", "python", "teal"}
+    if kind == "observed_unlocked":
+        expected.add("distributions")
+    else:
+        expected.update({"extras", "lock"})
+    if set(observation) != expected:
+        raise EnvironmentRegistryError("Unexpected software environment fields.")
+    python_info, teal = observation["python"], observation["teal"]
+    if (not isinstance(python_info, dict)
+        or set(python_info) != {"implementation", "version"}
+        or any(not isinstance(v, str) or not v for v in python_info.values())
+        or not isinstance(teal, dict)
+        or set(teal) != ({"version"} if kind == "observed_unlocked" else {"version", "source"})
+        or not isinstance(teal.get("version"), str)
+        or not teal["version"]):
+        raise EnvironmentRegistryError("Invalid Python or TeAL identity.")
+    result = {
+        "schema_version": version,
+        "kind": kind,
+        "python": dict(python_info),
+        "teal": dict(teal),
+    }
+    if kind == "observed_unlocked":
+        result["distributions"] = _normalize_distribution_records(observation["distributions"])
+        return result
+
+    # A portable lock hashes only its canonical software specification, never
+    # a redundant top-level inventory from one particular platform.
+    _exact_python_version(python_info["version"])
+    _portable_name(python_info["implementation"], label="Python implementation")
+    _portable_version(teal["version"])
+    source = teal["source"]
+    if (not isinstance(source, dict)
+            or set(source) - {"vcs", "commit", "sha256"}
+            or not any(
+                isinstance(source.get(field), str)
+                and re.fullmatch(r"[a-fA-F0-9]{40,64}", source[field])
+                for field in ("commit", "sha256")
+            )):
+        raise EnvironmentRegistryError("Portable TeAL requires an immutable commit/hash.")
+    normalized_source: dict[str, str] = {}
+    if "vcs" in source:
+        if source["vcs"] != "git":
+            raise EnvironmentRegistryError("Portable TeAL VCS must be git.")
+        normalized_source["vcs"] = "git"
+    for field in ("commit", "sha256"):
+        if field in source:
+            value = source[field]
+            expected_length = 64 if field == "sha256" else 40
+            if (not isinstance(value, str) or len(value) != expected_length
+                    or not re.fullmatch(r"[a-fA-F0-9]+", value)):
+                raise EnvironmentRegistryError("Invalid immutable TeAL source hash.")
+            normalized_source[field] = value.lower()
+    result["teal"] = {"version": teal["version"], "source": normalized_source}
+    extras, lock = observation.get("extras"), observation.get("lock")
+    if (not isinstance(extras, list)
+            or not isinstance(lock, dict)
+            or set(lock) != {"kind", "manifest", "sha256"}):
+        raise EnvironmentRegistryError("Portable specification requires extras and lock metadata.")
+    result["extras"] = sorted({_portable_name(x, label="extra") for x in extras})
+    if not isinstance(lock["kind"], str) or not _SAFE_INDEX_LABEL.fullmatch(lock["kind"]):
+        raise EnvironmentRegistryError("Invalid portable lock kind.")
+    manifest = _normalize_portable_manifest(lock["manifest"])
+    expected_digest = hashlib.sha256(_canonical_json(manifest).encode("utf-8")).hexdigest()
+    digest = lock["sha256"]
+    if not isinstance(digest, str) or digest.lower() != expected_digest:
+        raise EnvironmentRegistryError("Portable lock content hash does not match manifest.")
+    result["lock"] = {
+        "kind": lock["kind"],
+        "manifest": manifest,
+        "sha256": expected_digest,
+    }
+    return result
+
+
 def fingerprint_observation(
     observation: dict[str, Any], *, require_current_schema: bool = True
 ) -> str:
-    """SHA-256 of canonical versioned observation JSON.
-
-    Historical verification accepts a previously stored positive integer
-    schema version; only new observations require the current producer schema.
-    No historical record is migrated or reinterpreted.
-    """
-    if not isinstance(observation, dict):
-        raise EnvironmentRegistryError("Invalid environment observation.")
-    version = observation.get("schema_version")
-    if (
-        type(version) is not int
-        or version < 1
-        or (require_current_schema and version != OBSERVATION_SCHEMA_VERSION)
-        or not all(key in observation for key in ("python", "platform", "teal", "distributions"))
-    ):
-        raise EnvironmentRegistryError("Unsupported or incomplete environment observation.")
+    """Hash canonical, versioned software identity, never an OS/platform."""
     try:
-        return hashlib.sha256(_canonical_json(observation).encode("utf-8")).hexdigest()
+        normalized = normalize_environment(observation)
+        if require_current_schema and normalized["schema_version"] != OBSERVATION_SCHEMA_VERSION:
+            raise EnvironmentRegistryError("Unsupported current software schema.")
+        return hashlib.sha256(
+            _canonical_json(normalized).encode("utf-8")
+        ).hexdigest()
     except (TypeError, ValueError) as exc:
-        raise EnvironmentRegistryError("Environment observation is not serializable.") from exc
+        raise EnvironmentRegistryError("Software observation is not serializable.") from exc
 
 
 class EnvironmentRegistry:
@@ -238,13 +514,21 @@ class EnvironmentRegistry:
 
     def __init__(self, catalog: ProjectCatalog) -> None:
         self._catalog = catalog
-        observed = observe_environment()
+        observed = normalize_environment(observe_environment())
         fingerprint = fingerprint_observation(observed)
-        self._opening_id = catalog.register_environment(
+        self._observed_id = catalog.register_environment(
             fingerprint=fingerprint,
             schema_version=OBSERVATION_SCHEMA_VERSION,
             observation_json=_canonical_json(observed),
         )
+        self._opening_id = self._observed_id
+        matching = [
+            candidate for candidate in catalog.portable_realizations_for(self._observed_id)
+            if self._matches_portable(candidate, observed)
+        ]
+        # Do not select one of several ambiguous matched portable specifications.
+        if len(matching) == 1:
+            self._opening_id = matching[0]
         self._default_id = self._opening_id
         # Machine-local, per-Project references; never written to SQLite.
         self._interpreter_bindings: dict[str, Path] = {}
@@ -310,9 +594,86 @@ class EnvironmentRegistry:
             )
         return path
 
+    def register_portable_specification(self, specification: dict[str, Any]) -> str:
+        """Record a supplied portable lock; do not assert it can run locally."""
+        normalized = normalize_environment(specification)
+        if normalized["kind"] != "portable_locked":
+            raise EnvironmentRegistryError("Expected a portable locked specification.")
+        return self._catalog.register_environment(
+            fingerprint=fingerprint_observation(normalized),
+            schema_version=OBSERVATION_SCHEMA_VERSION,
+            observation_json=_canonical_json(normalized),
+        )
+
+    def _matches_portable(self, environment_id: str, observed: dict[str, Any]) -> bool:
+        """Verify an installed, local realization against one declared lock variant.
+
+        Portable spec identity alone does not establish executable compatibility;
+        all observed distribution records (including local wheel/build variants)
+        must match a recorded realization, and TeAL source must be immutable.
+        """
+        spec = self.get(environment_id)["observation"]
+        if (spec["kind"] != "portable_locked"
+                or spec["python"] != observed["python"]
+                or spec["teal"]["version"] != observed["teal"]["version"]):
+            return False
+        source = spec["teal"]["source"]
+        teal_package = next((
+            item for item in observed["distributions"]
+            if item["name"] == "text-analysis-lab"
+        ), None)
+        if teal_package is None:
+            return False
+        if source.get("commit") and teal_package.get("vcs_commit") != source["commit"].lower():
+            return False
+        if source.get("sha256") and teal_package.get("archive_sha256") != source["sha256"].lower():
+            return False
+        realizations = spec["lock"]["manifest"].get("realizations")
+        if not isinstance(realizations, list):
+            return False
+        for realization in realizations:
+            if not isinstance(realization, dict) or set(realization) != {"distributions"}:
+                continue
+            try:
+                candidate = _normalize_distribution_records(
+                    realization["distributions"], portable=True,
+                )
+            except EnvironmentRegistryError:
+                continue
+            if candidate == observed["distributions"]:
+                return True
+        return False
+
+    def verify_current_portable(self, environment_id: str) -> dict[str, Any]:
+        """Match installed *metadata* to a portable realization and adopt its ID.
+
+        This checks Python, TeAL source metadata and the package inventory only.
+        It does not verify installed wheel bytes against resolver artifact hashes;
+        R2 must provide that stronger verification before claiming exact rebuild.
+        The physical platform is separately observed, not a required lock match.
+        """
+        observed = normalize_environment(observe_environment())
+        if fingerprint_observation(observed) != self._catalog.get_environment(
+            self._observed_id
+        )["fingerprint"]:
+            raise EnvironmentRegistryError(
+                "Current Python installation changed after Project.open; reopen before verifying."
+            )
+        if not self._matches_portable(environment_id, observed):
+            raise EnvironmentRegistryError(
+                "Installed software does not match any verified portable lock realization."
+            )
+        self._catalog.record_environment_realization(self._observed_id, environment_id)
+        self._opening_id = environment_id
+        self._default_id = environment_id
+        current_platform = getattr(self._catalog, "_execution_platform_id", None)
+        if current_platform is not None:
+            self._catalog.set_execution_context(environment_id, current_platform)
+        return self.get(environment_id)
+
     def _public_row(self, row: dict[str, Any]) -> dict[str, Any]:
         try:
-            observation = json.loads(row["observation_json"])
+            observation = normalize_environment(json.loads(row["observation_json"]))
             if fingerprint_observation(observation, require_current_schema=False) != row["fingerprint"]:
                 raise EnvironmentRegistryError("Fingerprint mismatch in environment registry.")
             if row["environment_id"] != "env_" + row["fingerprint"]:
@@ -326,9 +687,21 @@ class EnvironmentRegistry:
             "fingerprint": row["fingerprint"],
             "registered_at": row["registered_at"],
             "observation": observation,
+            "kind": observation["kind"],
+            "verification_level": (
+                "installed_metadata_match"
+                if observation["kind"] == "portable_locked"
+                and row["environment_id"] == self._opening_id
+                else "observed_inventory"
+                if observation["kind"] == "observed_unlocked"
+                and row["environment_id"] == self._observed_id
+                else "not_verified"
+            ),
             "readiness": (
                 "current_interpreter"
                 if row["environment_id"] == self._opening_id
+                else "current_observed_interpreter"
+                if row["environment_id"] == self._observed_id
                 else "unverified"
             ),
         }

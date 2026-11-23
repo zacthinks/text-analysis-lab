@@ -25,9 +25,9 @@ from text_analysis_lab.core.environments import (
 
 def observation(label: str, *, package_version: str = "1", name: str = "sample") -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "kind": "observed_unlocked",
         "python": {"implementation": "cpython", "version": "3.11.0"},
-        "platform": {"system": "Test", "machine": "testing"},
         "teal": {"version": "0.12.2"},
         "distributions": [{"name": name, "version": package_version}, {"name": "teal", "version": label}],
     }
@@ -128,6 +128,7 @@ def test_legacy_project_operations_remain_unassigned(tmp_path, simulated):
         assert len(project.environments.list()) == 1
         assert project.get_operation("run_000001") is not None
         assert project.get_operation("run_000001")["environment_id"] is None
+        assert project.get_operation("run_000001")["platform_id"] is None
     with sqlite3.connect(db) as con:
         assert con.execute("SELECT * FROM operations").fetchall() == before
 

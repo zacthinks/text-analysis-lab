@@ -141,6 +141,7 @@ def select_keys(
         "schema_version": 1,
         "operation_id": operation_id,
         "environment_id": project.environments.opening_id,
+        "platform_id": project.platforms.opening_id,
         "operation_type": "subset",
         "operator_id": operator_id,
         "kind": "select_keys",

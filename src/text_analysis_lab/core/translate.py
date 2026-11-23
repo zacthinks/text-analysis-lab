@@ -132,6 +132,7 @@ class _Runtime:
     resumable: bool
     operator_snapshot_pending: bool
     environment_id: str | None = None
+    platform_id: str | None = None
     coordinator_request_id: str | None = None
 
 
@@ -1596,6 +1597,7 @@ def _prepare_runtime(
         operator_id=prepared_operator.operator_id,
         status="incomplete",
         environment_id=project.environments.opening_id,
+        platform_id=project.platforms.opening_id,
         coordinator_request_id=coordinator_request_id,
     )
 
@@ -1698,6 +1700,7 @@ def _prepare_runtime(
         resumable=translator.supports_resume(mode=mode, route=route),
         operator_snapshot_pending=prepared_operator.snapshot_pending,
         environment_id=project.environments.opening_id,
+        platform_id=project.platforms.opening_id,
         coordinator_request_id=coordinator_request_id,
     )
 
@@ -1744,6 +1747,7 @@ def _runtime_from_metadata(
             == "pending"
         ),
         environment_id=project.catalog.get_operation(operation_id).get("environment_id"),
+        platform_id=project.catalog.get_operation(operation_id).get("platform_id"),
         coordinator_request_id=project.catalog.get_operation(operation_id).get(
             "coordinator_request_id"
         ),
@@ -2621,6 +2625,7 @@ def _save_operation_metadata(
         "operation_type": translator.operation_type,
         "operator_id": runtime.operator_id,
         "environment_id": runtime.environment_id,
+        "platform_id": runtime.platform_id,
         "coordinator_request_id": runtime.coordinator_request_id,
         "operator_snapshot_pending": runtime.operator_snapshot_pending,
         "freeze_device": freeze_device,

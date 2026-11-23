@@ -43,7 +43,9 @@ def _verify(project: Project, artifact, expected: str) -> dict:
     operation = project.operation_for_artifact(artifact)
     assert operation is not None
     assert operation["environment_id"] == expected
+    assert operation["platform_id"] == project.platforms.opening_id
     assert project.get_operation(operation["operation_id"])["environment_id"] == expected
+    assert project.get_operation(operation["operation_id"])["platform_id"] == project.platforms.opening_id
     assert project.list_operations()[-1]["environment_id"] == expected
     descriptor = json.loads(
         project.storage.operation_descriptor_path(operation["operation_id"]).read_text(
@@ -51,6 +53,7 @@ def _verify(project: Project, artifact, expected: str) -> dict:
         )
     )
     assert descriptor["environment_id"] == expected
+    assert descriptor["platform_id"] == project.platforms.opening_id
     return descriptor
 
 
@@ -205,7 +208,7 @@ def test_historical_registry_record_verification_not_tied_to_current_producer(tm
     with Project.create(tmp_path / "project", "historic-schema") as project:
         old_id = project.environments.opening_id
         old_obs = project.environments.get(old_id)["observation"]
-        monkeypatch.setattr(env_module, "OBSERVATION_SCHEMA_VERSION", 2)
+        monkeypatch.setattr(env_module, "OBSERVATION_SCHEMA_VERSION", 3)
         assert project.environments.get(old_id)["observation"] == old_obs
         with pytest.raises(EnvironmentRegistryError, match="Unsupported"):
             fingerprint_observation(old_obs)
