@@ -474,3 +474,129 @@ def test_secondary_abrupt_termination_is_correlated_and_does_not_auto_retry(
             if child.poll() is None:
                 child.kill()
                 child.wait(timeout=15)
+
+
+def test_secondary_probe_evidence_and_code_compatibility(two_interpreters):
+    """An ID string, TeAL version, or protocol number alone never authorizes B."""
+    _, source_id, executable, a, b, _ = two_interpreters
+    with _open_bound(two_interpreters) as project:
+        code, payload, stderr = _run(executable, "--probe", timeout=60)
+        assert code == 0, stderr
+        assert payload is not None
+        _check_probe(project, b, payload)
+        spoofed = copy.deepcopy(payload)
+        spoofed["environment_id"] = a
+        with pytest.raises(EnvironmentRegistryError, match="claimed"):
+            _check_probe(project, b, spoofed)
+        changed = copy.deepcopy(payload)
+        changed["observation"]["distributions"].append(
+            {"name": "unrecorded-b-package", "version": "1.0"}
+        )
+        with pytest.raises(EnvironmentRegistryError, match="claimed"):
+            _check_probe(project, b, changed)
+        incompatible = copy.deepcopy(payload)
+        incompatible["pilot_code_sha256"] = "0" * 64
+        with pytest.raises(SecondaryCoordinatorError, match="implementation/source"):
+            _check_probe(project, b, incompatible)
+        assert project.catalog.operation_for_coordinator_request("missing") is None
+
+
+def test_portable_child_adopts_verified_realization_with_distinct_platform(
+    two_interpreters, monkeypatch, tmp_path,
+):
+    """Real B subprocess and installed inventory; source/host metadata controlled.
+
+    Test environments share editable TeAL dependencies via PYTHONPATH. The
+    fixture supplies a *synthetic* immutable source proof, so this exercises
+    coordination logic, NOT independent artifact/source-byte verification or
+    genuine different-hardware execution.
+    """
+    project_path, source_id, executable, a, b, _ = two_interpreters
+    hook_dir = tmp_path / "controlled-probe"
+    hook_dir.mkdir()
+    (hook_dir / "sitecustomize.py").write_text(
+        "import copy\\n"
+        "from text_analysis_lab.core import environments, platforms\\n"
+        "_original_software = environments.observe_environment\\n"
+        "_original_platform = platforms.observe_platform\\n"
+        "def controlled_software():\\n"
+        "    result = copy.deepcopy(_original_software())\\n"
+        "    for dist in result['distributions']:\\n"
+        "        dist.pop('editable', None)\\n"
+        "        dist.pop('local_install', None)\\n"
+        "        if dist['name'] == 'text-analysis-lab':\\n"
+        "            dist['vcs_commit'] = 'a' * 40\\n"
+        "    return result\\n"
+        "def controlled_platform():\\n"
+        "    result = copy.deepcopy(_original_platform())\\n"
+        "    result['os']['release'] += '-simulated-secondary'\\n"
+        "    return result\\n"
+        "environments.observe_environment = controlled_software\\n"
+        "platforms.observe_platform = controlled_platform\\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "PYTHONPATH", os.pathsep.join([str(hook_dir), os.environ["PYTHONPATH"]]),
+    )
+    exit_code, probe, stderr = _run(executable, "--probe", timeout=60)
+    assert exit_code == 0, stderr
+    assert probe is not None
+    observed = probe["observation"]
+    assert observed["kind"] == "observed_unlocked"
+    assert any(
+        dist.get("vcs_commit") == "a" * 40
+        for dist in observed["distributions"]
+        if dist["name"] == "text-analysis-lab"
+    )
+    manifest = {
+        "realizations": [{"distributions": copy.deepcopy(observed["distributions"])}],
+    }
+    canonical = environments._normalize_portable_manifest(manifest)
+    manifest_digest = hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    spec = {
+        "schema_version": 2,
+        "kind": "portable_locked",
+        "python": observed["python"],
+        "teal": {
+            "version": observed["teal"]["version"],
+            "source": {"vcs": "git", "commit": "a" * 40},
+        },
+        "extras": [],
+        "lock": {"kind": "uv", "manifest": manifest, "sha256": manifest_digest},
+    }
+    with Project.open(project_path) as project:
+        portable = project.environments.register_portable_specification(spec)
+        project.environments.bind_interpreter(portable, executable)
+        assert project.environments.opening_id == a
+        assert project.environments.get(portable)["readiness"] == "unverified"
+        output = project.translate(
+            TextLength({"text": "words"}), source_id, environment=portable,
+            workers=1, batch_size=2,
+        )["output"]
+        operation = project.operation_for_artifact(output)
+        assert operation["environment_id"] == portable
+        assert operation["platform_id"] != project.platforms.opening_id
+        descriptor = json.loads(
+            project.storage.operation_descriptor_path(
+                operation["operation_id"]
+            ).read_text(encoding="utf-8")
+        )
+        assert descriptor["platform_id"] == operation["platform_id"]
+        history = project.execution_attempts(operation["operation_id"])
+        assert len(history) == 1
+        assert history[0]["platform_id"] == operation["platform_id"]
+        assert history[0]["environment_id"] == portable
+        assert history[0]["outcome"] == "complete"
+
+    # The verified association is durable, and can be reopened by the child.
+    reopened = subprocess.run(
+        [str(executable), "-c",
+         "import sys; from text_analysis_lab import Project; "
+         "p=Project.open(sys.argv[1]); print(p.environments.opening_id); p.close()",
+         str(project_path)],
+        text=True, capture_output=True, timeout=90, check=False,
+    )
+    assert reopened.returncode == 0, reopened.stderr
+    assert reopened.stdout.strip().splitlines()[-1] == portable
