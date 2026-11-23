@@ -205,7 +205,7 @@ def test_historical_registry_record_verification_not_tied_to_current_producer(tm
     with Project.create(tmp_path / "project", "historic-schema") as project:
         old_id = project.environments.opening_id
         old_obs = project.environments.get(old_id)["observation"]
-        monkeypatch.setattr(env_module, "OBSERVATION_SCHEMA_VERSION", 2)
+        monkeypatch.setattr(env_module, "OBSERVATION_SCHEMA_VERSION", 3)
         assert project.environments.get(old_id)["observation"] == old_obs
         with pytest.raises(EnvironmentRegistryError, match="Unsupported"):
             fingerprint_observation(old_obs)
