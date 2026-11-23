@@ -645,7 +645,7 @@ def _resume_translate_owned(
         if recorded is not None
         else project.environments.default["environment_id"]
     )
-    if effective != project.environments.opening_id:
+    if not project.environments.is_current_interpreter(effective):
         origin = (
             "its recorded execution environment"
             if recorded is not None
