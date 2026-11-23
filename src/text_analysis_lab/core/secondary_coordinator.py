@@ -440,7 +440,10 @@ def _delegate(
         exit_code, response, stderr = _run(executable, "--run", message)
     except SecondaryCoordinatorError as exc:
         _refresh_parent(project)
-        operation = project.catalog.operation_for_coordinator_request(request_id)
+        operation = (
+            project.catalog.operation_for_coordinator_request(request_id)
+            or project.catalog.operation_for_attempt_request(request_id)
+        )
         raise SecondaryOperationError(
             "Secondary coordinator outcome is uncertain; do not automatically retry. "
             f"Request {request_id}; operation "
@@ -449,7 +452,10 @@ def _delegate(
             operation_id=None if operation is None else operation["operation_id"],
         ) from exc
     _refresh_parent(project)
-    tracked = project.catalog.operation_for_coordinator_request(request_id)
+    tracked = (
+        project.catalog.operation_for_coordinator_request(request_id)
+        or project.catalog.operation_for_attempt_request(request_id)
+    )
     if exit_code != 0 or response is None or response.get("status") != "complete":
         operation_id = (
             response.get("operation_id") if response is not None else None
