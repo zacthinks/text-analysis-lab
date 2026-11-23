@@ -286,8 +286,16 @@ def test_real_uv_managed_child_textlength(tmp_path, monkeypatch):
     import pandas as pd
 
     monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(tmp_path / "managed"))
-    # Prevent the child from importing the parent's editable source tree.
-    monkeypatch.delenv("PYTHONPATH", raising=False)
+    # A parent notebook may have an unrelated or stale package first on its
+    # PYTHONPATH. A managed child must ignore this rather than import it.
+    shadow = tmp_path / "shadow"
+    shadow_package = shadow / "text_analysis_lab"
+    shadow_package.mkdir(parents=True)
+    (shadow_package / "__init__.py").write_text(
+        "raise RuntimeError('managed child imported parent PYTHONPATH')\\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PYTHONPATH", str(shadow))
     csv = tmp_path / "source.csv"
     pd.DataFrame({"text": ["hello world", "one two three", "four"]}).to_csv(
         csv, index=False,
