@@ -8,177 +8,92 @@ A TeAL `Project` owns durable, keyed `Artifacts` and records the lineage, operat
 
 For the broader motivation, architecture, and current project overview, see the [TeAL website](https://zacthinks.github.io/teal/).
 
-## Software environments and execution platforms (R0 checkpoint)
+## Software environments, execution platforms, and GeCo
 
-TeAL records two separate, immutable kinds of project-level provenance:
+TeAL now keeps **software environments** and **execution platforms** in separate, durable registries. An environment is an observed/unlocked Python and installed-package inventory or a verified portable-resolved specification. A platform is a privacy-limited observation of OS, architecture and available accelerator/driver information; it is **not** a target to provision. Each new scientific operation records its actual environment and platform. Historical pre-registry operations retain unknown references, not fabricated metadata.
 
-- **Software environment:** the interpreter version, TeAL software identity and installed
-  dependencies. Automatically observed/unlocked inventories do not claim a universal
-  reproducible lock. An explicit portable-locked specification can be registered using
-  a canonical, content-hashed manifest. The environment ID excludes the originating
-  operating system, hardware, drivers and local executable path.
-- **Execution platform:** best-effort, privacy-limited observations of the operating
-  system, processor architecture, and detectable GPU/driver information.
-  No hostname, serial number or unique physical-machine identifier is collected.
-  Missing GPU/firmware details do not block normal work.
+~~~python
+from text_analysis_lab import Project
+from text_analysis_lab.translators import TextLength
 
-```python
 project = Project.open("my-project")
-software = project.environments.default
+opening_environment = project.environments.opening_id
+opening_platform = project.platforms.opening_id
+environments = project.environments.list()
 platforms = project.platforms.list()
-current_platform_id = project.platforms.opening_id
+~~~
 
-# New scientific operations record both environment_id and platform_id.
-```
+The opening interpreter is the active default for each **open Project instance**. Changing it with `project.environments.set_default(environment_id)` affects subsequent work, not the running notebook interpreter, already-running GeCo sessions, or future reopened Project instances. An explicit `environment=` per call overrides the default for only that call. Local executable paths and cached installations are not stored in portable Project manifests.
 
-The active software environment default remains specific to each open Project
-instance. Platforms are not selectable or provisionable. The recorded fingerprint
-does not by itself certify that an accelerator works, or that checkpoints can safely
-resume on another computer. Portable creation, imports, GPU setup and resource
-bundling remain separate future work; the R0 registry does not download software.
+### Cross-interpreter execution
 
+Normal local translations preserve the existing execution path. For a distinct, verified registered Python interpreter, TeAL currently supports **built-in TextLength only**, with its documented supported arguments and compatible resume operations. The entire operation is delegated to one secondary TeAL process; its Dask workers use that process's Python interpreter. There is no Python-object pickle transport between environments and no general cross-interpreter translator or Pipeline support.
 
-For resumable translations, `project.execution_attempts(operation_id)` reports
-the original and subsequent execution contexts as append-only catalog rows.
-Each attempt records its actual software environment, observed platform,
-optional coordinator request, and completion status. The operation's original
-environment/platform references remain unchanged after resumption; a compatible
-CPU checkpoint can resume after an unrelated platform change. An interrupted
-attempt remains unresolved until explicit recovery marks the old attempt
-uncertain and records a new attempt. This history does not certify that every
-native checkpoint is portable.
-
-
-## Managed interpreter pilot (R2)
-
-TeAL can explicitly install a compatible child interpreter using `uv` without
-altering the Python running your notebook. Install `uv` on your PATH and use
-a committed TeAL Git checkout or a TeAL installation with an immutable
-Git-origin record (the child must use the same committed source as the parent):
-
-```python
-preview = project.environments.plan(teal_extras=["parallel"], gpu="auto")
-created = project.environments.create(teal_extras=["parallel"], gpu="auto")
-project.environments.set_default(created["environment_id"])
-output = project.translate(TextLength({"text": "words"}), source)
-```
-
-`plan()` only describes the request; `create()` may download Python and
-install dependencies. Both require an exact Python patch version when supplied,
-validate TeAL extras, and reject moving source references. The managed cache is
-user-local (`TEAL_MANAGED_ENVIRONMENTS_HOME` overrides its location), not part
-of the portable Project. Reuse rechecks its interpreter and installed software.
-No manual `bind_interpreter()` call is needed after creation.
-
-The result reports the environment ID, Python and TeAL source, extras, whether
-the installation was reused, and the verified Torch backend. `gpu="auto"`
-prefers verified acceleration when Torch is needed and permits CPU fallback;
-`gpu=True` requires a working accelerator; `gpu=False` selects CPU builds
-when Torch is requested. Base TeAL does not install Torch merely because the
-default is `"auto"`. No GPU driver or model weight is downloaded by TeAL.
-
-**Portability limitation:** managed creation currently records the verified
-local installed inventory as `observed_unlocked`. It does not invent a
-universal lock or claim cross-platform reproducibility from a successful
-`uv pip install`. This pilot also requires a clean committed parent checkout
-or an immutable Git-installed parent and the same exact TeAL source in the child;
-independent compatible versions,
-portable export and generalized translator delegation remain future work.
-
-## Project environments
-
-Each TeAL project records an immutable, fingerprinted observation of the
-interpreter and installed packages that created or opened it. The first entry is
-kept as history; reopening from a changed Python/package environment appends a
-new entry instead of overwriting previous observations. Existing projects gain
-this registry automatically when opened.
-
-```python
-project = Project.open("my-project")
-history = project.environments.list()  # oldest first
-current = project.environments.default
-entry = project.environments.get(current["environment_id"])
-project.environments.set_default(history[0]["environment_id"])
-```
-
-Each environment entry includes its deterministic environment ID, normalized
-software observation/specification, whether it is an observed/unlocked or
-portable-locked record, and local readiness. Observed entries contain the exact
-Python version, TeAL version and normalized installed distributions (including
-package-installed models), but no OS/kernel/driver or local executable path.
-A portable-locked entry additionally carries immutable TeAL source identity,
-requested extras and a content-verified manifest that may encode conditional
-realizations. It requires an exact Python `major.minor.micro` version and checks
-that each declared realization satisfies any accompanying exact package pins
-(PEP 440 semantics allow a pinned `torch==2.14.1` to match `2.14.1+cu130`). It does **not** contain a separate top-level installed-distribution
-inventory: that would make the same portable lock have multiple identities.
-Only supported, portable manifest fields can be registered; arbitrary metadata,
-private local paths and credential-bearing origins are rejected before storage.
-Neither category absorbs downloaded model weights or scientific rule files;
-those belong in scientific/resource provenance.
-
-A supplied portable specification is initially unverified. Only when the
-actual local interpreter exactly matches a recorded lock realization can it
-be adopted as the executing software identity:
-
-```python
-portable_id = project.environments.register_portable_specification(specification)
-project.environments.verify_current_portable(portable_id)  # metadata match, not wheel hashing
-```
-
-Reopening the same unchanged verified interpreter can reuse this portable
-logical identity, even when observed platform details differ. A changed package
-inventory or different TeAL source requires fresh verification. The registry's
-readiness states include `current_interpreter`, `current_observed_interpreter`,
-and `unverified`. The `verification_level` reports `installed_metadata_match`
-for a locally matched portable lock; this is **not** artifact verification.
-R2 must establish trusted installation/wheel hash evidence before claiming an
-exact binary reproduction. A metadata match is not a GPU probe and does not prove
-that an arbitrary cross-machine scientific checkpoint can safely resume. Platform
-observations are historical provenance, **not an unconditional resume gate**;
-compatibility and frozen scientific device/backend requirements remain the
-execution layer's responsibility.
-
-
-`set_default()` only changes the active default of that *open Project
-instance*. Reopening always selects the actual opening interpreter again.
-Registered operation provenance records the interpreter that actually executed
-each new scientific operation; historical operations without provenance are
-left unassigned.
-
-For the narrow cross-interpreter TextLength pilot, explicitly bind a registered
-environment to a locally installed executable in the current Project session:
-
-```python
-project = Project.open("my-project")
-# B must already have been registered by opening this project under B.
+~~~python
+# Register a second interpreter first, then bind its local executable:
 project.environments.bind_interpreter(environment_b_id, "/path/to/B/bin/python")
-lengths = project.translate(
+result = project.translate(
     TextLength({"text": "words"}), documents,
     environment=environment_b_id, workers=1,
 )["output"]
-```
+~~~
 
-The executable binding is **not stored** in project history. This is the
-earlier R1 TextLength-only pilot, retained on the integration branch for a
-separate R1 checkpoint review. Its exact interpreter probe will need to be
-adapted to verified portable software identity without treating matching
-software as proof of identical native-checkpoint compatibility. If B is
-unavailable or changed, execution rejects explicitly rather than running in A.
-B runs a single, separate TeAL coordinator process that owns the complete
-operation, its artifacts, checkpoints, and environment provenance. Its ordinary
-Dask workers may be used with `workers>1` when supported; no batches run
-under the parent interpreter. A completed operation returns normal artifact
-handles that can be queried from the original Project instance.
+The original environment/platform references on a persisted operation remain its historical provenance. `project.execution_attempts(operation_id)` records additional attempts. Device/backend constraints saved in frozen operators remain authoritative; a change in platform observation alone does not automatically prohibit CPU-compatible resume, but software metadata matching alone cannot guarantee native checkpoint portability.
 
-This pilot supports **only new built-in `TextLength` translations** with a
-single artifact source and supported batching/alias settings, plus resume of
-recorded TextLength operations under their verified interpreter. Other
-translators, custom callables, cross-interpreter Pipelines, GPU provisioning,
-automatic environment creation, and general remote scheduling are not included.
-Remote failures include a request ID and, when the child registered an operation,
-an operation ID to support explicit diagnosis/resume; uncertain outcomes are
-never automatically retried.
+### Explicit uv-managed environments
+
+Install `uv` separately. Managed TeAL environments live in a user-local cache, outside the Project. `plan()` previews a request; `create()` explicitly installs/validates a Python interpreter and packages under a pinned TeAL Git source, and reuses a verified matching installation.
+
+~~~python
+preview = project.environments.plan(teal_extras=["parallel"], gpu="auto")
+created = project.environments.create(teal_extras=["parallel"], gpu="auto")
+project.environments.set_default(created["environment_id"])
+~~~
+
+These managed installations are truthfully recorded as **observed/unlocked**, not falsely declared cross-platform locked. For Torch-related extras, `gpu="auto"` prefers usable verified GPU execution but permits CPU fallback; `gpu=True` requires a working accelerator, while `gpu=False` chooses the supported CPU setup. No OS drivers, CUDA Toolkit, or scientific model weights are silently installed. The parent interpreter is not modified.
+
+### Portable resolved specifications
+
+The separately supported `create_specification()` path resolves a conditional `uv.lock`-derived portable specification with an **exact Python patch, immutable TeAL source, and pinned dependency resolutions**. It currently supports **base TeAL and the lightweight parallel extra, CPU-only**. Heavy Torch/GeCo extras and CUDA/MPS/ROCm variants are not yet in the portable profile.
+
+~~~python
+resolved = project.environments.create_specification(
+    teal_extras=["parallel"], gpu=False
+)
+portable_id = resolved["environment_id"]
+project.environments.export_specification(portable_id, "software-lock.json")
+
+# In a recipient Project with compatible immutable TeAL source:
+received_id = recipient.environments.import_specification("software-lock.json")
+installation = recipient.environments.create_from_specification(received_id)
+recipient.environments.set_default(received_id)
+~~~
+
+Import **validates and registers**, but does not install. Reconstruction is an explicit action and rejects unavailable exact Python versions or unsupported target resolutions. A matching portable ID can span compatible Linux/Windows installations while each host has different observed platform/installed-wheel provenance. Installation verifies lock-compatible installed distributions and source metadata; it does **not** prove identical wheel bytes, floating-point results, native checkpoint compatibility, or automatically transfer downloaded scientific models.
+
+### Linked GeCo launch in a selected interpreter
+
+A saved TeAL-linked exploratory GeCo workspace can launch with its TeAL external provider, GeCo project, and HTTP listener entirely in a **selected verified child interpreter**. The current-interpreter route remains a native GeCo server. The interpreter environment and the GeCo server's runtime `device` choice are independent.
+
+~~~python
+server = project.geco.launch(
+    "coding", environment=geco_environment_id,
+    device="auto", host="127.0.0.1", port=None, warmup=True,
+)
+print(server.url, server.execution_device)
+server.close()
+server.wait(timeout=10)
+
+# A persisted finite Focus Coding task has a distinct launch route.
+focus_server = project.geco.launch_focus(
+    "audit", environment=geco_environment_id
+)
+focus_server.close()
+~~~
+
+When `environment` is omitted, the Project instance's current default is used. Child startup probes installed TeAL and GeCo compatibility and actual HTTP readiness; unbound interpreters, missing packages, strict unsupported devices and occupied explicit ports fail with diagnostics rather than silently falling back to the parent. Different launched servers are independently closeable. R3 does not install dependencies or certify real CUDA/MPS hardware.
+
+**Backward compatibility:** Existing scientifically valid Project histories, frozen operators, artifacts, aliases and recoverable checkpoints retain their original scientific semantics. Unknown pre-R0 environment/platform history is not backfilled. The unused experimental mixed-fingerprint registry version is deliberately outside this compatibility guarantee.
 
 ## What TeAL supports
 
