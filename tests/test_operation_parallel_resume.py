@@ -1418,3 +1418,52 @@ def test_attempt_and_operation_completion_roll_back_together(tmp_path: Path):
             project.catalog.finish_execution_attempt(
                 "oper_atomic", attempt_id=attempt_id, outcome="failed",
             )
+
+
+def test_stale_attempt_id_cannot_finish_new_recovery(tmp_path: Path):
+    """A recovered attempt can never be finalized by its predecessor's token."""
+    import text_analysis_lab as teal
+    from text_analysis_lab.core.execution_ownership import exclusive_operation_execution
+
+    with teal.Project.create(tmp_path / "stale-attempt", name="stale") as project:
+        project.catalog.register_operator(
+            operator_id="optr_stale", operation_type="translate",
+        )
+        project.catalog.register_operation(
+            operation_id="oper_stale", operator_id="optr_stale",
+            operation_type="translate", status="incomplete",
+            environment_id=project.environments.opening_id,
+            platform_id=project.platforms.opening_id,
+        )
+        operation_dir = project.storage.operation_dir("oper_stale")
+        operation_dir.mkdir(parents=True)
+        with exclusive_operation_execution(operation_dir):
+            old_id = project.catalog.begin_execution_attempt(
+                "oper_stale",
+                environment_id=project.environments.opening_id,
+                platform_id=project.platforms.opening_id,
+            )
+        # This deliberately simulates a coordinator that died while its
+        # attempt row remained 'running'. The OS ownership has been released.
+        with exclusive_operation_execution(operation_dir):
+            new_id = project.catalog.begin_execution_attempt(
+                "oper_stale",
+                environment_id=project.environments.opening_id,
+                platform_id=project.platforms.opening_id,
+                recover=True,
+            )
+            with pytest.raises(ValueError, match="no longer active"):
+                project.catalog.finish_execution_attempt(
+                    "oper_stale", attempt_id=old_id, outcome="complete",
+                )
+            attempts = project.execution_attempts("oper_stale")
+            assert [a["outcome"] for a in attempts] == ["uncertain", "running"]
+            assert attempts[1]["attempt_id"] == new_id
+            assert project.get_operation("oper_stale")["status"] == "incomplete"
+            project.catalog.finish_execution_attempt(
+                "oper_stale", attempt_id=new_id, outcome="complete",
+            )
+        assert project.get_operation("oper_stale")["status"] == "complete"
+        assert [a["outcome"] for a in project.execution_attempts("oper_stale")] == [
+            "uncertain", "complete",
+        ]
