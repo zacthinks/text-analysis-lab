@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, cast, get_args
 
 from text_analysis_lab.core.errors import OperatorError, OperatorNotFoundError
 from text_analysis_lab.core.failure_cleanup import attempt_failure_cleanup
+from text_analysis_lab.core.execution_ownership import exclusive_operation_execution
 from text_analysis_lab.core.idempotence import (
     AliasPlan,
     AliasSpec,
@@ -134,6 +135,7 @@ class _Runtime:
     environment_id: str | None = None
     platform_id: str | None = None
     coordinator_request_id: str | None = None
+    execution_attempt_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -500,8 +502,12 @@ def translate(
         coordinator_request_id=coordinator_request_id,
     )
     plan: _ExecutionPlan | None = None
+    # The new operation has already received its unique ID. Hold its ownership
+    # across all scientific work, finalization, and checkpoint cleanup.
+    ownership = exclusive_operation_execution(runtime.operation_dir)
+    ownership.__enter__()
     try:
-        project.catalog.begin_execution_attempt(
+        runtime.execution_attempt_id = project.catalog.begin_execution_attempt(
             runtime.operation_id,
             environment_id=project.environments.opening_id,
             platform_id=project.platforms.opening_id,
@@ -586,11 +592,27 @@ def translate(
             _fail_runtime(project, runtime, exc)
         raise
     finally:
-        if plan is not None:
-            plan.close()
+        try:
+            if plan is not None:
+                plan.close()
+        finally:
+            ownership.__exit__(None, None, None)
 
 
 def resume_translate(
+    project: Project,
+    operation_id: str,
+    *,
+    coordinator_request_id: str | None = None,
+) -> Mapping[str, BaseArtifact]:
+    """Resume with exclusive ownership before reading mutable checkpoints."""
+    with exclusive_operation_execution(project.storage.operation_dir(operation_id)):
+        return _resume_translate_owned(
+            project, operation_id, coordinator_request_id=coordinator_request_id,
+        )
+
+
+def _resume_translate_owned(
     project: Project,
     operation_id: str,
     *,
@@ -705,11 +727,12 @@ def resume_translate(
     try:
         # Checkpoint restoration/compatibility above this point must finish
         # before a new attempt is counted as actual scientific execution.
-        project.catalog.begin_execution_attempt(
+        runtime.execution_attempt_id = project.catalog.begin_execution_attempt(
             runtime.operation_id,
             environment_id=project.environments.opening_id,
             platform_id=project.platforms.opening_id,
             coordinator_request_id=coordinator_request_id,
+            recover=True,
         )
         plan.reset_running_to_pending()
         if mode == "translate":
@@ -2530,8 +2553,12 @@ def _complete_runtime(project: Project, runtime: _Runtime) -> None:
     for label in runtime.output_labels:
         project.catalog.mark_artifact_complete(runtime.output_artifact_ids[label])
     _update_operation_metadata_status(runtime, "complete")
-    project.catalog.mark_operation_complete(runtime.operation_id)
-    project.catalog.finish_execution_attempt(runtime.operation_id, outcome="complete")
+    if runtime.execution_attempt_id is None:
+        raise OperatorError("Missing owned execution attempt on completion.")
+    project.catalog.finish_execution_attempt(
+        runtime.operation_id, attempt_id=runtime.execution_attempt_id,
+        outcome="complete",
+    )
     _cleanup_completed_operation_temp(runtime)
 
 
@@ -2567,10 +2594,13 @@ def _fail_runtime(project: Project, runtime: _Runtime, error: Exception) -> None
             writer.mark_failed(error)
         finally:
             project.catalog.mark_artifact_failed(runtime.output_artifact_ids[label])
-    project.catalog.mark_operation_failed(runtime.operation_id, error)
-    project.catalog.finish_execution_attempt(
-        runtime.operation_id, outcome="failed", error=error,
-    )
+    if runtime.execution_attempt_id is not None:
+        project.catalog.finish_execution_attempt(
+            runtime.operation_id, attempt_id=runtime.execution_attempt_id,
+            outcome="failed", error=error,
+        )
+    else:
+        project.catalog.mark_operation_failed(runtime.operation_id, error)
     if runtime.operator_snapshot_pending and not runtime.resumable:
         project.catalog.mark_operator_snapshot_failed(runtime.operator_id)
     _update_operation_metadata_status(runtime, "failed", error=error)
