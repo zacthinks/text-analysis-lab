@@ -514,6 +514,7 @@ def test_managed_cache_discovery_rejects_drift_without_binding(
             exe = managed._interpreter(Path(args[2]))
             exe.parent.mkdir(parents=True, exist_ok=True)
             exe.touch()
+            exe.chmod(0o755)
         return ""
     monkeypatch.setattr(managed, "_run_command", fake_command)
     observed = {
