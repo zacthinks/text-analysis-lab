@@ -272,3 +272,43 @@ def test_changing_artifact_hash_changes_portable_id():
             _canonical_json(value["lock"]["manifest"]).encode()).hexdigest()
         return normalize_environment(value)
     assert fingerprint_observation(with_hash("a")) != fingerprint_observation(with_hash("b"))
+
+def test_rediscovery_adopts_verified_cache_in_new_project(tmp_path, monkeypatch):
+    """A cache built for Project A can be rebound to an imported lock in B."""
+    from contextlib import nullcontext
+    registry = _Registry()
+    portable_id = registry.register_portable_specification(_spec())
+    target = tmp_path / "managed" / "request"
+    target.mkdir(parents=True)
+    exe = target / "python"
+    exe.write_text("stub")
+    observed = {
+        "schema_version": 2, "kind": "observed_unlocked",
+        "python": {"implementation": "cpython", "version": "3.11.15"},
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "text-analysis-lab", "version": "0.12.2",
+             "vcs": "git", "vcs_commit": COMMIT},
+        ],
+    }
+
+    class Catalog:
+        def __init__(self):
+            self.associations = []
+
+        def register_environment(self, **record):
+            assert record["fingerprint"] == fingerprint_observation(observed)
+            return "env_" + record["fingerprint"]
+
+        def record_environment_realization(self, observed_id, spec_id):
+            self.associations.append((observed_id, spec_id))
+
+    registry._catalog = Catalog()
+    monkeypatch.setattr(locks, "_cache_target", lambda _: target)
+    monkeypatch.setattr(locks, "_verify_cached", lambda *args: observed)
+    monkeypatch.setattr(locks.managed, "_request_lock", lambda _: nullcontext())
+    monkeypatch.setattr(locks.managed, "_interpreter", lambda _: exe)
+    assert locks.find_cached_portable_interpreter(registry, portable_id) == exe
+    assert registry._catalog.associations == [
+        ("env_" + fingerprint_observation(observed), portable_id),
+    ]
