@@ -49,6 +49,41 @@ uncertain and records a new attempt. This history does not certify that every
 native checkpoint is portable.
 
 
+## Managed interpreter pilot (R2)
+
+TeAL can explicitly install a compatible child interpreter using `uv` without
+altering the Python running your notebook. Install `uv` on your PATH and use
+a clean committed TeAL Git checkout (the current pilot requires the same
+immutable TeAL commit as the parent):
+
+```python
+preview = project.environments.plan(teal_extras=["parallel"], gpu="auto")
+created = project.environments.create(teal_extras=["parallel"], gpu="auto")
+project.environments.set_default(created["environment_id"])
+output = project.translate(TextLength({"text": "words"}), source)
+```
+
+`plan()` only describes the request; `create()` may download Python and
+install dependencies. Both require an exact Python patch version when supplied,
+validate TeAL extras, and reject moving source references. The managed cache is
+user-local (`TEAL_MANAGED_ENVIRONMENTS_HOME` overrides its location), not part
+of the portable Project. Reuse rechecks its interpreter and installed software.
+No manual `bind_interpreter()` call is needed after creation.
+
+The result reports the environment ID, Python and TeAL source, extras, whether
+the installation was reused, and the verified Torch backend. `gpu="auto"`
+prefers verified acceleration when Torch is needed and permits CPU fallback;
+`gpu=True` requires a working accelerator; `gpu=False` selects CPU builds
+when Torch is requested. Base TeAL does not install Torch merely because the
+default is `"auto"`. No GPU driver or model weight is downloaded by TeAL.
+
+**Portability limitation:** managed creation currently records the verified
+local installed inventory as `observed_unlocked`. It does not invent a
+universal lock or claim cross-platform reproducibility from a successful
+`uv pip install`. This pilot also requires a clean committed parent checkout
+and the same exact TeAL source in the child; independent compatible versions,
+portable export and generalized translator delegation remain future work.
+
 ## Project environments
 
 Each TeAL project records an immutable, fingerprinted observation of the
