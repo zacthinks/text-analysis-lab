@@ -7,6 +7,7 @@ No machine-local executable path or installer state is stored in project data.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import platform
@@ -298,9 +299,16 @@ def _portable_index_reference(value: Any) -> str:
         raise EnvironmentRegistryError("Malformed portable index URL.") from exc
     if (parsed.scheme != "https" or not host or parsed.username is not None
             or parsed.password is not None or parsed.query or parsed.fragment
-            or host.lower() == "localhost" or host.lower().endswith(".local")
-            or host.startswith(("127.", "10.", "192.168.", "172.16."))):
+            or host.lower() == "localhost"
+            or host.lower().endswith((".local", ".localhost", ".internal", ".lan"))):
         raise EnvironmentRegistryError("Portable index must be a public HTTPS URL without credentials.")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        pass  # Public DNS names remain permitted; no network resolution in R0.
+    else:
+        if not address.is_global:
+            raise EnvironmentRegistryError("Private/local IP addresses are not portable indexes.")
     if "\\" in value or any(part in {"..", "~"} for part in parsed.path.split("/")):
         raise EnvironmentRegistryError("Portable index URL contains a local path.")
     return value
