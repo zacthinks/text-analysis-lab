@@ -515,24 +515,24 @@ def test_portable_child_adopts_verified_realization_with_distinct_platform(
     hook_dir = tmp_path / "controlled-probe"
     hook_dir.mkdir()
     (hook_dir / "sitecustomize.py").write_text(
-        "import copy\\n"
-        "from text_analysis_lab.core import environments, platforms\\n"
-        "_original_software = environments.observe_environment\\n"
-        "_original_platform = platforms.observe_platform\\n"
-        "def controlled_software():\\n"
-        "    result = copy.deepcopy(_original_software())\\n"
-        "    for dist in result['distributions']:\\n"
-        "        dist.pop('editable', None)\\n"
-        "        dist.pop('local_install', None)\\n"
-        "        if dist['name'] == 'text-analysis-lab':\\n"
-        "            dist['vcs_commit'] = 'a' * 40\\n"
-        "    return result\\n"
-        "def controlled_platform():\\n"
-        "    result = copy.deepcopy(_original_platform())\\n"
-        "    result['os']['release'] += '-simulated-secondary'\\n"
-        "    return result\\n"
-        "environments.observe_environment = controlled_software\\n"
-        "platforms.observe_platform = controlled_platform\\n",
+        "import copy\n"
+        "from text_analysis_lab.core import environments, platforms\n"
+        "_original_software = environments.observe_environment\n"
+        "_original_platform = platforms.observe_platform\n"
+        "def controlled_software():\n"
+        "    result = copy.deepcopy(_original_software())\n"
+        "    for dist in result['distributions']:\n"
+        "        dist.pop('editable', None)\n"
+        "        dist.pop('local_install', None)\n"
+        "        if dist['name'] == 'text-analysis-lab':\n"
+        "            dist['vcs_commit'] = 'a' * 40\n"
+        "    return result\n"
+        "def controlled_platform():\n"
+        "    result = copy.deepcopy(_original_platform())\n"
+        "    result['os']['release'] += '-simulated-secondary'\n"
+        "    return result\n"
+        "environments.observe_environment = controlled_software\n"
+        "platforms.observe_platform = controlled_platform\n",
         encoding="utf-8",
     )
     monkeypatch.setenv(
