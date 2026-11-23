@@ -41,7 +41,7 @@ def test_pre_r0_project_science_survives_environment_upgrade(tmp_path: Path):
     old_python = python_env / (
         "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
     )
-    _run(["uv", "pip", "install", "--python", str(old_python), "-e", str(baseline)])
+    _run(["uv", "pip", "install", "--python", str(old_python), "-e", f"{baseline}[geco]"])
     _run([
         str(old_python), "-I",
         str(Path(__file__).parent / "fixtures" / "legacy_pre_r0_fixture.py"),
@@ -67,6 +67,10 @@ def test_pre_r0_project_science_survives_environment_upgrade(tmp_path: Path):
         assert counts.artifact_id == expected["counts_id"]
         assert counts.get_data_columns() == expected["counts_columns"]
         assert counts.get_matrix().toarray().tolist() == expected["counts_matrix"]
+        linked = project.geco.open("legacy_coding")
+        assert linked.external_provider is not None
+        assert linked.coder.geometry_matrix(expected["legacy_geometry_name"]).shape[0] == source.n_rows
+        linked.close()
         assert project.resolve_operator_id("legacy_words_operator") == expected["words_operator_id"]
         restored = project.get_operator(expected["words_operator_id"])
         assert isinstance(restored, TextLength)
