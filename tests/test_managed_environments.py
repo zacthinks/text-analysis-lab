@@ -210,6 +210,51 @@ def test_strict_gpu_never_reports_cpu_ready(monkeypatch, tmp_path):
         managed._gpu_probe(executable, True)
     assert managed._gpu_probe(executable, "auto")["status"] == "cpu"
 
+
+def test_auto_gpu_install_failure_retries_cpu(parent_source, tmp_path, monkeypatch):
+    monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(managed, "_uv", lambda: "uv")
+    installed_backends = []
+
+    def command(args, **kwargs):
+        if args[:2] == ["uv", "venv"]:
+            exe = managed._interpreter(Path(args[2]))
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.touch()
+        elif args[:2] == ["uv", "pip"]:
+            backend = args[args.index("--torch-backend") + 1]
+            installed_backends.append(backend)
+            if backend == "auto":
+                raise managed.ManagedEnvironmentError("GPU wheel not installable")
+        return ""
+    monkeypatch.setattr(managed, "_run_command", command)
+    observation = {
+        "schema_version": 2, "kind": "observed_unlocked",
+        "python": {
+            "implementation": sys.implementation.name,
+            "version": ".".join(map(str, sys.version_info[:3])),
+        },
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": COMMIT},
+            {"name": "torch", "version": "2.14.1+cpu"},
+        ],
+    }
+    monkeypatch.setattr(managed, "_verify", lambda *args: (
+        observation, {"status": "cpu", "backend": "cpu", "reason": "No verified accelerator"},
+    ))
+    class Catalog:
+        def register_environment(self, *, fingerprint, **kwargs):
+            return "env_" + fingerprint
+    class Registry:
+        _catalog = Catalog()
+        def bind_interpreter(self, env, exe):
+            assert Path(exe).is_file()
+    result = managed.create(Registry(), teal_extras=["transformers"], gpu="auto")
+    assert installed_backends == ["auto", "cpu"]
+    assert result["gpu"]["status"] == "cpu"
+    assert "CPU-only retry succeeded" in result["gpu"]["reason"]
+
 @pytest.mark.acceptance
 def test_real_uv_managed_child_textlength(tmp_path, monkeypatch):
     """End-to-end isolated Git-sourced child, no PYTHONPATH dependency sharing."""
