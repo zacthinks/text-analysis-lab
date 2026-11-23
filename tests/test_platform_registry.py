@@ -446,3 +446,57 @@ def test_metadata_verification_is_not_artifact_verification(tmp_path, monkeypatc
         record = project.environments.verify_current_portable(env_id)
         assert record["verification_level"] == "installed_metadata_match"
         assert record["verification_level"] != "artifact_verified"
+
+
+def test_same_lock_verifies_two_different_platform_specific_installations(
+    tmp_path, monkeypatch,
+):
+    """CUDA on Windows and CPU on Linux adopt exactly one portable ID."""
+    state = {"torch": "2.14.1+cu130", "os": "Windows"}
+
+    def observed():
+        return {
+            "schema_version": 2,
+            "kind": "observed_unlocked",
+            "python": {"implementation": "cpython", "version": "3.11.15"},
+            "teal": {"version": "0.12.2"},
+            "distributions": [
+                {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": "a" * 40},
+                {"name": "torch", "version": state["torch"]},
+            ],
+        }
+
+    monkeypatch.setattr(environments, "observe_environment", observed)
+    monkeypatch.setattr(platforms, "observe_platform", lambda: machine(state["os"]))
+    spec = software()
+    manifest = {
+        "realizations": [
+            {"distributions": [{**observed()["distributions"][0]},
+                               {"name": "torch", "version": "2.14.1+cu130"}]},
+            {"distributions": [{**observed()["distributions"][0]},
+                               {"name": "torch", "version": "2.14.1"}]},
+        ],
+    }
+    spec["lock"]["manifest"] = manifest
+    spec["lock"]["sha256"] = hashlib.sha256(
+        json.dumps(environments._normalize_portable_manifest(manifest),
+                   sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+    directory = tmp_path / "portable-project"
+    with Project.create(directory, "portable-project") as project:
+        portable_id = project.environments.register_portable_specification(spec)
+        project.environments.verify_current_portable(portable_id)
+        original_platform = project.platforms.opening_id
+        original_observed = project.environments._observed_id
+
+    state.update(torch="2.14.1", os="Linux")
+    with Project.open(directory) as project:
+        assert project.platforms.opening_id != original_platform
+        assert project.environments.opening_id != portable_id  # new, unverified inventory
+        project.environments.verify_current_portable(portable_id)
+        assert project.environments.opening_id == portable_id
+        assert project.environments._observed_id != original_observed
+        assert project.environments.get(portable_id)["verification_level"] == "installed_metadata_match"
+        assert len([row for row in project.environments.list()
+                    if row["kind"] == "portable_locked"]) == 1
