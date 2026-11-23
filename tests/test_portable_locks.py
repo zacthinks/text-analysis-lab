@@ -82,8 +82,6 @@ def test_lock_identity_ignores_package_order_but_not_semantics():
     first = _spec()
     rearranged = copy.deepcopy(first)
     rearranged["lock"]["manifest"]["uv_lock"]["package"].reverse()
-    rearranged["lock"]["sha256"] = hashlib.sha256(json.dumps(
-        rearranged["lock"]["manifest"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert fingerprint_observation(first) == fingerprint_observation(rearranged)
     assert fingerprint_observation(first) != fingerprint_observation(_spec(commit="b" * 40))
     assert fingerprint_observation(first) != fingerprint_observation(_spec(python="3.11.16"))
@@ -162,3 +160,58 @@ def test_matching_installed_exact_version_and_git_origin(monkeypatch):
     obs["distributions"][1]["version"] = "2.2.0"
     obs["distributions"].append({"name": "extra", "version": "1.0"})
     assert not locks.matches_installed(spec, obs)
+
+
+@pytest.mark.acceptance
+def test_real_uv_portable_lock_reconstruct_and_delegate(tmp_path, monkeypatch):
+    """Actual Git/uv resolution, frozen install, TextLength, and restart on host OS.
+
+    CI runs this test independently on Ubuntu and Windows. It does not
+    assert macOS or real GPU compatibility.
+    """
+    import os
+    import shutil
+    if os.environ.get("TEAL_REAL_MANAGED_ACCEPTANCE") != "1":
+        pytest.skip("Requires TEAL_REAL_MANAGED_ACCEPTANCE=1")
+    if shutil.which("uv") is None or shutil.which("git") is None:
+        pytest.skip("Requires uv and git")
+    import pandas as pd
+    from text_analysis_lab import Project
+    from text_analysis_lab.translators import TextLength
+
+    monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(tmp_path / "portable-cache"))
+    csv = tmp_path / "source.csv"
+    pd.DataFrame({"text": ["hello world", "one two three"]}).to_csv(csv, index=False)
+    with Project.create(tmp_path / "project", "portable-r2b") as project:
+        source = project.read_csv(csv, text_fields="text", metadata_fields=None)
+        resolved = project.environments.create_specification(teal_extras=["parallel"], gpu=False)
+        logical = resolved["environment_id"]
+        assert project.environments.get(logical)["kind"] == "portable_locked"
+        portable_file = project.environments.export_specification(logical, tmp_path / "portable.json")
+        assert logical == project.environments.import_specification(portable_file)
+        first = project.environments.create_from_specification(logical)
+        assert first["environment_id"] == logical
+        assert first["observed_environment_id"] != logical
+        assert first["reused"] is False
+        second = project.environments.create_from_specification(logical)
+        assert second["reused"] is True
+        project.environments.set_default(logical)
+        result = project.translate(TextLength({"text": "words"}), source, workers=1, batch_size=2)["output"]
+        observed = project.operation_for_artifact(result)
+        assert observed["environment_id"] == logical
+        assert observed["platform_id"] in {p["platform_id"] for p in project.platforms.list()}
+        attempts = project.execution_attempts(observed["operation_id"])
+        assert attempts[-1]["environment_id"] == logical
+    with Project.open(tmp_path / "project") as reopened:
+        assert logical not in reopened.environments._interpreter_bindings
+        assert reopened.environments.bound_interpreter(logical).is_file()
+        reopened.environments.set_default(logical)
+        result = reopened.translate(
+            TextLength({"text": "characters"}), source.artifact_id,
+            workers=1, batch_size=2,
+        )["output"]
+        assert result.n_rows == 2
+        attempt = reopened.execution_attempts(
+            reopened.operation_for_artifact(result)["operation_id"]
+        )
+        assert attempt[-1]["environment_id"] == logical
