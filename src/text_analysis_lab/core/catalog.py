@@ -101,8 +101,6 @@ class ProjectCatalog:
                     created_at TEXT NOT NULL,
                     completed_at TEXT,
                     error TEXT,
-                    environment_id TEXT REFERENCES project_environments(environment_id),
-                    coordinator_request_id TEXT UNIQUE,
                     FOREIGN KEY (operator_id) REFERENCES operators(operator_id)
                 );
 
@@ -220,14 +218,6 @@ class ProjectCatalog:
                 CREATE INDEX IF NOT EXISTS idx_legacy_operation_rebinds_sync
                 ON legacy_operation_rebinds(descriptor_synced, operation_id);
 
-                CREATE TABLE IF NOT EXISTS project_environments (
-                    environment_id TEXT PRIMARY KEY,
-                    fingerprint TEXT NOT NULL UNIQUE,
-                    schema_version INTEGER NOT NULL,
-                    observation_json TEXT NOT NULL,
-                    registered_at TEXT NOT NULL
-                );
-
                 CREATE TABLE IF NOT EXISTS memos (
                     memo_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     target_type TEXT NOT NULL,
@@ -256,93 +246,6 @@ class ProjectCatalog:
                 column="reuse_status",
                 definition="TEXT NOT NULL DEFAULT 'legacy_unknown'",
             )
-            self._ensure_column(
-                con,
-                table="operations",
-                column="environment_id",
-                definition="TEXT REFERENCES project_environments(environment_id)",
-            )
-            self._ensure_column(
-                con,
-                table="operations",
-                column="coordinator_request_id",
-                definition="TEXT",
-            )
-            con.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS "
-                "idx_operations_coordinator_request "
-                "ON operations(coordinator_request_id)"
-            )
-
-    # ------------------------------------------------------------------
-    # Immutable environment observations (project history, not executors)
-    # ------------------------------------------------------------------
-
-    def register_environment(
-        self,
-        *,
-        fingerprint: str,
-        schema_version: int,
-        observation_json: str,
-    ) -> str:
-        """Atomically reuse identical observations or append a new identity.
-
-        The fingerprint uniqueness constraint handles overlapping Project.open()
-        calls in different processes. Never update an existing observation.
-        """
-        environment_id = "env_" + fingerprint
-        con = self.con
-        try:
-            con.execute("BEGIN IMMEDIATE")
-            existing = con.execute(
-                """
-                SELECT environment_id, schema_version, observation_json
-                FROM project_environments WHERE fingerprint = ?
-                """,
-                (fingerprint,),
-            ).fetchone()
-            if existing is None:
-                con.execute(
-                    """
-                    INSERT INTO project_environments
-                        (environment_id, fingerprint, schema_version,
-                         observation_json, registered_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (
-                        environment_id,
-                        fingerprint,
-                        schema_version,
-                        observation_json,
-                        utc_now_iso(),
-                    ),
-                )
-            elif (
-                existing["environment_id"] != environment_id
-                or existing["schema_version"] != schema_version
-                or existing["observation_json"] != observation_json
-            ):
-                raise ValueError(
-                    "Stored environment fingerprint conflicts with the new observation."
-                )
-            con.commit()
-        except Exception:
-            con.rollback()
-            raise
-        return environment_id
-
-    def get_environment(self, environment_id: str) -> dict[str, Any] | None:
-        row = self.con.execute(
-            "SELECT * FROM project_environments WHERE environment_id = ?",
-            (environment_id,),
-        ).fetchone()
-        return self._dict(row)
-
-    def list_environments(self) -> list[dict[str, Any]]:
-        rows = self.con.execute(
-            "SELECT * FROM project_environments ORDER BY registered_at, rowid"
-        ).fetchall()
-        return self._dicts(rows)
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -814,10 +717,8 @@ class ProjectCatalog:
         operator_id: str,
         status: OperationStatus | str = "incomplete",
         created_at: str | None = None,
-        environment_id: str | None = None,
-        coordinator_request_id: str | None = None,
     ) -> None:
-        """Register execution provenance, or NULL for historical/unknown executors."""
+        """Register one operation execution record."""
         operation_type_value = self._validate_operation_type(str(operation_type))
         status_value = self._validate_operation_status(str(status))
         with self.con as con:
@@ -830,10 +731,8 @@ class ProjectCatalog:
                     status,
                     created_at,
                     completed_at,
-                    error,
-                    environment_id,
-                    coordinator_request_id
-                ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                    error
+                ) VALUES (?, ?, ?, ?, ?, NULL, NULL)
                 """,
                 (
                     str(operation_id),
@@ -841,20 +740,8 @@ class ProjectCatalog:
                     str(operator_id),
                     status_value,
                     created_at or utc_now_iso(),
-                    None if environment_id is None else str(environment_id),
-                    coordinator_request_id,
                 ),
             )
-
-    def operation_for_coordinator_request(
-        self, request_id: str
-    ) -> dict[str, Any] | None:
-        """Find the single operation owned by a secondary coordinator request."""
-        row = self.con.execute(
-            "SELECT * FROM operations WHERE coordinator_request_id = ?",
-            (str(request_id),),
-        ).fetchone()
-        return self._dict(row)
 
     def get_operation(self, operation_id: str) -> dict[str, Any]:
         """Return one operation record."""

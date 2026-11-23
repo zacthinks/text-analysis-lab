@@ -160,7 +160,6 @@ def restrict(
         operation_type="subset",
         operator_id=operator_id,
         status="incomplete",
-        environment_id=project.environments.opening_id,
     )
     project.catalog.add_operation_source(
         operation_id, "source", source_artifact.artifact_id
@@ -197,7 +196,6 @@ def restrict(
     descriptor = {
         "schema_version": 1,
         "operation_id": operation_id,
-        "environment_id": project.environments.opening_id,
         "operation_type": "subset",
         "operator_id": operator_id,
         "kind": "restrict",

@@ -107,7 +107,6 @@ def select_keys(
         operation_type="subset",
         operator_id=operator_id,
         status="incomplete",
-        environment_id=project.environments.opening_id,
     )
     project.catalog.add_operation_source(
         operation_id, DEFAULT_SOURCE_LABEL, artifact.artifact_id
@@ -140,7 +139,6 @@ def select_keys(
     descriptor = {
         "schema_version": 1,
         "operation_id": operation_id,
-        "environment_id": project.environments.opening_id,
         "operation_type": "subset",
         "operator_id": operator_id,
         "kind": "select_keys",

@@ -215,7 +215,6 @@ def _create_feature_view(
         operation_type="subset",
         operator_id=operator_id,
         status="incomplete",
-        environment_id=project.environments.opening_id,
     )
     project.catalog.add_operation_source(
         operation_id,
@@ -258,7 +257,6 @@ def _create_feature_view(
     descriptor = {
         "schema_version": 1,
         "operation_id": operation_id,
-        "environment_id": project.environments.opening_id,
         "operation_type": "subset",
         "operator_id": operator_id,
         "kind": "feature_subset",

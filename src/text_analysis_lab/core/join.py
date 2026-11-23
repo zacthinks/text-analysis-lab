@@ -103,7 +103,6 @@ def join(
         operation_type="join",
         operator_id=operator_id,
         status="incomplete",
-        environment_id=project.environments.opening_id,
     )
     source_labels = [
         "basis",
@@ -139,7 +138,6 @@ def join(
     descriptor = {
         "schema_version": 1,
         "operation_id": operation_id,
-        "environment_id": project.environments.opening_id,
         "operation_type": "join",
         "operator_id": operator_id,
         "status": "incomplete",

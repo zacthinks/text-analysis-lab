@@ -178,7 +178,6 @@ def from_keyed_frame(
         operation_type="translate",
         operator_id=operator_id,
         status="incomplete",
-        environment_id=project.environments.opening_id,
     )
     project.catalog.add_operation_source(
         operation_id, DEFAULT_SOURCE_LABEL, source_artifact.artifact_id
@@ -206,7 +205,6 @@ def from_keyed_frame(
     descriptor = {
         "schema_version": 1,
         "operation_id": operation_id,
-        "environment_id": project.environments.opening_id,
         "operation_type": "translate",
         "operator_id": operator_id,
         "kind": "from_keyed_frame",
