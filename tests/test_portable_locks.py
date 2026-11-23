@@ -215,3 +215,47 @@ def test_real_uv_portable_lock_reconstruct_and_delegate(tmp_path, monkeypatch):
             reopened.operation_for_artifact(result)["operation_id"]
         )
         assert attempt[-1]["environment_id"] == logical
+
+
+def test_platform_marker_selects_only_applicable_locked_inventory(monkeypatch):
+    """Synthetic platform-marker evaluation; not an actual Windows install."""
+    from packaging.requirements import Requirement
+    spec = _spec()
+    monkeypatch.setattr(locks, "_export_requirements", lambda s: [
+        Requirement("text-analysis-lab @ git+" + SOURCE + "@" + COMMIT),
+        Requirement('numpy==1.26.4; sys_platform == "win32"'),
+        Requirement('numpy==2.2.0; sys_platform == "linux"'),
+    ])
+    env = {"python_version": "3.11", "python_full_version": "3.11.15",
+           "sys_platform": "win32", "extra": ""}
+    monkeypatch.setattr(locks, "default_environment", lambda: dict(env))
+    observation = {"python": {"implementation": "cpython", "version": "3.11.15"},
+                   "teal": {"version": "0.12.2"}, "distributions": [
+                       {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": COMMIT},
+                       {"name": "numpy", "version": "1.26.4"},
+                   ]}
+    assert locks.matches_installed(spec, observation)
+    env["sys_platform"] = "linux"
+    observation["distributions"][1]["version"] = "2.2.0"
+    assert locks.matches_installed(spec, observation)
+    observation["distributions"][1]["version"] = "1.26.4"
+    assert not locks.matches_installed(spec, observation)
+
+
+def test_changing_artifact_hash_changes_portable_id():
+    base = _spec()
+    def with_hash(hexchar):
+        value = copy.deepcopy(base)
+        value["lock"]["manifest"]["uv_lock"]["package"].append({
+            "name": "sample", "version": "1.0",
+            "source": {"registry": "https://pypi.org/simple"},
+            "wheels": [{"url": "https://files.pythonhosted.org/sample.whl",
+                        "hash": "sha256:" + hexchar * 64}],
+        })
+        from text_analysis_lab.core.environments import _canonical_json, _normalize_lock_manifest
+        value["lock"]["manifest"]["uv_lock"] = _normalize_lock_manifest(
+            value["lock"]["manifest"]["uv_lock"])
+        value["lock"]["sha256"] = hashlib.sha256(
+            _canonical_json(value["lock"]["manifest"]).encode()).hexdigest()
+        return normalize_environment(value)
+    assert fingerprint_observation(with_hash("a")) != fingerprint_observation(with_hash("b"))
