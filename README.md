@@ -8,6 +8,35 @@ A TeAL `Project` owns durable, keyed `Artifacts` and records the lineage, operat
 
 For the broader motivation, architecture, and current project overview, see the [TeAL website](https://zacthinks.github.io/teal/).
 
+## Software environments and execution platforms (R0 checkpoint)
+
+TeAL records two separate, immutable kinds of project-level provenance:
+
+- **Software environment:** the interpreter version, TeAL software identity and installed
+  dependencies. Automatically observed/unlocked inventories do not claim a universal
+  reproducible lock. An explicit portable-locked specification can be registered using
+  a canonical, content-hashed manifest. The environment ID excludes the originating
+  operating system, hardware, drivers and local executable path.
+- **Execution platform:** best-effort, privacy-limited observations of the operating
+  system, processor architecture, and detectable GPU/driver information.
+  No hostname, serial number or unique physical-machine identifier is collected.
+  Missing GPU/firmware details do not block normal work.
+
+```python
+project = Project.open("my-project")
+software = project.environments.default
+platforms = project.platforms.list()
+current_platform_id = project.platforms.opening_id
+
+# New scientific operations record both environment_id and platform_id.
+```
+
+The active software environment default remains specific to each open Project
+instance. Platforms are not selectable or provisionable. The recorded fingerprint
+does not by itself certify that an accelerator works, or that checkpoints can safely
+resume on another computer. Portable creation, imports, GPU setup and resource
+bundling remain separate future work; the R0 registry does not download software.
+
 ## Project environments
 
 Each TeAL project records an immutable, fingerprinted observation of the
