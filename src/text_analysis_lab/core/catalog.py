@@ -229,6 +229,17 @@ class ProjectCatalog:
                     registered_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS environment_realizations (
+                    observed_environment_id TEXT NOT NULL,
+                    portable_environment_id TEXT NOT NULL,
+                    verified_at TEXT NOT NULL,
+                    PRIMARY KEY (observed_environment_id, portable_environment_id),
+                    FOREIGN KEY (observed_environment_id)
+                        REFERENCES project_environments(environment_id),
+                    FOREIGN KEY (portable_environment_id)
+                        REFERENCES project_environments(environment_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS project_platforms (
                     platform_id TEXT PRIMARY KEY,
                     fingerprint TEXT NOT NULL UNIQUE,
@@ -816,6 +827,26 @@ class ProjectCatalog:
             )
             if cur.rowcount == 0:
                 raise KeyError(str(operation_id))
+
+    def record_environment_realization(
+        self, observed_environment_id: str, portable_environment_id: str,
+    ) -> None:
+        """Persist an explicitly verified portable-to-local software association."""
+        with self.con as con:
+            con.execute(
+                "INSERT OR IGNORE INTO environment_realizations "
+                "(observed_environment_id, portable_environment_id, verified_at) "
+                "VALUES (?, ?, ?)",
+                (observed_environment_id, portable_environment_id, utc_now_iso()),
+            )
+
+    def portable_realizations_for(self, observed_environment_id: str) -> list[str]:
+        rows = self.con.execute(
+            "SELECT portable_environment_id FROM environment_realizations "
+            "WHERE observed_environment_id = ? ORDER BY portable_environment_id",
+            (observed_environment_id,),
+        ).fetchall()
+        return [str(row["portable_environment_id"]) for row in rows]
 
     # ------------------------------------------------------------------
     # Immutable observed execution platforms
