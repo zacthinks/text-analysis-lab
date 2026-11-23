@@ -381,3 +381,169 @@ def test_real_uv_managed_child_textlength(tmp_path, monkeypatch):
         again = project.environments.create(teal_extras=["parallel"], gpu=False)
         assert again["reused"]
         assert again["environment_id"] == result["environment_id"]
+
+    # A fresh Project instance has no interpreter binding. Reuse must
+    # rediscover the already-published installation solely by E1 identity,
+    # without calling create() or re-resolving uv packages.
+    with Project.open(tmp_path / "project") as reopened:
+        assert result["environment_id"] not in reopened.environments._interpreter_bindings
+        reopened.environments.set_default(result["environment_id"])
+        restored = reopened.translate(
+            TextLength({"text": "characters"}), source.artifact_id,
+            workers=1, batch_size=2,
+        )["output"]
+        assert restored.n_rows == 3
+        history = reopened.execution_attempts(
+            reopened.operation_for_artifact(restored)["operation_id"]
+        )
+        assert len(history) == 1
+        assert history[0]["environment_id"] == result["environment_id"]
+        assert result["environment_id"] in reopened.environments._interpreter_bindings
+
+
+
+def test_gpu_auto_retries_failed_torch_runtime_and_preserves_cache_reason(
+    parent_source, tmp_path, monkeypatch,
+):
+    """A successful install but failed Torch import must retry as CPU."""
+    monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(tmp_path / "managed"))
+    monkeypatch.setattr(managed, "_uv", lambda: "uv")
+    installed = []
+
+    def fake_command(args, **kwargs):
+        if args[:2] == ["uv", "venv"]:
+            exe = managed._interpreter(Path(args[2]))
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.touch()
+        elif args[:3] == ["uv", "pip", "install"]:
+            installed.append(args[args.index("--torch-backend") + 1])
+        return ""
+
+    monkeypatch.setattr(managed, "_run_command", fake_command)
+    observed = {
+        "schema_version": 2,
+        "kind": "observed_unlocked",
+        "python": {
+            "implementation": sys.implementation.name,
+            "version": ".".join(map(str, sys.version_info[:3])),
+        },
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": COMMIT},
+            {"name": "torch", "version": "2.14.1+cpu"},
+        ],
+    }
+    checked = []
+
+    def verify(*args):
+        checked.append(1)
+        if len(checked) == 1:
+            raise managed.ManagedAcceleratorError("Torch native import failed")
+        return observed, {
+            "status": "cpu", "backend": "cpu", "reason": "No verified accelerator",
+        }
+
+    monkeypatch.setattr(managed, "_verify", verify)
+
+    class Registry:
+        class Catalog:
+            def register_environment(self, *, fingerprint, **kwargs):
+                return "env_" + fingerprint
+        _catalog = Catalog()
+
+        def bind_interpreter(self, env, exe):
+            assert Path(exe).is_file()
+
+    first = managed.create(Registry(), gpu="auto", teal_extras=["transformers"])
+    assert installed == ["auto", "cpu"]
+    assert first["gpu"]["status"] == "cpu"
+    assert "Torch runtime verification failed" in first["gpu"]["reason"]
+    assert first["reused"] is False
+    second = managed.create(Registry(), gpu="auto", teal_extras=["transformers"])
+    assert second["reused"] is True
+    assert second["gpu"]["reason"] == first["gpu"]["reason"]
+    assert installed == ["auto", "cpu"]  # No reinstallation.
+
+    markers = list((tmp_path / "managed").glob("*/managed.json"))
+    assert len(markers) == 1
+    payload = json.loads(markers[0].read_text(encoding="utf-8"))
+    assert payload["fallback_reason"] == first["gpu"]["reason"]
+
+
+@pytest.mark.parametrize("failure", [
+    "TeAL source mismatch",
+    "R1 protocol mismatch",
+    "uv pip check failed",
+])
+def test_gpu_auto_does_not_retry_unrelated_verification_errors(
+    parent_source, tmp_path, monkeypatch, failure,
+):
+    monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(tmp_path / "managed"))
+    monkeypatch.setattr(managed, "_uv", lambda: "uv")
+    installs = []
+
+    def fake_command(args, **kwargs):
+        if args[:2] == ["uv", "venv"]:
+            exe = managed._interpreter(Path(args[2]))
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.touch()
+        if args[:3] == ["uv", "pip", "install"]:
+            installs.append(args[args.index("--torch-backend") + 1])
+        return ""
+
+    monkeypatch.setattr(managed, "_run_command", fake_command)
+    monkeypatch.setattr(
+        managed, "_verify",
+        lambda *args: (_ for _ in ()).throw(ManagedEnvironmentError(failure)),
+    )
+    with pytest.raises(ManagedEnvironmentError, match=failure):
+        managed.create(object(), gpu="auto", teal_extras=["transformers"])
+    assert installs == ["auto"]
+    assert not list((tmp_path / "managed").glob("*/managed.json"))
+
+
+def test_managed_cache_discovery_rejects_drift_without_binding(
+    parent_source, tmp_path, monkeypatch,
+):
+    from text_analysis_lab import Project
+
+    monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(tmp_path / "managed"))
+    monkeypatch.setattr(managed, "_uv", lambda: "uv")
+    def fake_command(args, **kwargs):
+        if args[:2] == ["uv", "venv"]:
+            exe = managed._interpreter(Path(args[2]))
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.touch()
+        return ""
+    monkeypatch.setattr(managed, "_run_command", fake_command)
+    observed = {
+        "schema_version": 2, "kind": "observed_unlocked",
+        "python": {
+            "implementation": sys.implementation.name,
+            "version": ".".join(map(str, sys.version_info[:3])),
+        },
+        "teal": {"version": "0.12.2"},
+        "distributions": [
+            {"name": "text-analysis-lab", "version": "0.12.2", "vcs_commit": COMMIT},
+        ],
+    }
+    changed = copy.deepcopy(observed)
+    changed["distributions"].append({"name": "changed-after-install", "version": "1"})
+    state = {"observed": observed}
+    monkeypatch.setattr(
+        managed, "_verify",
+        lambda *args: (state["observed"], {
+            "status": "not_applicable", "backend": None, "reason": None,
+        }),
+    )
+    with Project.create(tmp_path / "project", "managed-discovery") as project:
+        result = managed.create(project.environments)
+        managed_id = result["environment_id"]
+    with Project.open(tmp_path / "project") as reopened:
+        assert managed_id not in reopened.environments._interpreter_bindings
+        assert reopened.environments.bound_interpreter(managed_id).is_file()
+    state["observed"] = changed
+    with Project.open(tmp_path / "project") as reopened:
+        with pytest.raises(managed.ManagedEnvironmentError, match="failed re-verification"):
+            reopened.environments.bound_interpreter(managed_id)
+        assert managed_id not in reopened.environments._interpreter_bindings
