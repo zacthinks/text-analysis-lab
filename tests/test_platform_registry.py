@@ -301,3 +301,33 @@ def test_portable_source_cannot_embed_original_hostname():
     spec["teal"]["source"]["hostname"] = "original-workstation"
     with pytest.raises(environments.EnvironmentRegistryError, match="immutable"):
         fingerprint_observation(spec)
+
+
+def test_replay_allowed_but_cross_platform_checkpoint_resume_rejected(
+    tmp_path, monkeypatch,
+):
+    host = {"value": machine("Windows")}
+    monkeypatch.setattr(platforms, "observe_platform", lambda: host["value"])
+    directory = tmp_path / "resume-check"
+    with Project.create(directory, "resume-check") as project:
+        project.catalog.register_operator(
+            operator_id="optr_r0_resume", operation_type="translate",
+        )
+        project.catalog.register_operation(
+            operation_id="run_r0_resume",
+            operation_type="translate",
+            operator_id="optr_r0_resume",
+            environment_id=project.environments.opening_id,
+        )
+        historical = project.get_operation("run_r0_resume")
+        assert historical["platform_id"] == project.platforms.opening_id
+
+    host["value"] = machine("Darwin")
+    with Project.open(directory) as project:
+        from text_analysis_lab.core.errors import OperatorError
+
+        assert project.environments.opening_id == historical["environment_id"]
+        assert project.platforms.opening_id != historical["platform_id"]
+        with pytest.raises(OperatorError, match="Cross-platform checkpoint resume"):
+            project.resume_operation("run_r0_resume")
+        assert project.get_operation("run_r0_resume") == historical
