@@ -367,9 +367,12 @@ def _read_cache_manifest(target: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if target.is_symlink() or not re.fullmatch(r"[a-f0-9]{64}", target.name):
         raise ManagedEnvironmentError("Invalid managed installation directory.")
     marker = json.loads((target / "managed.json").read_text(encoding="utf-8"))
-    if not isinstance(marker, dict) or set(marker) != {
-        "schema_version", "request", "observed_fingerprint", "fallback_reason",
-    }:
+    required = {"schema_version", "request", "observed_fingerprint"}
+    # Existing R2 cache entries predate fallback_reason. They remain usable
+    # after full re-verification; only newly published entries retain a reason.
+    if (not isinstance(marker, dict)
+            or not required.issubset(marker)
+            or set(marker) - required - {"fallback_reason"}):
         raise ManagedEnvironmentError("Invalid managed cache metadata.")
     request = marker["request"]
     if (marker["schema_version"] != _CACHE_SCHEMA
@@ -389,7 +392,7 @@ def _read_cache_manifest(target: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             or _request_key(request) != target.name
             or not isinstance(marker["observed_fingerprint"], str)
             or re.fullmatch(r"[a-f0-9]{64}", marker["observed_fingerprint"]) is None
-            or marker["fallback_reason"] is not None
+            or marker.get("fallback_reason") is not None
             and (request["gpu"] != "auto"
                  or not isinstance(marker["fallback_reason"], str)
                  or marker["fallback_reason"] not in _FALLBACK_REASONS)):
@@ -404,7 +407,7 @@ def _verified_cache(target: Path, request: dict[str, Any], uv: str) -> tuple[dic
     observation, gpu_state = _verify(target, request, uv)
     if fingerprint_observation(observation) != marker["observed_fingerprint"]:
         raise ManagedEnvironmentError("Managed environment software inventory drifted.")
-    fallback = marker["fallback_reason"]
+    fallback = marker.get("fallback_reason")
     if fallback is not None:
         if gpu_state["status"] != "cpu":
             raise ManagedEnvironmentError("Managed CPU fallback metadata disagrees with runtime.")
