@@ -208,7 +208,8 @@ def _normalize_lock_manifest(value: Any) -> Any:
 
 def normalize_environment(observation: dict[str, Any]) -> dict[str, Any]:
     """Canonical identity of software without original OS, GPU, drivers or ABI."""
-    if not isinstance(observation, dict) or observation.get("schema_version") != OBSERVATION_SCHEMA_VERSION:
+    version = observation.get("schema_version") if isinstance(observation, dict) else None
+    if type(version) is not int or version < 2 or version > OBSERVATION_SCHEMA_VERSION:
         raise EnvironmentRegistryError("Unsupported software observation schema.")
     kind = observation.get("kind")
     if kind not in {"observed_unlocked", "portable_locked"}:
@@ -283,8 +284,11 @@ def fingerprint_observation(
 ) -> str:
     """Hash canonical, versioned software identity, never an OS/platform."""
     try:
+        normalized = normalize_environment(observation)
+        if require_current_schema and normalized["schema_version"] != OBSERVATION_SCHEMA_VERSION:
+            raise EnvironmentRegistryError("Unsupported current software schema.")
         return hashlib.sha256(
-            _canonical_json(normalize_environment(observation)).encode("utf-8")
+            _canonical_json(normalized).encode("utf-8")
         ).hexdigest()
     except (TypeError, ValueError) as exc:
         raise EnvironmentRegistryError("Software observation is not serializable.") from exc
