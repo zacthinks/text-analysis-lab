@@ -303,9 +303,9 @@ def _gpu_probe(executable: Path, policy: str | bool) -> dict[str, Any]:
         " elif " + str(allowed_accelerators) + " and hasattr(torch.backends,'mps') and torch.backends.mps.is_available(): device='mps'\n"
         " elif " + str(allowed_accelerators) + " and hasattr(torch,'xpu') and torch.xpu.is_available(): device='xpu'\n"
         " if device != 'cpu':\n"
-        "  try:\n"
-        "   x=torch.tensor([2.,3.],device=device); assert float(x.sum().item()) == 5.\n"
-        "  except Exception: device='cpu'\n"
+        # If an advertised accelerator cannot perform real computation,
+        # abort verification: gpu='auto' must rebuild with CPU Torch.
+        "  x=torch.tensor([2.,3.],device=device); assert float(x.sum().item()) == 5.\n"
         " print(json.dumps({'status':'available' if device!='cpu' else 'cpu',"
         "'backend':('rocm' if device=='cuda' and torch.version.hip else device),"
         "'reason':None if device!='cpu' else 'No verified accelerator'}))\n"
@@ -432,8 +432,12 @@ def find_cached_interpreter(environment_id: str) -> Path | None:
     root = _cache_root()
     if not root.is_dir():
         return None
-    candidates = []
-    for target in root.iterdir():
+    candidates: list[Path] = []
+    current_commit: str | None = None
+    # The request key describes installation preferences. Different keys
+    # can legitimately produce the exact same observed software identity.
+    # Use lexical request-key order, never filesystem enumeration order.
+    for target in sorted(root.iterdir(), key=lambda entry: entry.name):
         if target.is_symlink() or not target.is_dir() or re.fullmatch(
             r"[a-f0-9]{64}", target.name,
         ) is None:
@@ -450,6 +454,15 @@ def find_cached_interpreter(environment_id: str) -> Path | None:
         with _request_lock(root / "locks" / (target.name + ".lock")):
             try:
                 request, _ = _read_cache_manifest(target)
+                if current_commit is None:
+                    # The R1 source digest intentionally covers only the pilot.
+                    # Independently enforce R2's stronger same-immutable-TeAL-
+                    # commit rule on rediscovery, even when those bytes match.
+                    current_commit = _local_source_commit()
+                if request["teal_commit"] != current_commit:
+                    raise ManagedEnvironmentError(
+                        "Managed TeAL source commit differs from the current parent."
+                    )
                 _verified_cache(target, request, _uv())
             except (OSError, ValueError, KeyError, ManagedEnvironmentError) as exc:
                 raise ManagedEnvironmentError(
@@ -457,10 +470,8 @@ def find_cached_interpreter(environment_id: str) -> Path | None:
                     "the installation was left untouched."
                 ) from exc
             candidates.append(_interpreter(target))
-    if len(candidates) > 1:
-        raise ManagedEnvironmentError(
-            "Several verified managed installations claim the same observed environment."
-        )
+    # Every matching cache passed the same complete verification; choose the
+    # first deterministically. Never persist the host-local selection in SQLite.
     return candidates[0] if candidates else None
 
 
