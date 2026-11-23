@@ -390,6 +390,9 @@ def _valid_cached(directory: Path, chosen: ManagedEnvironmentPlan, uv_path: str)
         if (stored.get("observed_id") != "env_" + fingerprint_observation(actual)
                 or stored.get("backend") != backend):
             return None
+        reported_reason = stored.get("fallback_reason")
+        if chosen.gpu == "auto" and backend == "cpu" and isinstance(reported_reason, str):
+            reason = reported_reason
         return actual, backend, reason
     except (OSError, ValueError, EnvironmentRegistryError, subprocess.TimeoutExpired):
         return None
@@ -477,7 +480,7 @@ def create(registry: Any, *, python: str | None = None, teal: str | None = None,
                 "backend": backend, "python": chosen.python, "teal_commit": chosen.teal_commit,
                 "extras": list(chosen.teal_extras), "gpu": chosen.gpu,
                 "verification": "installed_metadata_and_runtime_only",
-                "installation": staged.name,
+                "fallback_reason": reason, "installation": staged.name,
             })
             target.mkdir(parents=True, exist_ok=True)
             temporary = target / (".managed-" + uuid4().hex)
