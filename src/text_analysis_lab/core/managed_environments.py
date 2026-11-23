@@ -231,6 +231,7 @@ def _probe(executable: Path, request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _gpu_probe(executable: Path, policy: str | bool) -> dict[str, Any]:
+    allowed_accelerators = policy is not False
     script = (
         "import json,importlib.util\n"
         "if importlib.util.find_spec('torch') is None:\n"
@@ -238,10 +239,10 @@ def _gpu_probe(executable: Path, policy: str | bool) -> dict[str, Any]:
         "else:\n"
         " import torch\n"
         " device='cpu'\n"
-        " if torch.cuda.is_available(): device='cuda'\n"
-        " elif hasattr(torch.backends,'mps') and torch.backends.mps.is_available(): device='mps'\n"
-        " elif hasattr(torch,'xpu') and torch.xpu.is_available(): device='xpu'\n"
-        " elif hasattr(torch.version,'hip') and torch.version.hip: device='cuda'\n"
+        (" if torch.cuda.is_available(): device='cuda'\n" if allowed_accelerators else "")
+        (" elif hasattr(torch.backends,'mps') and torch.backends.mps.is_available(): device='mps'\n" if allowed_accelerators else "")
+        (" elif hasattr(torch,'xpu') and torch.xpu.is_available(): device='xpu'\n" if allowed_accelerators else "")
+        (" elif hasattr(torch.version,'hip') and torch.version.hip: device='cuda'\n" if allowed_accelerators else "")
         " if device != 'cpu':\n"
         "  try:\n"
         "   x=torch.tensor([2.,3.],device=device); assert float(x.sum().item()) == 5.\n"
@@ -297,9 +298,13 @@ def create(
         if target.is_dir():
             try:
                 manifest = json.loads((target / "managed.json").read_text(encoding="utf-8"))
-                if manifest == {"schema_version": _CACHE_SCHEMA, "request": request}:
-                    verified = _verify(target, request, uv)
-                    reused = True
+                if (manifest.get("schema_version") == _CACHE_SCHEMA
+                        and manifest.get("request") == request
+                        and isinstance(manifest.get("observed_fingerprint"), str)):
+                    candidate = _verify(target, request, uv)
+                    if fingerprint_observation(candidate[0]) == manifest["observed_fingerprint"]:
+                        verified = candidate
+                        reused = True
             except (ManagedEnvironmentError, OSError, ValueError, KeyError):
                 verified = None
         if verified is None:
@@ -350,8 +355,10 @@ def create(
                     verified = (observed, gpu_state)
                 temp_marker = target / "managed.json.pending"
                 temp_marker.write_text(
-                    json.dumps({"schema_version": _CACHE_SCHEMA, "request": request},
-                               sort_keys=True), encoding="utf-8",
+                    json.dumps({
+                        "schema_version": _CACHE_SCHEMA, "request": request,
+                        "observed_fingerprint": fingerprint_observation(verified[0]),
+                    }, sort_keys=True), encoding="utf-8",
                 )
                 temp_marker.replace(target / "managed.json")
             except BaseException:
