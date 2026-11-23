@@ -102,3 +102,36 @@ jobs:
           TEAL_REAL_MANAGED_ACCEPTANCE: "1"
           TEAL_PORTABLE_SPEC_INPUT: ${{ github.workspace }}/portable-r2b.json
         run: uv run pytest --acceptance -m acceptance -k test_real_uv_portable_lock_reconstruct_and_delegate -q -rs
+
+  r3-real-geco:
+    name: R3 isolated linked GeCo (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.11
+
+      - name: Install TeAL with GeCo
+        run: uv sync --python 3.11 --all-extras
+
+      - name: Run actual separate-interpreter linked GeCo acceptance
+        env:
+          TEAL_REAL_GECO_R3: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+        run: uv run pytest tests/test_geco_environment_real_acceptance.py --acceptance -m acceptance -q -rs

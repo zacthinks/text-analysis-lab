@@ -222,9 +222,13 @@ def _run(
         return result.returncode, None, result.stderr[-2000:]
 
 
-def _verified_executable(project: Project, selected: str) -> Path:
+def _verified_executable(
+    project: Project, selected: str, *, isolated: bool = False,
+) -> Path:
     executable = project.environments.bound_interpreter(selected)
-    exit_code, payload, stderr = _run(executable, "--probe", timeout=60)
+    exit_code, payload, stderr = _run(
+        executable, "--probe", timeout=60, isolated=isolated,
+    )
     if exit_code != 0 or payload is None:
         raise SecondaryCoordinatorError(
             f"Bound Python interpreter could not import or probe compatible TeAL "
