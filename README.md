@@ -60,8 +60,12 @@ Python version, TeAL version and normalized installed distributions (including
 package-installed models), but no OS/kernel/driver or local executable path.
 A portable-locked entry additionally carries immutable TeAL source identity,
 requested extras and a content-verified manifest that may encode conditional
-realizations. Neither category absorbs downloaded model weights or scientific
-rule files; those belong in scientific/resource provenance.
+realizations. It does **not** contain a separate top-level installed-distribution
+inventory: that would make the same portable lock have multiple identities.
+Only supported, portable manifest fields can be registered; arbitrary metadata,
+private local paths and credential-bearing origins are rejected before storage.
+Neither category absorbs downloaded model weights or scientific rule files;
+those belong in scientific/resource provenance.
 
 A supplied portable specification is initially unverified. Only when the
 actual local interpreter exactly matches a recorded lock realization can it
@@ -69,15 +73,18 @@ be adopted as the executing software identity:
 
 ```python
 portable_id = project.environments.register_portable_specification(specification)
-project.environments.verify_current_portable(portable_id)  # checks Python/TeAL/packages
+project.environments.verify_current_portable(portable_id)  # metadata match, not wheel hashing
 ```
 
 Reopening the same unchanged verified interpreter can reuse this portable
 logical identity, even when observed platform details differ. A changed package
 inventory or different TeAL source requires fresh verification. The registry's
 readiness states include `current_interpreter`, `current_observed_interpreter`,
-and `unverified`. Such verification is not a GPU probe and does not prove a
-cross-machine scientific checkpoint can safely resume.
+and `unverified`. The `verification_level` reports `installed_metadata_match`
+for a locally matched portable lock; this is **not** artifact verification.
+R2 must establish trusted installation/wheel hash evidence before claiming an
+exact binary reproduction. A metadata match is not a GPU probe and does not prove
+that a cross-machine scientific checkpoint can safely resume.
 
 
 `set_default()` only changes the active default of that *open Project
