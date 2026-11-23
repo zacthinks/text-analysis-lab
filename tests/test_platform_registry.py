@@ -300,10 +300,11 @@ def test_portable_source_cannot_embed_original_hostname():
         fingerprint_observation(spec)
 
 
-def test_replay_allowed_but_cross_platform_checkpoint_resume_rejected(
+def test_platform_observation_change_does_not_override_resume_validation(
     tmp_path, monkeypatch,
 ):
-    host = {"value": machine("Windows")}
+    """Different platform IDs are provenance, not an automatic compatibility veto."""
+    host = {"value": machine("Windows", "551.23")}
     monkeypatch.setattr(platforms, "observe_platform", lambda: host["value"])
     directory = tmp_path / "resume-check"
     with Project.create(directory, "resume-check") as project:
@@ -319,13 +320,15 @@ def test_replay_allowed_but_cross_platform_checkpoint_resume_rejected(
         historical = project.get_operation("run_r0_resume")
         assert historical["platform_id"] == project.platforms.opening_id
 
-    host["value"] = machine("Darwin")
+    # Even just a driver update changes the recorded platform observation.
+    host["value"] = machine("Windows", "552.12")
     with Project.open(directory) as project:
         from text_analysis_lab.core.errors import OperatorError
 
         assert project.environments.opening_id == historical["environment_id"]
         assert project.platforms.opening_id != historical["platform_id"]
-        with pytest.raises(OperatorError, match="Cross-platform checkpoint resume"):
+        # No descriptor: fail for the real missing checkpoint, not the platform.
+        with pytest.raises(OperatorError, match="no operation descriptor"):
             project.resume_operation("run_r0_resume")
         assert project.get_operation("run_r0_resume") == historical
 
@@ -502,3 +505,69 @@ def test_same_lock_verifies_two_different_platform_specific_installations(
         assert project.environments.get(portable_id)["verification_level"] == "installed_metadata_match"
         assert len([row for row in project.environments.list()
                     if row["kind"] == "portable_locked"]) == 1
+
+
+def _spec_with_manifest(manifest):
+    spec = software()
+    spec["lock"]["manifest"] = manifest
+    canonical = environments._normalize_portable_manifest(manifest)
+    spec["lock"]["sha256"] = hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return spec
+
+
+@pytest.mark.parametrize("manifest", [
+    {"requirements": {"torch": "2.14.1"},
+     "realizations": [{"distributions": [{"name": "torch", "version": "2.15.0"}]}]},
+    {"requirements": {"torch": "2.14.1"},
+     "realizations": [{"distributions": [{"name": "other", "version": "2.14.1"}]}]},
+    {"requirements": {"torch": "2.14.1"},
+     "realizations": [{"distributions": [{"name": "torch", "version": "2.14.1"}]},
+                      {"distributions": [{"name": "torch", "version": "2.15.0"}]}]},
+    {"requirements": {"torch": "2.14.1"},
+     "realizations": [{"distributions": [{"name": "torch", "version": "2.14.1"},
+                                         {"name": "Torch", "version": "2.14.1"}]}]},
+])
+def test_portable_lock_rejects_inconsistent_exact_realizations(tmp_path, manifest):
+    """A contradictory or incomplete lock must never be registered."""
+    spec = _spec_with_manifest(manifest) if not (
+        "realizations" in manifest and any(
+            len(r["distributions"]) != len({d["name"].lower() for d in r["distributions"]})
+            for r in manifest["realizations"]
+        )
+    ) else None
+    # Duplicate names are rejected while canonicalizing rather than hashed.
+    if spec is None:
+        with pytest.raises(environments.EnvironmentRegistryError):
+            _spec_with_manifest(manifest)
+        return
+    with Project.create(tmp_path / "study", "study") as project:
+        before = len(project.environments.list())
+        with pytest.raises(environments.EnvironmentRegistryError, match="Portable realization"):
+            project.environments.register_portable_specification(spec)
+        assert len(project.environments.list()) == before
+
+
+def test_exact_requirement_accepts_pytorch_local_cuda_build():
+    spec = _spec_with_manifest({
+        "requirements": {"torch": "2.14.1"},
+        "realizations": [{"distributions": [
+            {"name": "torch", "version": "2.14.1+cu130"}
+        ]}],
+    })
+    normalized = normalize_environment(spec)
+    assert normalized["lock"]["manifest"]["requirements"]["torch"] == "2.14.1"
+    assert normalized["lock"]["manifest"]["realizations"][0]["distributions"][0]["version"] == "2.14.1+cu130"
+
+
+@pytest.mark.parametrize("version", ["3.11", "3", "3.11.15.1", "3.11.15+host"])
+def test_portable_python_version_must_pin_patch(version):
+    spec = software(version=version)
+    with pytest.raises(environments.EnvironmentRegistryError, match="major.minor.micro"):
+        fingerprint_observation(spec)
+
+
+def test_portable_python_full_patch_and_prerelease_are_accepted():
+    assert fingerprint_observation(software(version="3.11.15"))
+    assert fingerprint_observation(software(version="3.14.0rc2"))
