@@ -190,17 +190,26 @@ def observe_environment() -> dict[str, Any]:
         ) from exc
 
 
-def _normalize_lock_manifest(value: Any) -> Any:
-    """Canonicalize unordered manifest records without embedding local paths."""
+def _normalize_lock_manifest(value: Any, *, field: str | None = None) -> Any:
+    """Sort only dependency-set arrays; preserve potentially meaningful index order.
+
+    A lock specification may have ordered indexes/priorities. Sorting every
+    array would incorrectly identify distinct resolutions as equivalent.
+    """
     if isinstance(value, dict):
         if any(not isinstance(key, str) for key in value):
             raise EnvironmentRegistryError("Invalid portable lock field name.")
-        return {key: _normalize_lock_manifest(item) for key, item in sorted(value.items())}
+        return {
+            key: _normalize_lock_manifest(item, field=key)
+            for key, item in sorted(value.items())
+        }
     if isinstance(value, list):
-        return sorted(
-            (_normalize_lock_manifest(item) for item in value),
-            key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
-        )
+        items = [_normalize_lock_manifest(item) for item in value]
+        if field in {"packages", "distributions", "realizations", "dependencies", "extras"}:
+            return sorted(
+                items, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+            )
+        return items
     if value is None or type(value) in {bool, str, int, float}:
         return value
     raise EnvironmentRegistryError("Invalid portable lock manifest value.")
