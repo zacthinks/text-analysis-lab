@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from importlib import metadata
 from typing import Any, Iterator
 
@@ -34,7 +35,7 @@ _SOURCE = "https://github.com/zacthinks/text-analysis-lab.git"
 _COMMIT = re.compile(r"^[a-f0-9]{40}$")
 _PYTHON = re.compile(r"^\d+\.\d+\.\d+$")
 _EXTRA = re.compile(r"^[a-z][a-z0-9-]*$")
-_TORCH_EXTRAS = {"transformers", "linguistics", "all"}
+_TORCH_EXTRAS = {"transformers", "linguistics", "geco", "all"}
 _CACHE_SCHEMA = 1
 
 
@@ -218,7 +219,17 @@ def _request_lock(path: Path) -> Iterator[None]:
             stream.write(b"\0")
             stream.flush()
             stream.seek(0)
-            msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+            deadline = time.monotonic() + 1800
+            while True:
+                try:
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    if time.monotonic() >= deadline:
+                        raise ManagedEnvironmentError(
+                            "Timed out waiting for another managed installation."
+                        ) from exc
+                    time.sleep(0.2)
         else:
             import fcntl
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
@@ -249,6 +260,8 @@ def _probe(executable: Path, request: dict[str, Any]) -> dict[str, Any]:
     observed = normalize_environment(payload["observation"])
     if observed["kind"] != "observed_unlocked":
         raise ManagedEnvironmentError("Managed TeAL did not report installed software.")
+    if payload.get("environment_id") != "env_" + fingerprint_observation(observed):
+        raise ManagedEnvironmentError("Managed TeAL claimed identity differs from observed inventory.")
     if observed["python"]["version"] != request["python"]:
         raise ManagedEnvironmentError("Managed Python patch differs from the requested version.")
     if observed["teal"]["version"] != request["teal_version"]:
@@ -271,6 +284,7 @@ def _gpu_probe(executable: Path, policy: str | bool) -> dict[str, Any]:
         "else:\n"
         " import torch\n"
         " device='cpu'\n"
+        " x=torch.tensor([2.,3.],device='cpu'); assert float(x.sum().item()) == 5.\n"
         " if " + str(allowed_accelerators) + " and torch.cuda.is_available(): device='cuda'\n"
         " elif " + str(allowed_accelerators) + " and hasattr(torch.backends,'mps') and torch.backends.mps.is_available(): device='mps'\n"
         " elif " + str(allowed_accelerators) + " and hasattr(torch,'xpu') and torch.xpu.is_available(): device='xpu'\n"
@@ -279,13 +293,16 @@ def _gpu_probe(executable: Path, policy: str | bool) -> dict[str, Any]:
         "   x=torch.tensor([2.,3.],device=device); assert float(x.sum().item()) == 5.\n"
         "  except Exception: device='cpu'\n"
         " print(json.dumps({'status':'available' if device!='cpu' else 'cpu',"
-        "'backend':device,'reason':None if device!='cpu' else 'No verified accelerator'}))\n"
+        "'backend':('rocm' if device=='cuda' and torch.version.hip else device),"
+        "'reason':None if device!='cpu' else 'No verified accelerator'}))\n"
     )
     output = _run_command([str(executable), "-c", script], timeout=120)
     try:
         state = json.loads(output.splitlines()[-1])
     except (ValueError, IndexError) as exc:
         raise ManagedEnvironmentError("Invalid Torch device verification result.") from exc
+    if policy is False and state["status"] == "cpu":
+        state["reason"] = "CPU-only policy selected"
     if policy is True and state["status"] != "available":
         raise ManagedEnvironmentError(
             "Strict GPU environment requested but no working accelerator was verified."
