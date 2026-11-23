@@ -358,7 +358,13 @@ def _return_artifacts(
     _version(response)
     if response["kind"] != "result" or response["request_id"] != request_id:
         raise SecondaryCoordinatorError("Mismatched secondary response.")
-    if response["status"] != "complete" or response["environment_id"] != selected:
+    if (
+        response["status"] != "complete"
+        or not isinstance(response["environment_id"], str)
+        or not project.environments.equivalent_executor_identities(
+            selected, response["environment_id"],
+        )
+    ):
         raise SecondaryCoordinatorError("Secondary returned incompatible status or environment.")
     result_kind = response["result_kind"]
     if result_kind not in {"executed", "reused"}:
@@ -378,13 +384,15 @@ def _return_artifacts(
         attempts = project.catalog.list_execution_attempts(opid)
         if not attempts or attempts[-1]["outcome"] != "complete":
             raise SecondaryCoordinatorError("Missing completed child execution attempt.")
-        if (attempts[-1]["environment_id"] != selected
+        if (attempts[-1]["environment_id"] != response["environment_id"]
                 or attempts[-1]["platform_id"] != response["platform_id"]
                 or project.platforms.get(response["platform_id"]) is None):
             raise SecondaryCoordinatorError("Child execution attempt provenance mismatch.")
         # Only the selected child may create an operation for this request.
         # A resume executes an existing B operation, not a new one.
-        if operation["environment_id"] != selected:
+        if not project.environments.equivalent_executor_identities(
+            selected, operation["environment_id"],
+        ):
             raise SecondaryCoordinatorError(
                 "Executed operation has incorrect environment provenance."
             )
@@ -572,9 +580,9 @@ def _child_run(message: dict[str, Any]) -> dict[str, Any]:
             raise EnvironmentRegistryError(
                 "Child's installed software differs from the selected observed environment."
             )
-        if project.environments.opening_id != selected:
+        if not project.environments.is_current_interpreter(selected):
             raise EnvironmentRegistryError(
-                "Child's actual opening environment does not match requested environment."
+                "Child's verified opening environment does not match requested environment."
             )
         if message["kind"] == "resume":
             opid = message["operation_id"]
@@ -582,8 +590,10 @@ def _child_run(message: dict[str, Any]) -> dict[str, Any]:
             descriptor = _read_json(
                 project.storage.operation_descriptor_path(opid).read_text(encoding="utf-8")
             )
-            if (op["environment_id"] not in (None, selected)
-                    or op["operation_type"] != "translate"
+            if (op["environment_id"] is not None
+                    and not project.environments.equivalent_executor_identities(
+                        selected, op["environment_id"],
+                    ) or op["operation_type"] != "translate"
                     or descriptor.get("translator_class") != {
                 "module": TRANSLATOR_MODULE, "qualname": TRANSLATOR_TYPE
             }):
@@ -629,7 +639,9 @@ def _child_run(message: dict[str, Any]) -> dict[str, Any]:
             result_kind = "reused"
         if operation["status"] != "complete" or (
             result_kind == "executed"
-            and operation["environment_id"] != project.environments.opening_id
+            and not project.environments.equivalent_executor_identities(
+                operation["environment_id"], project.environments.opening_id,
+            )
         ):
             raise SecondaryCoordinatorError(
                 "Child operation did not complete with its executor provenance."
