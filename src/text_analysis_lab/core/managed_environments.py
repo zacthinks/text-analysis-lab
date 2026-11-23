@@ -385,12 +385,13 @@ def _read_cache_manifest(target: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             or any(not isinstance(x, str) or _EXTRA.fullmatch(x) is None
                    for x in request["teal_extras"])
             or request["teal_extras"] != sorted(set(request["teal_extras"]))
-            or request["gpu"] not in ("auto", True, False)
+            or not (type(request["gpu"]) is bool or request["gpu"] == "auto")
             or _request_key(request) != target.name
             or not isinstance(marker["observed_fingerprint"], str)
             or re.fullmatch(r"[a-f0-9]{64}", marker["observed_fingerprint"]) is None
             or marker["fallback_reason"] is not None
             and (request["gpu"] != "auto"
+                 or not isinstance(marker["fallback_reason"], str)
                  or marker["fallback_reason"] not in _FALLBACK_REASONS)):
         raise ManagedEnvironmentError("Invalid managed cache metadata.")
     return request, marker
