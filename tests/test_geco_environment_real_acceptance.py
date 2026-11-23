@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+from urllib.request import ProxyHandler, Request, build_opener
 from pathlib import Path
 
 import pandas as pd
@@ -83,7 +84,10 @@ def test_actual_child_exploratory_geometry_and_server(tmp_path, second_python, m
         linked = project.geco.create(
             "coding", documents=documents, text_field="text", geometry=count,
         )
-        geometry_name = linked.coder.geometries()[0]["name"]
+        geometry = linked.coder.geometries()[0]
+        geometry_name = geometry["name"]
+        geometry_id = int(geometry["geometry_id"])
+        linked.coder.saved_semantic_searches.register("cat runs")
         linked.close()
         default_id = project.environments.default["environment_id"]
         child_id = _register_second(root, second_python)
@@ -128,6 +132,37 @@ def test_actual_child_exploratory_geometry_and_server(tmp_path, second_python, m
             assert server.execution_device == "cpu"
             assert not server.closed
             assert project.environments.default["environment_id"] == child_id
+
+            # Trigger GeCo's actual semantic-search Dash callback *over HTTP*.
+            # This loads the external TeAL geometry and executes the linked
+            # frozen text-to-vector provider in the running server child.
+            callback = {
+                "output": "semantic-result-candidate.data",
+                "outputs": {"id": "semantic-result-candidate", "property": "data"},
+                "inputs": [
+                    {"id": "semantic-active-query", "property": "data",
+                     "value": "cat runs"},
+                    {"id": "geometry-dropdown", "property": "value",
+                     "value": geometry_id},
+                ],
+                "state": [],
+                "changedPropIds": ["semantic-active-query.data"],
+            }
+            request = Request(
+                server.url.rstrip("/") + "/_dash-update-component",
+                data=json.dumps(callback).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with build_opener(ProxyHandler({})).open(request, timeout=30) as response:
+                assert response.status == 200
+                payload = json.loads(response.read())
+            candidate = payload["response"]["semantic-result-candidate"]["data"]
+            assert candidate["query"] == "cat runs"
+            assert candidate["geometry_id"] == geometry_id
+            assert candidate["status"] == ""
+            assert candidate["token"]
+            assert len(candidate["bounds"]) == 2
 
             # One strict port collision must fail without killing the first
             # live child or the parent interpreter.
