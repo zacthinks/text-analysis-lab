@@ -24,6 +24,8 @@ jobs:
           - windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
