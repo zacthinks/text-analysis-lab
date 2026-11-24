@@ -598,7 +598,7 @@ class EnvironmentRegistry:
         )
         if name is not None:
             self._assign_name(result["environment_id"], name)
-        result["name"] = self.get(result["environment_id"])["name"]
+        result["name"] = name if name is not None else self.get(result["environment_id"])["name"]
         return result
 
     def plan_from_file(
@@ -621,7 +621,7 @@ class EnvironmentRegistry:
         result = create_from_file(self, source, python=python)
         if name is not None:
             self._assign_name(result["environment_id"], name)
-        result["name"] = self.get(result["environment_id"])["name"]
+        result["name"] = name if name is not None else self.get(result["environment_id"])["name"]
         return result
 
     def _existing_named_environment(self, name: str) -> dict[str, Any] | None:
