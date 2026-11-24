@@ -779,8 +779,15 @@ be substantiated.
 
 Names are project-local aliases: they do not affect immutable software
 fingerprints, portable lock identity, operation history or execution-platform
-provenance. Names are unique ignoring case; the `env_` prefix is reserved
-for immutable identifiers. One installed identity may have multiple names.
+provenance. **Every registered environment has a persisted name**, including
+the opening interpreter and historical environments opened from older Projects.
+Without an explicit name, TeAL generates `env-` plus the first eight hexadecimal
+characters of the immutable fingerprint, extending the prefix on collisions.
+Generated names are selectable and renameable, not temporary display labels.
+Names are unique ignoring case; the `env_` (immutable IDs) and `env-`
+(automatic names) prefixes are reserved. Explicit names take precedence and
+replace auto-generated names; renaming an automatic name does not recreate it.
+One installed identity may have multiple researcher-assigned names.
 
 ```python
 gpu = project.environments.create(
@@ -789,6 +796,12 @@ gpu = project.environments.create(
 project.environments.get("gpu")  # same immutable ID as gpu["environment_id"]
 project.environments.set_default("GPU")  # only for this open Project instance
 project.environments.rename("GPU", "NVIDIA GPU")
+
+# Omitting the name generates and persists a selectable fingerprint alias.
+other = project.environments.create(gpu=False)
+other["name"]  # e.g., "env-a83f12c9"
+project.environments.get(other["name"])
+project.environments.rename(other["name"], "CPU")
 ```
 
 External dependency files can also be used directly:
