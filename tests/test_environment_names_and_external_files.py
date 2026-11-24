@@ -1,0 +1,212 @@
+"""Named environments and external dependency inventories (no TeAL injection)."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+
+from text_analysis_lab import Project
+from text_analysis_lab.core import environments, external_environments, managed_environments
+from text_analysis_lab.core.environments import (
+    EnvironmentNotFoundError,
+    EnvironmentRegistryError,
+)
+
+
+def _observation(version="1", *, teal=True):
+    distributions = [{"name": "example", "version": version}]
+    if teal:
+        distributions.append({"name": "text-analysis-lab", "version": "0.12.2"})
+    return {
+        "schema_version": 2,
+        "kind": "observed_unlocked",
+        "python": {"implementation": "cpython", "version": "3.11.15"},
+        "teal": {"version": "0.12.2" if teal else "0+unknown"},
+        "distributions": distributions,
+    }
+
+
+@pytest.fixture
+def project(tmp_path, monkeypatch):
+    monkeypatch.setattr(environments, "observe_environment", lambda: _observation())
+    instance = Project.create(tmp_path / "project", "Test")
+    yield instance
+    instance.close()
+
+
+def test_names_persist_are_case_insensitive_and_leave_ids_unchanged(project):
+    original = project.environments.default["environment_id"]
+    project.environments._assign_name(original, "GPU")
+    assert project.environments.get("gpu")["environment_id"] == original
+    assert project.environments.set_default("gPu")["environment_id"] == original
+    assert project.environments.default["name"] == "GPU"
+    renamed = project.environments.rename("gpu", "NVIDIA GPU")
+    assert renamed["environment_id"] == original
+    assert renamed["fingerprint"] == project.environments.get(original)["fingerprint"]
+    assert project.environments.get("nvidia gpu")["environment_id"] == original
+    with pytest.raises(EnvironmentNotFoundError):
+        project.environments.get("GPU")
+    with pytest.raises(EnvironmentRegistryError, match="already in use"):
+        project.environments._assign_name(
+            "env_" + "a" * 64, "nvidia gpu"
+        )
+    with pytest.raises(EnvironmentRegistryError, match="reserved"):
+        project.environments._assign_name(original, "env_not_an_identifier")
+    with pytest.raises(EnvironmentRegistryError, match="whitespace"):
+        project.environments.rename("NVIDIA GPU", " NVIDIA GPU")
+    reopened = Project.open(project.path)
+    try:
+        assert reopened.environments.get("NVIDIA GPU")["environment_id"] == original
+        assert reopened.environments.default["environment_id"] == reopened.environments.opening_id
+        assert reopened.environments.get(original)["name"] == "NVIDIA GPU"
+    finally:
+        reopened.close()
+
+
+def test_rename_preserves_operation_provenance(project):
+    original = project.environments.default["environment_id"]
+    project.environments._assign_name(original, "CPU")
+    # Genuine catalog-backed provenance record, not a display-string rewrite.
+    before = project.catalog.con.execute(
+        "SELECT COUNT(*) FROM operations WHERE environment_id = ?", (original,)
+    ).fetchone()[0]
+    project.environments.rename("CPU", "Main CPU")
+    after = project.catalog.con.execute(
+        "SELECT COUNT(*) FROM operations WHERE environment_id = ?", (original,)
+    ).fetchone()[0]
+    assert before == after
+    assert project.environments.get("Main CPU")["environment_id"] == original
+
+
+def test_distinct_names_are_unique_across_identities(project):
+    first = project.environments.default["environment_id"]
+    second_observation = environments.normalize_environment(_observation("2"))
+    second = project.catalog.register_environment(
+        fingerprint=environments.fingerprint_observation(second_observation),
+        schema_version=2,
+        observation_json=environments._canonical_json(second_observation),
+    )
+    project.environments._assign_name(first, "GPU")
+    project.environments._assign_name(second, "Legacy")
+    with pytest.raises(EnvironmentRegistryError, match="already in use"):
+        project.environments.rename("Legacy", "gpu")
+    assert project.environments.get("LEGACY")["environment_id"] == second
+    project.environments.set_default("LEGACY")
+    assert project.environments.resolve() == second
+    assert project.environments.resolve("GPU") == first
+
+
+def test_named_execution_does_not_silently_use_parent(project, monkeypatch):
+    other = environments.normalize_environment(_observation("2"))
+    external_id = project.catalog.register_environment(
+        fingerprint=environments.fingerprint_observation(other),
+        schema_version=2, observation_json=environments._canonical_json(other),
+    )
+    project.environments._assign_name(external_id, "Legacy")
+    called = []
+
+    def delegate(*args, **kwargs):
+        called.append(args[1])
+        raise EnvironmentRegistryError("Incompatible external environment")
+
+    import text_analysis_lab.core.secondary_coordinator as coordinator
+    monkeypatch.setattr(coordinator, "delegate_translate", delegate)
+    with pytest.raises(EnvironmentRegistryError, match="Incompatible"):
+        project.translate(object(), "not-an-artifact", environment="legacy")
+    assert called == [external_id]
+
+
+@pytest.fixture
+def fake_external(tmp_path, monkeypatch):
+    root = tmp_path / "user-cache"
+    monkeypatch.setattr(managed_environments, "_cache_root", lambda: root)
+    monkeypatch.setattr(managed_environments, "_uv", lambda: "uv")
+    calls = []
+
+    def command(args, **kwargs):
+        calls.append(list(args))
+        if args[1] == "venv":
+            executable = managed_environments._interpreter(Path(args[2]))
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_bytes(b"fake-python")
+        return ""
+
+    monkeypatch.setattr(managed_environments, "_run_command", command)
+    monkeypatch.setattr(
+        external_environments, "_probe",
+        lambda exe, python: _observation("9", teal=False),
+    )
+    return root, calls
+
+
+def test_external_requirements_install_and_reuse_without_teal(project, tmp_path, fake_external):
+    root, calls = fake_external
+    source = tmp_path / "requirements.txt"
+    source.write_text("example==9\n", encoding="utf-8")
+    first = project.environments.create_from_file(source, name="Legacy", python="3.11.15")
+    second = project.environments.create_from_file(source, python="3.11.15")
+    assert first["environment_id"] == second["environment_id"]
+    assert second["reused"] is True
+    assert first["source"]["kind"] == "requirements"
+    assert first["portability"].startswith("observed_unlocked")
+    assert project.environments.get("legacy")["kind"] == "observed_unlocked"
+    assert project.environments.get("Legacy")["observation"]["teal"]["version"] == "0+unknown"
+    assert len([c for c in calls if c[:2] == ["uv", "venv"]]) == 1
+    assert len([c for c in calls if c[:3] == ["uv", "pip", "install"]]) == 1
+    assert any((target / "external.json").exists() for target in root.iterdir() if target.is_dir())
+    reopened = Project.open(project.path)
+    try:
+        assert reopened.environments.get("Legacy")["environment_id"] == first["environment_id"]
+        assert reopened.environments.bound_interpreter("LEGACY").is_file()
+    finally:
+        reopened.close()
+
+
+def test_uv_lock_install_keeps_external_portability_separate(project, tmp_path, fake_external):
+    _, calls = fake_external
+    project_file = tmp_path / "pyproject.toml"
+    project_file.write_text('[project]\nname = "example"\nversion = "0.1.0"\n', encoding="utf-8")
+    lock = tmp_path / "uv.lock"
+    lock.write_text('version = 1\npackage = []\n', encoding="utf-8")
+    planned = project.environments.plan_from_file(lock, project_file=project_file, python="3.11.15")
+    assert planned["kind"] == "external_uv_lock"
+    first = project.environments.create_from_file(
+        lock, project_file=project_file, name="Experiment", python="3.11.15",
+    )
+    assert first["source"]["sha256"] == hashlib.sha256(lock.read_bytes()).hexdigest()
+    assert any(c[:2] == ["uv", "sync"] and "--frozen" in c for c in calls)
+    assert project.environments.get("Experiment")["kind"] == "observed_unlocked"
+    assert project.environments.get("Experiment")["sources"][0]["specification_kind"] == "external_uv_lock"
+
+
+def test_source_failure_has_no_environment_registration(project, tmp_path, fake_external, monkeypatch):
+    root, calls = fake_external
+    source = tmp_path / "requirements.txt"
+    source.write_text("example==9\n")
+    before = len(project.environments.list())
+
+    def failure(args, **kwargs):
+        if args[1:3] == ["pip", "install"]:
+            raise managed_environments.ManagedEnvironmentError("uv resolver failed")
+        if args[1] == "venv":
+            executable = managed_environments._interpreter(Path(args[2]))
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_bytes(b"fake")
+        return ""
+
+    monkeypatch.setattr(managed_environments, "_run_command", failure)
+    with pytest.raises(managed_environments.ManagedEnvironmentError, match="resolver"):
+        project.environments.create_from_file(source, python="3.11.15")
+    assert len(project.environments.list()) == before
+    assert not any((d / "external.json").exists() for d in root.iterdir() if d.is_dir())
+
+
+@pytest.mark.parametrize("bad", ["-r other.txt\n", "-e ./local\n", "../project\n"])
+def test_rejects_incomplete_requirements_snapshots(tmp_path, bad):
+    source = tmp_path / "requirements.txt"
+    source.write_text(bad)
+    with pytest.raises(managed_environments.ManagedEnvironmentError):
+        external_environments.plan_from_file(source, python="3.11.15")
