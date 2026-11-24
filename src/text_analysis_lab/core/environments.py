@@ -45,15 +45,19 @@ _ENVIRONMENT_ID = re.compile(r"^env_[a-f0-9]{64}$")
 _RESERVED_ENVIRONMENT_NAME = re.compile(r"^env[_-]", re.IGNORECASE)
 
 
-def _environment_name(value: str) -> tuple[str, str]:
-    """Validate a display alias and return its case-folded uniqueness key."""
+def _environment_name(
+    value: str, *, allow_generated: bool = False,
+) -> tuple[str, str]:
+    """Validate an alias; only existing names may use the generated namespace."""
     if not isinstance(value, str):
         raise EnvironmentRegistryError("Environment name must be a string.")
     if not value or value != value.strip() or len(value) > 100:
         raise EnvironmentRegistryError(
             "Environment name must be 1-100 characters with no outer whitespace."
         )
-    if _RESERVED_ENVIRONMENT_NAME.match(value):
+    if _RESERVED_ENVIRONMENT_NAME.match(value) and not (
+        allow_generated and value.casefold().startswith("env-")
+    ):
         raise EnvironmentRegistryError(
             "Environment names beginning with 'env_' or 'env-' are reserved."
         )
@@ -648,7 +652,7 @@ class EnvironmentRegistry:
 
     def rename(self, old_name: str, new_name: str) -> dict[str, Any]:
         """Rename a project alias without changing its environment or provenance."""
-        _, old_key = _environment_name(old_name)
+        _, old_key = _environment_name(old_name, allow_generated=True)
         normalized, new_key = _environment_name(new_name)
         try:
             environment_id = self._catalog.rename_environment_name(
