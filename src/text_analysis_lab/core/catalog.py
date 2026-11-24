@@ -233,7 +233,8 @@ class ProjectCatalog:
                 CREATE TABLE IF NOT EXISTS environment_names (
                     name TEXT NOT NULL,
                     name_key TEXT NOT NULL PRIMARY KEY,
-                    environment_id TEXT NOT NULL REFERENCES project_environments(environment_id)
+                    environment_id TEXT NOT NULL REFERENCES project_environments(environment_id),
+                    generated INTEGER NOT NULL DEFAULT 0 CHECK (generated IN (0, 1))
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_environment_names_identity
@@ -335,15 +336,74 @@ class ProjectCatalog:
                 column="coordinator_request_id",
                 definition="TEXT",
             )
+            self._ensure_column(
+                con,
+                table="environment_names",
+                column="generated",
+                definition="INTEGER NOT NULL DEFAULT 0",
+            )
             con.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS "
                 "idx_operations_coordinator_request "
                 "ON operations(coordinator_request_id)"
             )
+        # Older registries may contain nameless historical observations.
+        # Complete the idempotent backfill under a SQLite write lock.
+        self.ensure_environment_names()
 
     # ------------------------------------------------------------------
     # Immutable environment observations (project history, not executors)
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _ensure_generated_environment_name(
+        con: sqlite3.Connection, environment_id: str, fingerprint: str,
+    ) -> None:
+        """Insert a real, unique env- alias only when no aliases exist.
+
+        The caller must hold a write transaction, which serializes competing
+        registrations and avoids races when short fingerprints collide.
+        """
+        existing = con.execute(
+            "SELECT 1 FROM environment_names WHERE environment_id = ? LIMIT 1",
+            (environment_id,),
+        ).fetchone()
+        if existing is not None:
+            return
+        for length in range(8, len(fingerprint) + 1):
+            name = "env-" + fingerprint[:length]
+            occupied = con.execute(
+                "SELECT 1 FROM environment_names WHERE name_key = ?",
+                (name,),
+            ).fetchone()
+            if occupied is None:
+                con.execute(
+                    "INSERT INTO environment_names "
+                    "(name, name_key, environment_id, generated) VALUES (?, ?, ?, 1)",
+                    (name, name, environment_id),
+                )
+                return
+        raise ValueError("Unable to generate a unique environment name.")
+
+    def ensure_environment_names(self) -> None:
+        """Backfill unnamed historical environments without changing identities."""
+        con = self.con
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            rows = con.execute(
+                "SELECT e.environment_id, e.fingerprint FROM project_environments AS e "
+                "WHERE NOT EXISTS (SELECT 1 FROM environment_names AS n "
+                "                  WHERE n.environment_id = e.environment_id) "
+                "ORDER BY e.registered_at, e.rowid"
+            ).fetchall()
+            for row in rows:
+                self._ensure_generated_environment_name(
+                    con, str(row["environment_id"]), str(row["fingerprint"]),
+                )
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
 
     def register_environment(
         self,
@@ -392,6 +452,7 @@ class ProjectCatalog:
                 raise ValueError(
                     "Stored environment fingerprint conflicts with the new observation."
                 )
+            self._ensure_generated_environment_name(con, environment_id, fingerprint)
             con.commit()
         except Exception:
             con.rollback()
@@ -443,7 +504,7 @@ class ProjectCatalog:
     def environment_names_for(self, environment_id: str) -> list[str]:
         rows = self.con.execute(
             "SELECT name FROM environment_names WHERE environment_id = ? "
-            "ORDER BY rowid", (environment_id,),
+            "ORDER BY generated, rowid", (environment_id,),
         ).fetchall()
         return [str(row["name"]) for row in rows]
 
@@ -458,13 +519,20 @@ class ProjectCatalog:
                 "SELECT environment_id FROM environment_names WHERE name_key = ?",
                 (name_key,),
             ).fetchone()
+            if existing is not None and existing["environment_id"] != environment_id:
+                raise ValueError(f"Environment name {name!r} is already in use.")
             if existing is None:
                 con.execute(
                     "INSERT INTO environment_names(name, name_key, environment_id) "
                     "VALUES (?, ?, ?)", (name, name_key, environment_id),
                 )
-            elif existing["environment_id"] != environment_id:
-                raise ValueError(f"Environment name {name!r} is already in use.")
+            # An explicit name takes over an auto-generated name, but
+            # preserves any other researcher-assigned aliases.
+            con.execute(
+                "DELETE FROM environment_names WHERE environment_id = ? "
+                "AND generated = 1",
+                (environment_id,),
+            )
             con.commit()
         except Exception:
             con.rollback()
@@ -490,7 +558,8 @@ class ProjectCatalog:
             if collision is not None and old_key != new_key:
                 raise ValueError(f"Environment name {new_name!r} is already in use.")
             con.execute(
-                "UPDATE environment_names SET name = ?, name_key = ? WHERE name_key = ?",
+                "UPDATE environment_names SET name = ?, name_key = ?, generated = 0 "
+                "WHERE name_key = ?",
                 (new_name, new_key, old_key),
             )
             con.commit()
