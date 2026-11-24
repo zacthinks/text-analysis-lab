@@ -821,8 +821,13 @@ A standalone lock must identify one project root. Workspace/local dependencies
 that require unavailable source files fail clearly rather than being guessed;
 recursive requirements and relative/editable references likewise require
 self-contained inputs. External projects are not installed themselves
-(`--no-install-project`). Repeated creation under the same name reuses the
-alias if the realized immutable environment identity is unchanged.
+(`--no-install-project`). Named creation checks the project-local alias before any installation.
+If a case-insensitive name already exists, TeAL emits a `UserWarning` and
+returns that registered environment immediately, even if the newly supplied
+installation options or dependency file differ. No dependency resolution or
+new environment creation happens. Use a different name to create a new
+environment, or `project.environments.rename(old, new)` to rename one.
+Unnamed creation continues to provision or reuse by the underlying request.
 The original supplied file bytes are retained in
 the user-level cache and their content hashes, plus the actual installed
 distribution identity, are recorded in the Project's SQLite catalog. No
