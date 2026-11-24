@@ -332,14 +332,14 @@ def _child_main() -> int:
         if record["focus"]:
             if not linked.is_focus_coder:
                 raise GeCoLaunchError("Requested Focus Coding for an exploratory workspace.")
-            server = linked.launch_focus(
+            server = linked._launch_focus_native(
                 host=record["host"], port=record["port"],
                 debug=record["debug"], use_reloader=False,
             )
         else:
             if linked.is_focus_coder:
                 raise GeCoLaunchError("Focus Coding requires launch_focus(...).")
-            server = linked.launch(
+            server = linked._launch_native(
                 host=record["host"], port=record["port"],
                 debug=record["debug"], use_reloader=False,
                 warmup=record["warmup"], device=record["device"],

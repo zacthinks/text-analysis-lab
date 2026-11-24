@@ -134,8 +134,8 @@ def test_current_interpreter_preserves_native_server(routing):
     expected = _Server()
     native_calls = []
     linked = SimpleNamespace(
-        launch=lambda **kwargs: (native_calls.append(kwargs), expected)[1],
-        launch_focus=lambda **kwargs: expected,
+        _launch_native=lambda **kwargs: (native_calls.append(kwargs), expected)[1],
+        _launch_focus_native=lambda **kwargs: expected,
     )
     monkeypatch.setattr(manager, "open", lambda name: linked)
     assert manager.launch("coding", environment="local", device="cpu") is expected
@@ -206,3 +206,135 @@ def test_child_handle_detects_abrupt_exit():
         assert handle.closed
     finally:
         handle.close()
+
+
+
+def _linked(manager, name, mode, coder):
+    from text_analysis_lab.integrations.geco import LinkedGeCoWorkspace
+
+    return LinkedGeCoWorkspace(
+        manager, {"name": name, "mode": mode, "workspace_path": f"workspaces/{name}.geco"},
+        coder, None,
+    )
+
+
+def test_linked_local_launch_preserves_native_arguments_and_manager_cleanup(routing):
+    project, manager, active, _, _, monkeypatch = routing
+    active[0] = "local"
+    native_calls = []
+    handles = []
+
+    def native(**kwargs):
+        server = _Server()
+        native_calls.append(kwargs)
+        handles.append(server)
+        return server
+
+    linked = _linked(manager, "coding", "explore", SimpleNamespace(launch=native))
+    monkeypatch.setattr(manager, "open", lambda name: linked)
+    first = linked.launch(device="cpu", warmup=False, use_reloader=True)
+    assert native_calls[-1] == {
+        "device": "cpu", "warmup": False, "use_reloader": True,
+    }
+    assert first.url.startswith("http://") and first.execution_device == "cpu"
+    assert not first.closed
+    second = manager.launch("coding", environment="local", device="cpu", warmup=False)
+    assert second is handles[-1] and second is not first
+    assert native_calls[-1]["use_reloader"] is False
+    assert native_calls[-1]["device"] == "cpu"
+    project.close()
+    assert first.closed and second.closed
+
+
+def test_linked_child_routes_explicit_default_and_manager_equivalently(routing):
+    project, manager, active, calls, servers, monkeypatch = routing
+    linked = _linked(
+        manager, "coding", "explore",
+        SimpleNamespace(launch=lambda **kwargs: pytest.fail("native GeCo was invoked")),
+    )
+    monkeypatch.setattr(manager, "open", lambda name: linked)
+    first = linked.launch(environment="child-B", device="cpu", warmup=False)
+    assert calls[-1]["environment"] == "child-B"
+    assert calls[-1]["device"] == "cpu"
+    assert first.url and first.execution_device == "cpu"
+    second = manager.launch("coding", environment="child-B", device="cpu", warmup=False)
+    assert calls[-1]["environment"] == "child-B"
+    assert calls[-1]["device"] == "cpu"
+    active[0] = "child-C"
+    third = linked.launch(device="auto", warmup=False)
+    assert calls[-1]["environment"] == "child-C"
+    assert calls[-1]["device"] == "auto"
+    assert all(not server.closed for server in (first, second, third))
+    project.close()
+    assert all(server.closed for server in servers)
+
+
+def test_linked_child_forwards_gpu_request_without_claiming_cuda_execution(routing):
+    project, manager, _, calls, _, monkeypatch = routing
+    linked = _linked(manager, "coding", "explore", object())
+    monkeypatch.setattr(manager, "open", lambda name: linked)
+
+    def simulated_child(*args, **kwargs):
+        server = _Server()
+        server.execution_device = "cuda:0"
+        calls.append(kwargs)
+        return server
+
+    monkeypatch.setattr(
+        "text_analysis_lab.integrations.geco_process.launch", simulated_child,
+    )
+    server = linked.launch(environment="child-B", device="cuda")
+    assert calls[-1]["device"] == "cuda"
+    assert server.execution_device == "cuda:0"
+    assert server.closed is False
+    project.close()
+    assert server.closed
+
+
+def test_linked_focus_routes_environment_and_preserves_native_focus_options(routing):
+    project, manager, _, calls, servers, monkeypatch = routing
+    native_calls = []
+
+    def native_focus(**kwargs):
+        native_calls.append(kwargs)
+        return _Server()
+
+    linked = _linked(
+        manager, "audit", "focus_coder",
+        SimpleNamespace(launch_focus_coder=native_focus),
+    )
+    monkeypatch.setattr(manager, "open", lambda name: linked)
+    linked._manifest["focus_session_id"] = 7
+    local = linked.launch_focus(
+        environment="local", session_id=7, allow_unsure=False,
+        use_reloader=False,
+    )
+    assert native_calls[-1] == {
+        "session_id": 7, "allow_unsure": False, "use_reloader": False,
+    }
+    child = linked.launch_focus(environment="child-B", use_reloader=False)
+    assert calls[-1]["focus"] is True
+    assert calls[-1]["warmup"] is False and calls[-1]["device"] is None
+    with pytest.raises(Exception, match="native.*options|Cross-interpreter"):
+        linked.launch_focus(environment="child-B", session_id=7)
+    with pytest.raises(Exception, match="native.*options|Cross-interpreter"):
+        linked.launch_focus(environment="child-B", use_reloader=True)
+    project.close()
+    assert local.closed and child.closed and servers[-1].closed
+
+
+def test_geco_dependency_metadata_has_no_removed_extras():
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    assert metadata["project"]["optional-dependencies"]["geco"] == ["geometric-coder"]
+    all_dependencies = (
+        metadata["project"]["optional-dependencies"]["all"]
+        + metadata["dependency-groups"]["dev"]
+    )
+    assert any("geometric-coder" in item for item in all_dependencies)
+    assert all("geometric-coder[" not in item for item in all_dependencies)
+    assert not any(
+        item == "geometric-coder" for item in metadata["project"]["dependencies"]
+    )
