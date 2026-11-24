@@ -6,27 +6,42 @@ TeAL follows Semantic Versioning. Before 1.0, backward-incompatible public API c
 
 ## [Unreleased]
 
+No changes recorded after the v0.13.0 release candidate.
+
+## [0.13.0] - Unreleased (preparing)
+
 ### Added
+
+- **Distinct software and execution-platform provenance** (TeAL #85, #94): record persistent, portable software-environment identities separately from local OS/hardware/accelerator observations. Capture the opening interpreter and actual execution provenance without fabricating historical records.
+- **Verified secondary Python execution** (TeAL #86, #94): delegate supported built-in TextLength translations and compatible resumptions to a selected registered interpreter with isolated same-interpreter worker pools, checked installation identity, and execution-attempt provenance. Other translators and arbitrary Pipelines are not yet cross-interpreter operations.
+- **Explicit uv-managed environments** (TeAL #88, #94): plan, install, reuse and rediscover verified user-local Python/TeAL/extras environments. `gpu="auto"` supports verified accelerator preference with CPU fallback; `gpu=True` requires a working supported accelerator. Installation does not modify the opening notebook.
+- **Portable conditional software specifications** (TeAL #89, #94): create, export, validate, import and reconstruct locked TeAL base/parallel CPU software specifications using exact Python patches, immutable TeAL source identity and verified applicable dependency resolutions. Imported specifications never install automatically; current support does not include GeCo or accelerator-heavy locks.
+- **Selected-interpreter GeCo launches** (TeAL #90, #94): launch and supervise an existing linked exploratory or Focus workspace in a compatible registered environment, independently specifying the GeCo runtime device.
+- **Named environments and external dependency files** (TeAL #93–#94): persist project-local case-insensitive environment names; optionally construct from standalone `uv.lock`, `requirements.txt` or pip-freeze input with explicit provenance and honest observed/unlocked status.
 
 ### Changed
 
-### Fixed
+- The active environment default is scoped to the open `Project` instance; it is not a persistent global preference, and environment selection never rebinds the parent Python process.
+- Explicit environment creation or delegated launch performs local verification and fails rather than silently using the parent interpreter. OS/driver/platform changes are observed for provenance, not treated as automatic CPU-resume prohibitions.
+- Linked GeCo retains ordinary current-interpreter launches, with the new `environment=` option selecting an alternate interpreter when appropriate.
 
-### Deprecated
+### Compatibility and release notes
 
-### Removed
+- Preserve existing scientifically valid Projects, artifacts, frozen operator/device constraints, and historical work. The unused experimental mixed environment/platform registry is not a supported migration target.
+- Managed observed/unlocked environments, portable CPU locks, and external dependency-file installations have **different reproducibility guarantees**; none guarantees bit-identical numerical results or transfers scientific model weights.
+- Release preparation only: verify TeAL #94 is merged to `main`, exact-head CI, platform acceptance and linked GeCo smoke tests, version consistency, and build artifacts before publishing `v0.13.0`.
 
-## [0.12.2] - Unreleased (preparing)
+## [0.12.2] - 2026-11-19
 
 ### Added
 
-- Optional `--no-warmup` flag for `teal geco` standard linked-workspace launches, forwarding `warmup=False` to compatible GeCo versions. Without the flag, existing launch behavior is unchanged (pending PR #77).
+- Optional `--no-warmup` flag for `teal geco` standard linked-workspace launches, forwarding `warmup=False` to compatible GeCo versions. Without the flag, existing launch behavior is unchanged (TeAL #77).
 
 ### Notes
 
 - This patch release prepares the CLI opt-out for GeCo's default-enabled launch-time runtime preparation. GeCo owns UMAP and semantic-library warm-up; TeAL does not alter the UMAP fitting algorithm, training semantics, or saved artifacts.
 - The CLI option depends on a GeCo version supporting `GeometricCoder.launch(warmup=False)`. Focus Coding behavior is unchanged.
-- Release publication is pending dependency integration and CI; no version tag or GitHub release has been created.
+- Historical note: v0.12.2 is tagged; the environments and platform features are reserved for v0.13.0.
 
 ## [0.12.1] - 2026-11-15
 
