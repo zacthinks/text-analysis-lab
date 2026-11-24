@@ -243,9 +243,10 @@ class ProjectCatalog:
                     environment_id TEXT NOT NULL REFERENCES project_environments(environment_id),
                     specification_kind TEXT NOT NULL,
                     specification_sha256 TEXT NOT NULL,
-                    metadata_sha256 TEXT,
+                    metadata_sha256 TEXT NOT NULL DEFAULT '',
                     registered_at TEXT NOT NULL,
-                    PRIMARY KEY (environment_id, specification_kind, specification_sha256)
+                    PRIMARY KEY (environment_id, specification_kind,
+                                 specification_sha256, metadata_sha256)
                 );
 
                 CREATE TABLE IF NOT EXISTS environment_realizations (
@@ -420,7 +421,7 @@ class ProjectCatalog:
                 "INSERT OR IGNORE INTO environment_sources "
                 "(environment_id, specification_kind, specification_sha256, "
                 "metadata_sha256, registered_at) VALUES (?, ?, ?, ?, ?)",
-                (environment_id, kind, source_sha256, metadata_sha256, utc_now_iso()),
+                (environment_id, kind, source_sha256, metadata_sha256 or "", utc_now_iso()),
             )
 
     def environment_sources_for(self, environment_id: str) -> list[dict[str, Any]]:
