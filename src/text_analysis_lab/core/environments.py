@@ -13,6 +13,7 @@ import os
 import platform
 import re
 import sys
+import warnings
 from importlib import metadata
 from pathlib import Path
 from threading import RLock
@@ -588,7 +589,9 @@ class EnvironmentRegistry:
     ) -> dict[str, Any]:
         """Install/reuse a managed interpreter; optionally assign a project alias."""
         if name is not None:
-            name, _ = _environment_name(name)
+            existing = self._existing_named_environment(name)
+            if existing is not None:
+                return existing
         from text_analysis_lab.core.managed_environments import create
         result = create(
             self, python=python, teal=teal, teal_extras=teal_extras, gpu=gpu,
@@ -611,13 +614,30 @@ class EnvironmentRegistry:
     ) -> dict[str, Any]:
         """Provision an external dependency specification without adding TeAL."""
         if name is not None:
-            name, _ = _environment_name(name)
+            existing = self._existing_named_environment(name)
+            if existing is not None:
+                return existing
         from text_analysis_lab.core.external_environments import create_from_file
         result = create_from_file(self, source, python=python)
         if name is not None:
             self._assign_name(result["environment_id"], name)
             result["name"] = name
         return result
+
+    def _existing_named_environment(self, name: str) -> dict[str, Any] | None:
+        """Return a registered name before attempting any provisioning."""
+        normalized, key = _environment_name(name)
+        row = self._catalog.get_environment_by_name(key)
+        if row is None:
+            return None
+        warnings.warn(
+            f"Environment name {normalized!r} already exists; returning its registered "
+            "environment without creating another. Choose a new name to create a "
+            "different environment, or use rename() to rename the existing one.",
+            UserWarning,
+            stacklevel=3,
+        )
+        return self._public_row(row)
 
     def _assign_name(self, environment_id: str, name: str) -> None:
         normalized, key = _environment_name(name)
