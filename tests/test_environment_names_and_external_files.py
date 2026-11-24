@@ -66,18 +66,19 @@ def test_names_persist_are_case_insensitive_and_leave_ids_unchanged(project):
         reopened.close()
 
 
-def test_rename_preserves_operation_provenance(project):
+def test_rename_preserves_operation_provenance(project, tmp_path):
     original = project.environments.default["environment_id"]
     project.environments._assign_name(original, "CPU")
-    # Genuine catalog-backed provenance record, not a display-string rewrite.
-    before = project.catalog.con.execute(
-        "SELECT COUNT(*) FROM operations WHERE environment_id = ?", (original,)
-    ).fetchone()[0]
+    csv = tmp_path / "sample.csv"
+    csv.write_text("text\\nhello world\\n", encoding="utf-8")
+    artifact = project.read_csv(csv, text_fields="text", metadata_fields=None)
+    operation = project.operation_for_artifact(artifact)
+    assert operation["environment_id"] == original
+    before = project.catalog.get_operation(operation["operation_id"])
     project.environments.rename("CPU", "Main CPU")
-    after = project.catalog.con.execute(
-        "SELECT COUNT(*) FROM operations WHERE environment_id = ?", (original,)
-    ).fetchone()[0]
-    assert before == after
+    after = project.catalog.get_operation(operation["operation_id"])
+    assert after["environment_id"] == before["environment_id"] == original
+    assert after["platform_id"] == before["platform_id"]
     assert project.environments.get("Main CPU")["environment_id"] == original
 
 
