@@ -1,6 +1,6 @@
 """Install ordinary dependency files without assuming TeAL is present.
 
-External requirements inventories and third-party uv.lock files are NOT TeAL's
+External requirements inventories and standalone third-party uv.lock files are NOT TeAL's
 verified portable specifications. All physical installations and source snapshots
 live in the user-level cache, never inside the research Project.
 """
@@ -89,40 +89,64 @@ def _bytes(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def _standalone_lock_project(lock: dict[str, Any]) -> bytes:
+    """Synthesize only the metadata uv needs to sync an independent lock.
+
+    The original project specification is not available and must not be
+    recreated or used to re-resolve. The lock's root package is authoritative.
+    """
+    packages = lock.get("package")
+    if not isinstance(lock.get("version"), int) or not isinstance(packages, list):
+        raise managed.ManagedEnvironmentError("uv.lock has no recognized resolution/package table.")
+    roots = [
+        package for package in packages
+        if isinstance(package, dict)
+        and isinstance(package.get("source"), dict)
+        and any(package["source"].get(key) == "." for key in ("virtual", "editable"))
+    ]
+    if len(roots) != 1:
+        raise managed.ManagedEnvironmentError(
+            "Standalone uv.lock must identify one root project; "
+            "workspace or local project metadata may be required."
+        )
+    root = roots[0]
+    name, version = root.get("name"), root.get("version")
+    python_range = lock.get("requires-python")
+    if (not isinstance(name, str) or not name
+            or not isinstance(version, str) or not version
+            or not isinstance(python_range, str) or not python_range):
+        raise managed.ManagedEnvironmentError(
+            "uv.lock is missing a root project name, version, or Python constraint."
+        )
+    return (
+        "[project]\n"
+        + "name = " + json.dumps(name) + "\n"
+        + "version = " + json.dumps(version) + "\n"
+        + "requires-python = " + json.dumps(python_range) + "\n"
+    ).encode("utf-8")
+
+
 def _request(
-    source: str | Path, *, project_file: str | Path | None, python: str | None,
+    source: str | Path, *, python: str | None,
 ) -> tuple[dict[str, Any], bytes, bytes | None]:
     source_path = Path(source).expanduser().resolve()
     raw = _bytes(source_path)
-    if python is None:
-        python = platform.python_version()
-    if not isinstance(python, str) or _PYTHON.fullmatch(python) is None:
+    if python is not None and (
+        not isinstance(python, str) or _PYTHON.fullmatch(python) is None
+    ):
         raise managed.ManagedEnvironmentError("python must be an exact major.minor.patch version.")
     if source_path.name == "uv.lock":
         kind = "external_uv_lock"
-        metadata_path = (
-            Path(project_file).expanduser().resolve() if project_file is not None
-            else source_path.with_name("pyproject.toml")
-        )
-        if metadata_path.name != "pyproject.toml":
-            raise managed.ManagedEnvironmentError("uv.lock requires a pyproject.toml project file.")
-        metadata_bytes = _bytes(metadata_path)
         try:
             lock = tomllib.loads(raw.decode("utf-8"))
-            project = tomllib.loads(metadata_bytes.decode("utf-8"))
         except (ValueError, UnicodeError) as exc:
-            raise managed.ManagedEnvironmentError("Invalid uv.lock or pyproject.toml TOML.") from exc
-        if not isinstance(lock.get("version"), int) or not isinstance(lock.get("package"), list):
-            raise managed.ManagedEnvironmentError("uv.lock has no recognized resolution/package table.")
-        if not isinstance(project.get("project"), dict) and not isinstance(project.get("tool"), dict):
-            raise managed.ManagedEnvironmentError("pyproject.toml has no project metadata.")
-        if metadata_path.parent != source_path.parent:
-            raise managed.ManagedEnvironmentError("uv.lock and pyproject.toml must be in one directory.")
+            raise managed.ManagedEnvironmentError("Invalid uv.lock TOML.") from exc
+        metadata_bytes = _standalone_lock_project(lock)
+        python_range = lock["requires-python"]
     else:
-        if project_file is not None:
-            raise managed.ManagedEnvironmentError("project_file is only valid with uv.lock.")
         kind = "requirements"
         metadata_bytes = None
+        python_range = None
         try:
             lines = raw.decode("utf-8-sig").splitlines()
         except UnicodeError as exc:
@@ -145,25 +169,23 @@ def _request(
                     "Relative or editable local installs cannot be reproduced from one file."
                 )
     request = {
-        "schema": 1,
+        "schema": 2,
         "kind": kind,
         "python": python,
+        "requires_python": python_range,
         "specification_sha256": hashlib.sha256(raw).hexdigest(),
-        "metadata_sha256": (
-            hashlib.sha256(metadata_bytes).hexdigest() if metadata_bytes is not None else None
-        ),
+        # Generated project metadata is not an independently supplied source.
+        "metadata_sha256": None,
         "host_system": sys.platform,
         "host_architecture": platform.machine().lower(),
     }
     return request, raw, metadata_bytes
 
-
 def plan_from_file(
-    source: str | Path, *, project_file: str | Path | None = None,
-    python: str | None = None,
+    source: str | Path, *, python: str | None = None,
 ) -> dict[str, Any]:
     """Validate inputs without writing to the Project or installing packages."""
-    request, _, _ = _request(source, project_file=project_file, python=python)
+    request, _, _ = _request(source, python=python)
     return {
         **request,
         "actions": ["create user-cache uv venv", "install supplied dependencies",
@@ -174,7 +196,7 @@ def plan_from_file(
     }
 
 
-def _probe(executable: Path, python: str) -> dict[str, Any]:
+def _probe(executable: Path, python: str | None) -> dict[str, Any]:
     output = managed._run_command(
         [str(executable), "-I", "-c", _OBSERVATION_PROBE], timeout=120,
     )
@@ -182,7 +204,7 @@ def _probe(executable: Path, python: str) -> dict[str, Any]:
         observed = normalize_environment(json.loads(output.splitlines()[-1]))
     except (ValueError, IndexError, KeyError, TypeError) as exc:
         raise managed.ManagedEnvironmentError("Cannot verify installed dependency inventory.") from exc
-    if observed["kind"] != "observed_unlocked" or observed["python"]["version"] != python:
+    if observed["kind"] != "observed_unlocked" or (python is not None and observed["python"]["version"] != python):
         raise managed.ManagedEnvironmentError("Managed Python does not match requested patch version.")
     return observed
 
@@ -206,9 +228,13 @@ def _verify(
     source_name = "uv.lock" if request["kind"] == "external_uv_lock" else "requirements.txt"
     if hashlib.sha256(_bytes(spec_root / source_name)).hexdigest() != request["specification_sha256"]:
         raise managed.ManagedEnvironmentError("Cached external dependency specification changed.")
-    if request["metadata_sha256"] is not None:
-        if hashlib.sha256(_bytes(spec_root / "pyproject.toml")).hexdigest() != request["metadata_sha256"]:
-            raise managed.ManagedEnvironmentError("Cached pyproject.toml changed.")
+    if request["kind"] == "external_uv_lock":
+        try:
+            lock = tomllib.loads(_bytes(spec_root / "uv.lock").decode("utf-8"))
+        except (ValueError, UnicodeError) as exc:
+            raise managed.ManagedEnvironmentError("Cached uv.lock is invalid.") from exc
+        if _bytes(spec_root / "pyproject.toml") != _standalone_lock_project(lock):
+            raise managed.ManagedEnvironmentError("Generated uv project metadata changed.")
     executable = managed._interpreter(target)
     managed._run_command([uv, "pip", "check", "--python", str(executable)], timeout=120)
     observed = _probe(executable, request["python"])
@@ -218,17 +244,14 @@ def _verify(
 
 
 def create_from_file(
-    registry: Any, source: str | Path, *, project_file: str | Path | None = None,
-    python: str | None = None,
+    registry: Any, source: str | Path, *, python: str | None = None,
 ) -> dict[str, Any]:
     """Install exactly the supplied requirements or uv project dependencies.
 
     No TeAL version/source check, TeAL injection, or R1 import probe occurs.
     Installed distributions are registered as observed_unlocked, not locked.
     """
-    request, raw, metadata_bytes = _request(
-        source, project_file=project_file, python=python,
-    )
+    request, raw, metadata_bytes = _request(source, python=python)
     uv = managed._uv()
     root = managed._cache_root()
     key = managed._request_key(request)
@@ -245,7 +268,11 @@ def create_from_file(
                 shutil.rmtree(target)
             target.mkdir(parents=True)
             try:
-                managed._run_command([uv, "venv", str(target), "--python", request["python"]])
+                python_request = request["python"] or request["requires_python"]
+                venv_args = [uv, "venv", str(target)]
+                if python_request is not None:
+                    venv_args.extend(["--python", python_request])
+                managed._run_command(venv_args)
                 executable = managed._interpreter(target)
                 src_root = target / "source"
                 src_root.mkdir()
