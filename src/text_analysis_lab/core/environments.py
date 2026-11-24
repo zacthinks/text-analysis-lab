@@ -959,7 +959,8 @@ class EnvironmentRegistry:
             raise EnvironmentNotFoundError("Environment selector must be a string.")
         if _ENVIRONMENT_ID.fullmatch(environment_id):
             row = self._catalog.get_environment(environment_id)
-        elif _RESERVED_ENVIRONMENT_NAME.match(environment_id):
+        elif environment_id.lower().startswith("env_"):
+            # Non-ID env_ values cannot be human-readable aliases.
             row = None
         else:
             row = self._catalog.get_environment_by_name(environment_id.casefold())
