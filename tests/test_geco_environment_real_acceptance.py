@@ -123,6 +123,31 @@ def test_actual_child_exploratory_geometry_and_server(tmp_path, second_python, m
         monkeypatch.setenv("NO_PROXY", "")
         server = project.geco.launch("coding", device="cpu", warmup=False)
         try:
+            # The opened linked handle must use the same verified child route.
+            reopened = project.geco.open("coding")
+            direct = reopened.launch(
+                environment=child_id, device="cpu", warmup=False,
+            )
+            try:
+                assert direct.port > 0 and direct.url.startswith("http://")
+                assert direct.execution_device == "cpu" and not direct.closed
+                assert direct.port != server.port
+            finally:
+                direct.close()
+            assert direct.wait(timeout=10)
+
+            # Native selection remains available even when the active default
+            # points at the child interpreter.
+            native = reopened.launch(
+                environment=default_id, device="cpu", warmup=False,
+            )
+            try:
+                assert native.execution_device == "cpu"
+                assert native.port > 0 and native.url.startswith("http://")
+                assert not native.closed
+            finally:
+                native.close()
+            assert native.wait(timeout=10)
             assert server.port > 0
             assert server.url.startswith("http://")
             assert server.execution_device == "cpu"
@@ -190,6 +215,15 @@ def test_actual_child_focus_finite_task(tmp_path, second_python):
         project.environments.bind_interpreter(child_id, second_python)
         server = project.geco.launch_focus("audit", environment=child_id)
         try:
+            reopened = project.geco.open("audit")
+            direct = reopened.launch_focus(environment=child_id)
+            try:
+                assert direct.execution_device is None
+                assert direct.port > 0 and not direct.closed
+                assert direct.port != server.port
+            finally:
+                direct.close()
+            assert direct.wait(timeout=10)
             assert server.execution_device is None
             assert server.port > 0
             assert not server.closed
