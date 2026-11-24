@@ -239,6 +239,15 @@ class ProjectCatalog:
                 CREATE INDEX IF NOT EXISTS idx_environment_names_identity
                 ON environment_names(environment_id);
 
+                CREATE TABLE IF NOT EXISTS environment_sources (
+                    environment_id TEXT NOT NULL REFERENCES project_environments(environment_id),
+                    specification_kind TEXT NOT NULL,
+                    specification_sha256 TEXT NOT NULL,
+                    metadata_sha256 TEXT,
+                    registered_at TEXT NOT NULL,
+                    PRIMARY KEY (environment_id, specification_kind, specification_sha256)
+                );
+
                 CREATE TABLE IF NOT EXISTS environment_realizations (
                     observed_environment_id TEXT NOT NULL,
                     portable_environment_id TEXT NOT NULL,
@@ -398,6 +407,27 @@ class ProjectCatalog:
     def list_environments(self) -> list[dict[str, Any]]:
         rows = self.con.execute(
             "SELECT * FROM project_environments ORDER BY registered_at, rowid"
+        ).fetchall()
+        return self._dicts(rows)
+
+    def register_environment_source(
+        self, environment_id: str, kind: str, source_sha256: str,
+        metadata_sha256: str | None,
+    ) -> None:
+        """Keep provenance pointers; source bytes stay in the user-local cache."""
+        with self.con:
+            self.con.execute(
+                "INSERT OR IGNORE INTO environment_sources "
+                "(environment_id, specification_kind, specification_sha256, "
+                "metadata_sha256, registered_at) VALUES (?, ?, ?, ?, ?)",
+                (environment_id, kind, source_sha256, metadata_sha256, utc_now_iso()),
+            )
+
+    def environment_sources_for(self, environment_id: str) -> list[dict[str, Any]]:
+        rows = self.con.execute(
+            "SELECT specification_kind, specification_sha256, metadata_sha256 "
+            "FROM environment_sources WHERE environment_id = ? ORDER BY registered_at",
+            (environment_id,),
         ).fetchall()
         return self._dicts(rows)
 
