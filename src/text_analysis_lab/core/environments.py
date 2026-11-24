@@ -42,7 +42,7 @@ class EnvironmentNotFoundError(EnvironmentRegistryError, LookupError):
 
 
 _ENVIRONMENT_ID = re.compile(r"^env_[a-f0-9]{64}$")
-_RESERVED_ENVIRONMENT_NAME = re.compile(r"^env_", re.IGNORECASE)
+_RESERVED_ENVIRONMENT_NAME = re.compile(r"^env[_-]", re.IGNORECASE)
 
 
 def _environment_name(value: str) -> tuple[str, str]:
@@ -55,7 +55,7 @@ def _environment_name(value: str) -> tuple[str, str]:
         )
     if _RESERVED_ENVIRONMENT_NAME.match(value):
         raise EnvironmentRegistryError(
-            "Environment names beginning with 'env_' are reserved for immutable IDs."
+            "Environment names beginning with 'env_' or 'env-' are reserved."
         )
     if any(ord(c) < 32 or ord(c) == 127 for c in value):
         raise EnvironmentRegistryError("Environment name contains a control character.")
@@ -598,7 +598,7 @@ class EnvironmentRegistry:
         )
         if name is not None:
             self._assign_name(result["environment_id"], name)
-            result["name"] = name
+        result["name"] = self.get(result["environment_id"])["name"]
         return result
 
     def plan_from_file(
@@ -621,7 +621,7 @@ class EnvironmentRegistry:
         result = create_from_file(self, source, python=python)
         if name is not None:
             self._assign_name(result["environment_id"], name)
-            result["name"] = name
+        result["name"] = self.get(result["environment_id"])["name"]
         return result
 
     def _existing_named_environment(self, name: str) -> dict[str, Any] | None:
