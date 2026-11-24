@@ -18,6 +18,8 @@ import sys
 import tomllib
 from typing import Any
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+
 from text_analysis_lab.core import managed_environments as managed
 from text_analysis_lab.core.environments import (
     OBSERVATION_SCHEMA_VERSION,
@@ -143,6 +145,16 @@ def _request(
             raise managed.ManagedEnvironmentError("Invalid uv.lock TOML.") from exc
         metadata_bytes = _standalone_lock_project(lock)
         python_range = lock["requires-python"]
+        try:
+            constraint = SpecifierSet(python_range)
+        except InvalidSpecifier as exc:
+            raise managed.ManagedEnvironmentError(
+                "uv.lock has an invalid Python compatibility constraint."
+            ) from exc
+        if python is not None and not constraint.contains(python):
+            raise managed.ManagedEnvironmentError(
+                f"Python {python} conflicts with uv.lock's requires-python {python_range!r}."
+            )
     else:
         kind = "requirements"
         metadata_bytes = None
@@ -180,6 +192,7 @@ def _request(
         "host_architecture": platform.machine().lower(),
     }
     return request, raw, metadata_bytes
+
 
 def plan_from_file(
     source: str | Path, *, python: str | None = None,
