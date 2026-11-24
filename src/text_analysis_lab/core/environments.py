@@ -588,9 +588,7 @@ class EnvironmentRegistry:
     ) -> dict[str, Any]:
         """Install/reuse a managed interpreter; optionally assign a project alias."""
         if name is not None:
-            name, key = _environment_name(name)
-            if self._catalog.get_environment_by_name(key) is not None:
-                raise EnvironmentRegistryError(f"Environment name {name!r} is already in use.")
+            name, _ = _environment_name(name)
         from text_analysis_lab.core.managed_environments import create
         result = create(
             self, python=python, teal=teal, teal_extras=teal_extras, gpu=gpu,
@@ -601,24 +599,21 @@ class EnvironmentRegistry:
         return result
 
     def plan_from_file(
-        self, source: str | Path, *, project_file: str | Path | None = None,
-        python: str | None = None,
+        self, source: str | Path, *, python: str | None = None,
     ) -> dict[str, Any]:
         """Read-only validation and preview of a dependency-file installation."""
         from text_analysis_lab.core.external_environments import plan_from_file
-        return plan_from_file(source, project_file=project_file, python=python)
+        return plan_from_file(source, python=python)
 
     def create_from_file(
-        self, source: str | Path, *, project_file: str | Path | None = None,
+        self, source: str | Path, *,
         name: str | None = None, python: str | None = None,
     ) -> dict[str, Any]:
         """Provision an external dependency specification without adding TeAL."""
         if name is not None:
-            name, key = _environment_name(name)
-            if self._catalog.get_environment_by_name(key) is not None:
-                raise EnvironmentRegistryError(f"Environment name {name!r} is already in use.")
+            name, _ = _environment_name(name)
         from text_analysis_lab.core.external_environments import create_from_file
-        result = create_from_file(self, source, project_file=project_file, python=python)
+        result = create_from_file(self, source, python=python)
         if name is not None:
             self._assign_name(result["environment_id"], name)
             result["name"] = name
