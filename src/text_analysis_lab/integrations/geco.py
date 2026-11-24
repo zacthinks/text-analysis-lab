@@ -389,7 +389,7 @@ class LinkedGeCoWorkspace:
             port=options.pop("port", None),
             warmup=options.pop("warmup", True),
             debug=options.pop("debug", False),
-            native_args=args, native_kwargs=options,
+            native_args=args, native_kwargs=kwargs, native_passthrough=True,
         )
 
     def _launch_native(self, *args: Any, **kwargs: Any) -> Any:
@@ -419,7 +419,7 @@ class LinkedGeCoWorkspace:
             host=options.pop("host", "127.0.0.1"),
             port=options.pop("port", None),
             warmup=False, debug=options.pop("debug", False),
-            native_args=args, native_kwargs=options,
+            native_args=args, native_kwargs=kwargs, native_passthrough=True,
         )
 
     def _launch_focus_native(self, *args: Any, **kwargs: Any) -> Any:
@@ -1526,6 +1526,7 @@ class GeCoManager:
         device: str | None, host: str, port: int | None, warmup: bool,
         debug: bool, native_args: tuple[Any, ...] = (),
         native_kwargs: Mapping[str, Any] | None = None,
+        native_passthrough: bool = False,
     ) -> Any:
         workspace_name = _validate_workspace_name(name)
         manifest = self._read_manifest(workspace_name)
@@ -1542,7 +1543,10 @@ class GeCoManager:
         assert_port_available(host, port)
         if self.project.environments.is_current_interpreter(selected):
             linked = self.open(workspace_name)
-            if focus:
+            if native_passthrough:
+                native = linked._launch_focus_native if focus else linked._launch_native
+                server = native(*native_args, **dict(native_kwargs or {}))
+            elif focus:
                 options = {
                     "host": host, "port": port, "debug": debug,
                     "use_reloader": False, **dict(native_kwargs or {}),
@@ -1556,9 +1560,13 @@ class GeCoManager:
                 }
                 server = linked._launch_native(*native_args, **options)
         else:
+            allowed = {"host", "port", "debug", "use_reloader"}
+            if not focus:
+                allowed.update({"warmup", "device"})
             unsupported = {
                 key: value for key, value in dict(native_kwargs or {}).items()
-                if key != "use_reloader" or value is not False
+                if key not in allowed
+                or (key == "use_reloader" and value is not False)
             }
             if native_args or unsupported:
                 raise GeCoIntegrationError(
