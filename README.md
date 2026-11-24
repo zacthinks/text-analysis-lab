@@ -690,6 +690,85 @@ their own provenance contracts. The older
 **observed/unlocked** installations until richer GPU portable resolutions can
 be substantiated.
 
+## Named environments and external dependency files
+
+Names are project-local aliases: they do not affect immutable software
+fingerprints, portable lock identity, operation history or execution-platform
+provenance. **Every registered environment has a persisted name**, including
+the opening interpreter and historical environments opened from older Projects.
+Without an explicit name, TeAL generates `env-` plus the first eight hexadecimal
+characters of the immutable fingerprint, extending the prefix on collisions.
+Generated names are selectable and renameable, not temporary display labels.
+Names are unique ignoring case; the `env_` (immutable IDs) and `env-`
+(automatic names) prefixes are reserved. Explicit names take precedence and
+replace auto-generated names; renaming an automatic name does not recreate it.
+One installed identity may have multiple researcher-assigned names.
+
+```python
+gpu = project.environments.create(
+    name="GPU", teal_extras=["geco"], gpu=True,
+)
+project.environments.get("gpu")  # same immutable ID as gpu["environment_id"]
+project.environments.set_default("GPU")  # only for this open Project instance
+project.environments.rename("GPU", "NVIDIA GPU")
+
+# Omitting the name generates and persists a selectable fingerprint alias.
+other = project.environments.create(gpu=False)
+other["name"]  # e.g., "env-a83f12c9"
+project.environments.get(other["name"])
+project.environments.rename(other["name"], "CPU")
+```
+
+External dependency files can also be used directly:
+
+```python
+preview = project.environments.plan_from_file("uv.lock")
+experiment = project.environments.create_from_file(
+    "uv.lock", name="Experiment",
+)
+legacy = project.environments.create_from_file(
+    "requirements.txt", name="Legacy",
+)
+# Optional exact Python version when a specific interpreter is wanted:
+pinned = project.environments.create_from_file(
+    "requirements.txt", name="Pinned", python="3.11.15",
+)
+```
+
+This install path uses `uv` and the same user-level environment cache, but
+**never adds or requires TeAL/GeCo**. It supports standalone requirements and
+`pip freeze` inventories, including ordinary package pins and index options,
+and standalone `uv.lock` files, even when copied out of an unrelated
+project with no accompanying `pyproject.toml`. TeAL generates minimal temporary
+project metadata from the lock's root package and uses `uv sync --frozen` to
+install the recorded runtime dependency graph without re-resolving it.
+An explicit `python` must be an exact patch version and must satisfy any
+lockfile Python constraint. When omitted, uv selects an available compatible
+Python. Requirements files may contain ranges; uv resolves those as supplied.
+A standalone lock must identify one project root. Workspace/local dependencies
+that require unavailable source files fail clearly rather than being guessed;
+recursive requirements and relative/editable references likewise require
+self-contained inputs. External projects are not installed themselves
+(`--no-install-project`). Named creation checks the project-local alias before any installation.
+If a case-insensitive name already exists, TeAL emits a `UserWarning` and
+returns that registered environment immediately, even if the newly supplied
+installation options or dependency file differ. No dependency resolution or
+new environment creation happens. Use a different name to create a new
+environment, or `project.environments.rename(old, new)` to rename one.
+Unnamed creation continues to provision or reuse by the underlying request.
+The original supplied file bytes are retained in
+the user-level cache and their content hashes, plus the actual installed
+distribution identity, are recorded in the Project's SQLite catalog. No
+physical virtual environment or executable path is stored in the Project.
+
+External files are **observed/unlocked**, even when supplied via `uv.lock`:
+they are not automatically certified as TeAL's independently validated,
+cross-platform portable specification. Cache reuse revalidates the source
+hashes, package inventory and `uv pip check`. Environment installation can
+succeed without TeAL, but requesting a TeAL translation or GeCo launch in
+such an interpreter fails through normal execution compatibility checks,
+without running the work in the opening interpreter.
+
 ## Development and testing
 
 To contribute or run the test suite:

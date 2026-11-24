@@ -194,7 +194,11 @@ def _run(
     # import the parent's editable TeAL or dependencies through PYTHONPATH.
     # Older manually bound R1 fixture interpreters retain their original
     # dependency-sharing behavior.
-    managed = (executable.parent.parent / "managed.json").is_file()
+    cache_root = executable.parent.parent
+    managed = (
+        (cache_root / "managed.json").is_file()
+        or (cache_root / "external.json").is_file()
+    )
     isolated = isolated or managed
     args = [str(executable)]
     if isolated:
