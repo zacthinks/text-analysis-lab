@@ -318,7 +318,7 @@ def test_linked_focus_routes_environment_and_preserves_native_focus_options(rout
     with pytest.raises(Exception, match="native.*options|Cross-interpreter"):
         linked.launch_focus(environment="child-B", session_id=7)
     with pytest.raises(Exception, match="native.*options|Cross-interpreter"):
-        linked.launch(environment="child-B", use_reloader=True)
+        linked.launch_focus(environment="child-B", use_reloader=True)
     project.close()
     assert local.closed and child.closed and servers[-1].closed
 
