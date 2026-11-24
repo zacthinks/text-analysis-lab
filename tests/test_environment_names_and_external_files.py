@@ -167,6 +167,54 @@ def test_parallel_environment_registration_preserves_unique_names(project):
     assert sorted(len(alias) for alias in aliases) == [12, 13, 13, 13]
 
 
+def test_unnamed_creation_returns_generated_name_for_both_apis(
+    project, tmp_path, monkeypatch,
+):
+    observation = environments.normalize_environment(_observation("30"))
+    identity = project.catalog.register_environment(
+        fingerprint=environments.fingerprint_observation(observation),
+        schema_version=2,
+        observation_json=environments._canonical_json(observation),
+    )
+    monkeypatch.setattr(
+        managed_environments, "create",
+        lambda registry, **kwargs: {"environment_id": identity},
+    )
+    monkeypatch.setattr(
+        external_environments, "create_from_file",
+        lambda registry, source, **kwargs: {"environment_id": identity},
+    )
+    managed = project.environments.create()
+    imported = project.environments.create_from_file(tmp_path / "example.lock")
+    name = "env-" + project.environments.get(identity)["fingerprint"][:8]
+    assert managed["name"] == name
+    assert imported["name"] == name
+    assert project.environments.get(name)["environment_id"] == identity
+
+    # Supplying an explicit alias makes it the display name and drops the hash alias.
+    explicit = project.environments.create(name="GPU")
+    assert explicit["name"] == "GPU"
+    assert project.environments.get(identity)["names"] == ["GPU"]
+    with pytest.raises(EnvironmentNotFoundError):
+        project.environments.get(name)
+
+
+def test_backfill_preserves_existing_user_assigned_name(project):
+    identity = project.environments.opening_id
+    project.catalog.con.execute(
+        "DELETE FROM environment_names WHERE environment_id = ?", (identity,),
+    )
+    project.catalog.con.execute(
+        "INSERT INTO environment_names (name, name_key, environment_id) "
+        "VALUES ('My CPU', 'my cpu', ?)", (identity,),
+    )
+    project.catalog.con.commit()
+    with Project.open(project.path) as reopened:
+        assert reopened.environments.get(identity)["name"] == "My CPU"
+        assert reopened.environments.get(identity)["names"] == ["My CPU"]
+        assert reopened.environments.get("mY cPu")["environment_id"] == identity
+
+
 def test_names_persist_are_case_insensitive_and_leave_ids_unchanged(project):
     original = project.environments.default["environment_id"]
     project.environments._assign_name(original, "GPU")
