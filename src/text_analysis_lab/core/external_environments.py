@@ -245,14 +245,14 @@ def create_from_file(
                 shutil.rmtree(target)
             target.mkdir(parents=True)
             try:
+                managed._run_command([uv, "venv", str(target), "--python", request["python"]])
+                executable = managed._interpreter(target)
                 src_root = target / "source"
                 src_root.mkdir()
                 filename = "uv.lock" if request["kind"] == "external_uv_lock" else "requirements.txt"
                 (src_root / filename).write_bytes(raw)
                 if metadata_bytes is not None:
                     (src_root / "pyproject.toml").write_bytes(metadata_bytes)
-                managed._run_command([uv, "venv", str(target), "--python", request["python"]])
-                executable = managed._interpreter(target)
                 if request["kind"] == "external_uv_lock":
                     managed._run_command([
                         uv, "sync", "--frozen", "--no-dev", "--no-default-groups",
