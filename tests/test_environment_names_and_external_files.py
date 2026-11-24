@@ -132,6 +132,7 @@ def fake_external(tmp_path, monkeypatch):
             executable = managed_environments._interpreter(Path(args[2]))
             executable.parent.mkdir(parents=True, exist_ok=True)
             executable.write_bytes(b"fake-python")
+            executable.chmod(0o755)
         return ""
 
     monkeypatch.setattr(managed_environments, "_run_command", command)
@@ -195,6 +196,7 @@ def test_source_failure_has_no_environment_registration(project, tmp_path, fake_
             executable = managed_environments._interpreter(Path(args[2]))
             executable.parent.mkdir(parents=True, exist_ok=True)
             executable.write_bytes(b"fake")
+            executable.chmod(0o755)
         return ""
 
     monkeypatch.setattr(managed_environments, "_run_command", failure)
