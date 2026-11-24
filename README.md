@@ -794,25 +794,36 @@ project.environments.rename("GPU", "NVIDIA GPU")
 External dependency files can also be used directly:
 
 ```python
-preview = project.environments.plan_from_file(
-    "uv.lock", project_file="pyproject.toml",
-)
+preview = project.environments.plan_from_file("uv.lock")
 experiment = project.environments.create_from_file(
-    "uv.lock", project_file="pyproject.toml", name="Experiment",
+    "uv.lock", name="Experiment",
 )
 legacy = project.environments.create_from_file(
-    "requirements.txt", name="Legacy", python="3.11.15",
+    "requirements.txt", name="Legacy",
+)
+# Optional exact Python version when a specific interpreter is wanted:
+pinned = project.environments.create_from_file(
+    "requirements.txt", name="Pinned", python="3.11.15",
 )
 ```
 
 This install path uses `uv` and the same user-level environment cache, but
 **never adds or requires TeAL/GeCo**. It supports standalone requirements and
 `pip freeze` inventories, including ordinary package pins and index options,
-and a `uv.lock` with its matching `pyproject.toml`. Recursive requirements,
-relative/editable local dependencies and other specifications requiring missing
-source files must be made self-contained first. Installing an external uv
-project syncs its dependencies; it does not install the project's own package
-(`--no-install-project`). The original supplied file bytes are retained in
+and standalone `uv.lock` files, even when copied out of an unrelated
+project with no accompanying `pyproject.toml`. TeAL generates minimal temporary
+project metadata from the lock's root package and uses `uv sync --frozen` to
+install the recorded runtime dependency graph without re-resolving it.
+An explicit `python` must be an exact patch version and must satisfy any
+lockfile Python constraint. When omitted, uv selects an available compatible
+Python. Requirements files may contain ranges; uv resolves those as supplied.
+A standalone lock must identify one project root. Workspace/local dependencies
+that require unavailable source files fail clearly rather than being guessed;
+recursive requirements and relative/editable references likewise require
+self-contained inputs. External projects are not installed themselves
+(`--no-install-project`). Repeated creation under the same name reuses the
+alias if the realized immutable environment identity is unchanged.
+The original supplied file bytes are retained in
 the user-level cache and their content hashes, plus the actual installed
 distribution identity, are recorded in the Project's SQLite catalog. No
 physical virtual environment or executable path is stored in the Project.
