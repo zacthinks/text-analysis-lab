@@ -149,9 +149,12 @@ def test_external_requirements_install_and_reuse_without_teal(project, tmp_path,
     source = tmp_path / "requirements.txt"
     source.write_text("example==9\n", encoding="utf-8")
     first = project.environments.create_from_file(source, name="Legacy", python="3.11.15")
-    second = project.environments.create_from_file(source, name="Legacy", python="3.11.15")
+    with pytest.warns(UserWarning, match="already exists"):
+        second = project.environments.create_from_file(
+            source, name="Legacy", python="3.11.15",
+        )
     assert first["environment_id"] == second["environment_id"]
-    assert second["reused"] is True
+    assert second == project.environments.get("legacy")
     assert second["name"] == "Legacy"
     assert first["source"]["kind"] == "requirements"
     assert first["portability"].startswith("observed_unlocked")
@@ -261,6 +264,49 @@ def test_standalone_lock_without_root_fails_before_registration(project, tmp_pat
     assert len(project.environments.list()) == before
 
 
+
+def test_existing_name_preflights_before_provisioning_or_reading_file(
+    project, tmp_path, monkeypatch,
+):
+    """Named reuse is a no-op, even if the supplied source no longer exists."""
+    identity = project.environments.default["environment_id"]
+    project.environments._assign_name(identity, "Notebook")
+
+    def should_not_install(*args, **kwargs):
+        raise AssertionError("Provisioning must not run for an existing name")
+
+    monkeypatch.setattr(managed_environments, "create", should_not_install)
+    monkeypatch.setattr(external_environments, "create_from_file", should_not_install)
+
+    with pytest.warns(UserWarning, match="already exists"):
+        managed_existing = project.environments.create(
+            name="notebook", python="99.99.99", teal_extras=["invalid"],
+        )
+    with pytest.warns(UserWarning, match="already exists"):
+        file_existing = project.environments.create_from_file(
+            tmp_path / "missing.lock", name="NOTEBOOK", python="not-a-python",
+        )
+
+    expected = project.environments.get("Notebook")
+    assert managed_existing == expected
+    assert file_existing == expected
+    assert expected["environment_id"] == identity
+
+
+def test_existing_name_preflight_after_reopen(project, monkeypatch):
+    """Aliases survive Project reopen and remain safe to reuse without uv."""
+    identity = project.environments.opening_id
+    project.environments._assign_name(identity, "Saved")
+    with Project.open(project.path) as reopened:
+        monkeypatch.setattr(
+            managed_environments, "create",
+            lambda *args, **kwargs: pytest.fail("unexpected managed installation"),
+        )
+        with pytest.warns(UserWarning, match="already exists"):
+            reused = reopened.environments.create(name="saved")
+        assert reused == reopened.environments.get("Saved")
+
+
 def test_managed_name_reuse_and_collision(project, monkeypatch):
     first = project.environments.default["environment_id"]
     second_observation = environments.normalize_environment(_observation("2"))
@@ -269,14 +315,19 @@ def test_managed_name_reuse_and_collision(project, monkeypatch):
         schema_version=2, observation_json=environments._canonical_json(second_observation),
     )
     from text_analysis_lab.core import managed_environments as managed
-    results = iter([first, first, second])
+    results = iter([first, second])
     monkeypatch.setattr(
         managed, "create", lambda *args, **kwargs: {"environment_id": next(results)}
     )
-    project.environments.create(name="Reusable")
-    project.environments.create(name="Reusable")
-    with pytest.raises(EnvironmentRegistryError, match="already in use"):
-        project.environments.create(name="Reusable")
+    created = project.environments.create(name="Reusable")
+    with pytest.warns(UserWarning, match="already exists"):
+        again = project.environments.create(name="Reusable")
+    assert again == project.environments.get("Reusable")
+    assert again["environment_id"] == created["environment_id"]
+    # A conflicting request also returns the existing name without provisioning.
+    with pytest.warns(UserWarning, match="already exists"):
+        conflict = project.environments.create(name="reusable", gpu=True)
+    assert conflict["environment_id"] == created["environment_id"]
 
 
 @pytest.mark.parametrize("bad", ["-r other.txt\n", "-e ./local\n", "../project\n"])
@@ -341,10 +392,16 @@ def test_real_external_uv_and_freeze_on_current_platform(tmp_path, monkeypatch):
         # Identical installed inventories are the same immutable identity,
         # even when the two source specifications differ.
         assert requirement["environment_id"] == uv_lock["environment_id"]
-        assert project.environments.create_from_file(req, name="Legacy", python=python)["reused"]
-        assert project.environments.create_from_file(
-            copied_lock, name="Experiment", python=python,
-        )["reused"]
+        with pytest.warns(UserWarning, match="already exists"):
+            repeat_req = project.environments.create_from_file(
+                req, name="Legacy", python=python,
+            )
+        with pytest.warns(UserWarning, match="already exists"):
+            repeat_lock = project.environments.create_from_file(
+                copied_lock, name="Experiment", python=python,
+            )
+        assert repeat_req["environment_id"] == requirement["environment_id"]
+        assert repeat_lock["environment_id"] == uv_lock["environment_id"]
         executable = project.environments.bound_interpreter("Legacy")
         assert executable.is_file()
 
