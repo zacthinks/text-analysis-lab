@@ -37,6 +37,136 @@ def project(tmp_path, monkeypatch):
     instance.close()
 
 
+def test_automatic_name_is_persisted_and_selectable(project):
+    original = project.environments.opening_id
+    item = project.environments.get(original)
+    generated = "env-" + item["fingerprint"][:8]
+    assert item["name"] == generated
+    assert item["names"] == [generated]
+    assert project.environments.default["name"] == generated
+    assert project.environments.get(generated)["environment_id"] == original
+    assert project.environments.get(generated.upper())["environment_id"] == original
+    assert project.catalog.environment_names_for(original) == [generated]
+    with pytest.raises(EnvironmentRegistryError, match="reserved"):
+        project.environments._assign_name(original, "env-my-choice")
+    with pytest.raises(EnvironmentRegistryError, match="reserved"):
+        project.environments.rename(generated, "ENV-MY-CHOICE")
+
+
+def test_generated_name_is_replaced_by_explicit_name_and_rename(project):
+    original = project.environments.opening_id
+    generated = project.environments.get(original)["name"]
+    project.environments._assign_name(original, "CPU")
+    assert project.environments.get(original)["names"] == ["CPU"]
+    with pytest.raises(EnvironmentNotFoundError):
+        project.environments.get(generated)
+
+    renamed = project.environments.rename("cpu", "Primary CPU")
+    assert renamed["name"] == "Primary CPU"
+    assert renamed["names"] == ["Primary CPU"]
+    with Project.open(project.path) as reopened:
+        assert reopened.environments.get(original)["name"] == "Primary CPU"
+        with pytest.raises(EnvironmentNotFoundError):
+            reopened.environments.get(generated)
+
+
+def test_renaming_generated_name_does_not_regenerate(project):
+    original = project.environments.opening_id
+    auto = project.environments.get(original)["name"]
+    renamed = project.environments.rename(auto, "GPU")
+    assert renamed["name"] == "GPU"
+    assert renamed["names"] == ["GPU"]
+    with Project.open(project.path) as reopened:
+        assert reopened.environments.get(original)["name"] == "GPU"
+        assert reopened.environments.get(original)["names"] == ["GPU"]
+        with pytest.raises(EnvironmentNotFoundError):
+            reopened.environments.get(auto)
+
+
+def test_legacy_unnamed_environments_are_backfilled_safely(project):
+    original = project.environments.opening_id
+    original_fp = project.environments.get(original)["fingerprint"]
+    second = environments.normalize_environment(_observation("15"))
+    second_id = project.catalog.register_environment(
+        fingerprint=environments.fingerprint_observation(second),
+        schema_version=2,
+        observation_json=environments._canonical_json(second),
+    )
+    project.catalog.con.execute(
+        "DELETE FROM environment_names WHERE environment_id IN (?, ?)",
+        (original, second_id),
+    )
+    project.catalog.con.commit()
+    assert project.catalog.environment_names_for(original) == []
+    assert project.catalog.environment_names_for(second_id) == []
+    with Project.open(project.path) as reopened:
+        rows = reopened.environments.list()
+        for identifier in (original, second_id):
+            name = reopened.environments.get(identifier)["name"]
+            assert name.startswith("env-")
+            assert reopened.environments.get(name)["environment_id"] == identifier
+        assert reopened.environments.get(original)["name"] == "env-" + original_fp[:8]
+    with Project.open(project.path) as reopened:
+        assert reopened.environments.get(original)["names"] == ["env-" + original_fp[:8]]
+        assert len(reopened.environments.get(second_id)["names"]) == 1
+
+
+def test_generated_short_hash_extends_on_collision(project):
+    first_fingerprint = "a83f12c9" + "0" * 56
+    second_fingerprint = "a83f12c9" + "1" * 56
+    first = project.catalog.register_environment(
+        fingerprint=first_fingerprint,
+        schema_version=2,
+        observation_json='{"test":1}',
+    )
+    second = project.catalog.register_environment(
+        fingerprint=second_fingerprint,
+        schema_version=2,
+        observation_json='{"test":2}',
+    )
+    assert project.catalog.environment_names_for(first) == ["env-a83f12c9"]
+    assert project.catalog.environment_names_for(second) == ["env-a83f12c91"]
+    assert first != second
+    # Subsequent registration does not create extra aliases.
+    project.catalog.register_environment(
+        fingerprint=second_fingerprint,
+        schema_version=2,
+        observation_json='{"test":2}',
+    )
+    assert project.catalog.environment_names_for(second) == ["env-a83f12c91"]
+
+
+def test_parallel_environment_registration_preserves_unique_names(project):
+    from concurrent.futures import ThreadPoolExecutor
+    from text_analysis_lab.core.catalog import ProjectCatalog
+
+    catalog_dir = project.storage.catalog_dir
+    fingerprints = ["b76c90ab" + str(i) * 56 for i in range(4)]
+
+    def register(i):
+        other = ProjectCatalog(catalog_dir)
+        try:
+            return other.register_environment(
+                fingerprint=fingerprints[i],
+                schema_version=2,
+                observation_json='{"concurrent":' + str(i) + '}',
+            )
+        finally:
+            other.close()
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        identities = list(executor.map(register, range(4)))
+
+    assert len(set(identities)) == 4
+    aliases = [
+        project.catalog.environment_names_for(identifier)[0]
+        for identifier in identities
+    ]
+    assert len(set(aliases)) == 4
+    assert all(alias.startswith("env-b76c90ab") for alias in aliases)
+    assert sorted(len(alias) for alias in aliases) == [12, 13, 13, 13]
+
+
 def test_names_persist_are_case_insensitive_and_leave_ids_unchanged(project):
     original = project.environments.default["environment_id"]
     project.environments._assign_name(original, "GPU")
