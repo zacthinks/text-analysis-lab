@@ -210,3 +210,67 @@ def test_rejects_incomplete_requirements_snapshots(tmp_path, bad):
     source.write_text(bad)
     with pytest.raises(managed_environments.ManagedEnvironmentError):
         external_environments.plan_from_file(source, python="3.11.15")
+
+
+@pytest.mark.acceptance
+def test_real_external_uv_and_freeze_on_current_platform(tmp_path, monkeypatch):
+    """Install TeAL-free environments with real uv on Ubuntu and Windows."""
+    import os
+    import shutil
+    import subprocess
+
+    if os.environ.get("TEAL_REAL_MANAGED_ACCEPTANCE") != "1":
+        pytest.skip("Real managed environments acceptance is opt-in.")
+    if shutil.which("uv") is None:
+        pytest.skip("uv is required")
+    monkeypatch.setenv("TEAL_MANAGED_ENVIRONMENTS_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "no-such-parent-dependency"))
+    python = __import__("platform").python_version()
+
+    req = tmp_path / "requirements.txt"
+    req.write_text("packaging==25.0\\n", encoding="utf-8")
+    external_project = tmp_path / "external"
+    external_project.mkdir()
+    (external_project / "pyproject.toml").write_text(
+        '[project]\\nname = "external-spec-test"\\nversion = "0.1.0"\\n'
+        'requires-python = ">=3.11"\\ndependencies = ["packaging==25.0"]\\n',
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["uv", "lock", "--directory", str(external_project)],
+        check=True, capture_output=True, text=True,
+    )
+    with Project.create(tmp_path / "research", "external") as project:
+        requirement = project.environments.create_from_file(
+            req, name="Legacy", python=python,
+        )
+        uv_lock = project.environments.create_from_file(
+            external_project / "uv.lock", name="Experiment", python=python,
+        )
+        for item in (requirement, uv_lock):
+            row = project.environments.get(item["environment_id"])
+            assert row["kind"] == "observed_unlocked"
+            assert row["observation"]["teal"]["version"] == "0+unknown"
+            assert any(d["name"] == "packaging" for d in row["observation"]["distributions"])
+            assert not any(
+                d["name"] == "text-analysis-lab"
+                for d in row["observation"]["distributions"]
+            )
+        assert project.environments.get("experiment")["environment_id"] == uv_lock["environment_id"]
+        # Identical installed inventories are the same immutable identity,
+        # even when the two source specifications differ.
+        assert requirement["environment_id"] == uv_lock["environment_id"]
+        assert project.environments.create_from_file(req, python=python)["reused"]
+        executable = project.environments.bound_interpreter("Legacy")
+        assert executable.is_file()
+
+        # Explicitly selecting an incompatible child must not translate in the parent.
+        from text_analysis_lab.core.secondary_coordinator import _verified_executable
+        from text_analysis_lab.core.secondary_coordinator import SecondaryCoordinatorError
+        with pytest.raises(SecondaryCoordinatorError, match="could not import or probe compatible TeAL"):
+            _verified_executable(project, requirement["environment_id"])
+
+    with Project.open(tmp_path / "research") as reopened:
+        assert reopened.environments.get("LEGACY")["environment_id"] == requirement["environment_id"]
+        assert reopened.environments.get("EXPERIMENT")["environment_id"] == uv_lock["environment_id"]
+        assert reopened.environments.bound_interpreter("Legacy").is_file()
