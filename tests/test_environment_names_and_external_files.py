@@ -228,12 +228,12 @@ def test_real_external_uv_and_freeze_on_current_platform(tmp_path, monkeypatch):
     python = __import__("platform").python_version()
 
     req = tmp_path / "requirements.txt"
-    req.write_text("packaging==25.0\\n", encoding="utf-8")
+    req.write_text("packaging==25.0\n", encoding="utf-8")
     external_project = tmp_path / "external"
     external_project.mkdir()
     (external_project / "pyproject.toml").write_text(
-        '[project]\\nname = "external-spec-test"\\nversion = "0.1.0"\\n'
-        'requires-python = ">=3.11"\\ndependencies = ["packaging==25.0"]\\n',
+        '[project]\nname = "external-spec-test"\nversion = "0.1.0"\n'
+        'requires-python = ">=3.11"\ndependencies = ["packaging==25.0"]\n',
         encoding="utf-8",
     )
     subprocess.run(
