@@ -40,6 +40,27 @@ class EnvironmentNotFoundError(EnvironmentRegistryError, LookupError):
     """A selected environment is not registered with this project."""
 
 
+_ENVIRONMENT_ID = re.compile(r"^env_[a-f0-9]{64}$")
+_RESERVED_ENVIRONMENT_NAME = re.compile(r"^env_", re.IGNORECASE)
+
+
+def _environment_name(value: str) -> tuple[str, str]:
+    """Validate a display alias and return its case-folded uniqueness key."""
+    if not isinstance(value, str):
+        raise EnvironmentRegistryError("Environment name must be a string.")
+    if not value or value != value.strip() or len(value) > 100:
+        raise EnvironmentRegistryError(
+            "Environment name must be 1-100 characters with no outer whitespace."
+        )
+    if _RESERVED_ENVIRONMENT_NAME.match(value):
+        raise EnvironmentRegistryError(
+            "Environment names beginning with 'env_' are reserved for immutable IDs."
+        )
+    if any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise EnvironmentRegistryError("Environment name contains a control character.")
+    return value, value.casefold()
+
+
 def _canonical_json(value: dict[str, Any]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
@@ -560,15 +581,71 @@ class EnvironmentRegistry:
         )
 
     def create(
-        self, *, python: str | None = None, teal: str | None = None,
+        self, *, name: str | None = None,
+        python: str | None = None, teal: str | None = None,
         teal_extras: list[str] | tuple[str, ...] | None = None,
         gpu: str | bool = "auto",
     ) -> dict[str, Any]:
-        """Explicitly install/verify a user-local uv environment for R1."""
+        """Install/reuse a managed interpreter; optionally assign a project alias."""
+        if name is not None:
+            name, key = _environment_name(name)
+            if self._catalog.get_environment_by_name(key) is not None:
+                raise EnvironmentRegistryError(f"Environment name {name!r} is already in use.")
         from text_analysis_lab.core.managed_environments import create
-        return create(
+        result = create(
             self, python=python, teal=teal, teal_extras=teal_extras, gpu=gpu,
         )
+        if name is not None:
+            self._assign_name(result["environment_id"], name)
+            result["name"] = name
+        return result
+
+    def plan_from_file(
+        self, source: str | Path, *, project_file: str | Path | None = None,
+        python: str | None = None,
+    ) -> dict[str, Any]:
+        """Read-only validation and preview of a dependency-file installation."""
+        from text_analysis_lab.core.external_environments import plan_from_file
+        return plan_from_file(source, project_file=project_file, python=python)
+
+    def create_from_file(
+        self, source: str | Path, *, project_file: str | Path | None = None,
+        name: str | None = None, python: str | None = None,
+    ) -> dict[str, Any]:
+        """Provision an external dependency specification without adding TeAL."""
+        if name is not None:
+            name, key = _environment_name(name)
+            if self._catalog.get_environment_by_name(key) is not None:
+                raise EnvironmentRegistryError(f"Environment name {name!r} is already in use.")
+        from text_analysis_lab.core.external_environments import create_from_file
+        result = create_from_file(self, source, project_file=project_file, python=python)
+        if name is not None:
+            self._assign_name(result["environment_id"], name)
+            result["name"] = name
+        return result
+
+    def _assign_name(self, environment_id: str, name: str) -> None:
+        normalized, key = _environment_name(name)
+        try:
+            self._catalog.register_environment_name(environment_id, normalized, key)
+        except ValueError as exc:
+            raise EnvironmentRegistryError(str(exc)) from exc
+
+    def rename(self, old_name: str, new_name: str) -> dict[str, Any]:
+        """Rename a project alias without changing its environment or provenance."""
+        _, old_key = _environment_name(old_name)
+        normalized, new_key = _environment_name(new_name)
+        try:
+            environment_id = self._catalog.rename_environment_name(
+                old_key, normalized, new_key,
+            )
+        except KeyError as exc:
+            raise EnvironmentNotFoundError(
+                f"Environment name {old_name!r} is not registered."
+            ) from exc
+        except ValueError as exc:
+            raise EnvironmentRegistryError(str(exc)) from exc
+        return self.get(environment_id)
 
     def create_specification(
         self, *, python: str | None = None, teal: str | None = None,
@@ -642,6 +719,7 @@ class EnvironmentRegistry:
         silently become the current choice. Re-observe before accepting that
         alias so installed-package drift cannot exploit a historical mapping.
         """
+        environment_id = self.resolve(environment_id)
         if environment_id == self._opening_id:
             return True
         if (environment_id != self._observed_id
@@ -687,7 +765,7 @@ class EnvironmentRegistry:
         Binding is not proof of readiness: each remote execution probes the
         executable's actual observation before any scientific work.
         """
-        self.get(environment_id)
+        environment_id = self.resolve(environment_id)
         path = Path(executable).expanduser().absolute()
         if not path.is_file() or not os.access(path, os.X_OK):
             raise EnvironmentRegistryError(
@@ -697,7 +775,7 @@ class EnvironmentRegistry:
 
     def bound_interpreter(self, environment_id: str) -> Path:
         """Return this session's executable, or reject an unbound/missing one."""
-        self.get(environment_id)
+        environment_id = self.resolve(environment_id)
         path = self._interpreter_bindings.get(environment_id)
         if path is None:
             # A Project records software identities, never machine-local paths.
@@ -819,8 +897,11 @@ class EnvironmentRegistry:
                 raise EnvironmentRegistryError("Environment schema mismatch in registry.")
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise EnvironmentRegistryError("Corrupt environment registry record.") from exc
+        names = self._catalog.environment_names_for(row["environment_id"])
         return {
             "environment_id": row["environment_id"],
+            "name": names[0] if names else None,
+            "names": names,
             "fingerprint": row["fingerprint"],
             "registered_at": row["registered_at"],
             "observation": observation,
@@ -848,10 +929,15 @@ class EnvironmentRegistry:
         return [self._public_row(row) for row in self._catalog.list_environments()]
 
     def get(self, environment_id: str) -> dict[str, Any]:
-        """Look up a content-addressed ID; raise for unknown IDs."""
+        """Resolve an immutable ID or a case-insensitive project-local name."""
         if not isinstance(environment_id, str):
-            raise EnvironmentNotFoundError("Environment ID must be a string.")
-        row = self._catalog.get_environment(environment_id)
+            raise EnvironmentNotFoundError("Environment selector must be a string.")
+        if _ENVIRONMENT_ID.fullmatch(environment_id):
+            row = self._catalog.get_environment(environment_id)
+        elif _RESERVED_ENVIRONMENT_NAME.match(environment_id):
+            row = None
+        else:
+            row = self._catalog.get_environment_by_name(environment_id.casefold())
         if row is None:
             raise EnvironmentNotFoundError(
                 f"Environment {environment_id!r} is not registered."
