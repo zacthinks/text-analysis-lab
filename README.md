@@ -775,6 +775,56 @@ their own provenance contracts. The older
 **observed/unlocked** installations until richer GPU portable resolutions can
 be substantiated.
 
+## Named environments and external dependency files
+
+Names are project-local aliases: they do not affect immutable software
+fingerprints, portable lock identity, operation history or execution-platform
+provenance. Names are unique ignoring case; the `env_` prefix is reserved
+for immutable identifiers. One installed identity may have multiple names.
+
+```python
+gpu = project.environments.create(
+    name="GPU", teal_extras=["geco"], gpu=True,
+)
+project.environments.get("gpu")  # same immutable ID as gpu["environment_id"]
+project.environments.set_default("GPU")  # only for this open Project instance
+project.environments.rename("GPU", "NVIDIA GPU")
+```
+
+External dependency files can also be used directly:
+
+```python
+preview = project.environments.plan_from_file(
+    "uv.lock", project_file="pyproject.toml",
+)
+experiment = project.environments.create_from_file(
+    "uv.lock", project_file="pyproject.toml", name="Experiment",
+)
+legacy = project.environments.create_from_file(
+    "requirements.txt", name="Legacy", python="3.11.15",
+)
+```
+
+This install path uses `uv` and the same user-level environment cache, but
+**never adds or requires TeAL/GeCo**. It supports standalone requirements and
+`pip freeze` inventories, including ordinary package pins and index options,
+and a `uv.lock` with its matching `pyproject.toml`. Recursive requirements,
+relative/editable local dependencies and other specifications requiring missing
+source files must be made self-contained first. Installing an external uv
+project syncs its dependencies; it does not install the project's own package
+(`--no-install-project`). The original supplied file bytes are retained in
+the user-level cache and their content hashes, plus the actual installed
+distribution identity, are recorded in the Project's SQLite catalog. No
+physical virtual environment or executable path is stored in the Project.
+
+External files are **observed/unlocked**, even when supplied via `uv.lock`:
+they are not automatically certified as TeAL's independently validated,
+cross-platform portable specification. Cache reuse revalidates the source
+hashes, package inventory and `uv pip check`. Environment installation can
+succeed without TeAL, but requesting a TeAL translation or GeCo launch in
+such an interpreter fails through normal execution compatibility checks,
+without running the work in the opening interpreter.
+
 ## Development and testing
 
 To contribute or run the test suite:
