@@ -104,6 +104,7 @@ def feature_matrix(
     project.catalog.register_operation(
         operation_id=operation_id, operation_type="translate",
         operator_id=operator_id, status="incomplete",
+        environment_id=project.environments.opening_id,
     )
     project.catalog.add_operation_source(
         operation_id, DEFAULT_SOURCE_LABEL, source.artifact_id
@@ -136,6 +137,8 @@ def feature_matrix(
     descriptor = {
         "schema_version": 1,
         "operation_id": operation_id,
+        "environment_id": project.environments.opening_id,
+        "platform_id": project.platforms.opening_id,
         "operation_type": "translate",
         "kind": "feature_matrix",
         "operator_id": operator_id,

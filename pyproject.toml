@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "text-analysis-lab"
-version = "0.12.2"
+version = "0.13.0"
 description = "Persistent, lineage-aware workflows for reproducible text analysis"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,6 +17,7 @@ dependencies = [
     "pandas>=1.4",
     "nltk>=3.9.2",
     "openpyxl>=3.1",
+    "packaging>=24",
     "pyarrow",
     "scikit-learn>=1.9.1",
     "rich>=13.9",
@@ -53,10 +54,10 @@ all = [
     "datasets==2.14.4",
     "pyarrow<21",
     "plotly>=5",
-    "geometric-coder[all]",
+    "geometric-coder",
 ]
 geco = [
-    "geometric-coder[all]",
+    "geometric-coder",
 ]
 visualization = [
     "plotly>=5",
@@ -102,7 +103,7 @@ geometric-coder = { git = "https://github.com/zacthinks/GeCo.git", branch = "mai
 
 [dependency-groups]
 dev = [
-    "geometric-coder[all]; python_version >= '3.11'",
+    "geometric-coder; python_version >= '3.11'",
     "ipykernel>=6.31.0",
     "ipywidgets>=8.1.8",
     "jupyterlab>=4.4",

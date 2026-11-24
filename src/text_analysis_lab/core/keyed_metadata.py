@@ -184,6 +184,7 @@ def attach_metadata(
         operation_type="translate",
         operator_id=operator_id,
         status="incomplete",
+        environment_id=project.environments.opening_id,
     )
     project.catalog.add_operation_source(
         operation_id, DEFAULT_SOURCE_LABEL, source_artifact.artifact_id
@@ -211,6 +212,8 @@ def attach_metadata(
     descriptor = {
         "schema_version": 1,
         "operation_id": operation_id,
+        "environment_id": project.environments.opening_id,
+        "platform_id": project.platforms.opening_id,
         "operation_type": "translate",
         "operator_id": operator_id,
         "kind": "attach_metadata",

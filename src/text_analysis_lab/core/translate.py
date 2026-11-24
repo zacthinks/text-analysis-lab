@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, cast, get_args
 
 from text_analysis_lab.core.errors import OperatorError, OperatorNotFoundError
 from text_analysis_lab.core.failure_cleanup import attempt_failure_cleanup
+from text_analysis_lab.core.execution_ownership import exclusive_operation_execution
 from text_analysis_lab.core.idempotence import (
     AliasPlan,
     AliasSpec,
@@ -131,6 +132,10 @@ class _Runtime:
     writers_temp_dir: Path
     resumable: bool
     operator_snapshot_pending: bool
+    environment_id: str | None = None
+    platform_id: str | None = None
+    coordinator_request_id: str | None = None
+    execution_attempt_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -422,6 +427,7 @@ def translate(
     alias: AliasSpec = None,
     overwrite: bool = False,
     freeze_device: bool = False,
+    coordinator_request_id: str | None = None,
     **params: Any,
 ) -> Mapping[str, BaseArtifact]:
     """Run a new TeAL translation operation and return output artifacts by label."""
@@ -493,9 +499,20 @@ def translate(
         mode=mode,
         route=route,
         output_specs=output_specs,
+        coordinator_request_id=coordinator_request_id,
     )
     plan: _ExecutionPlan | None = None
+    # The new operation has already received its unique ID. Hold its ownership
+    # across all scientific work, finalization, and checkpoint cleanup.
+    ownership = exclusive_operation_execution(runtime.operation_dir)
+    ownership.__enter__()
     try:
+        runtime.execution_attempt_id = project.catalog.begin_execution_attempt(
+            runtime.operation_id,
+            environment_id=project.environments.opening_id,
+            platform_id=project.platforms.opening_id,
+            coordinator_request_id=coordinator_request_id,
+        )
         _save_operation_metadata(
             runtime=runtime,
             translator=translator,
@@ -570,18 +587,47 @@ def translate(
         finalize_alias_plan(project, alias_plan, outputs)
         return outputs
     except Exception as exc:
-        operation = project.catalog.get_operation(runtime.operation_id)
-        if str(operation["status"]) != "complete":
-            _fail_runtime(project, runtime, exc)
+        # A pre-execution rejection (for example an already-complete
+        # operation) is not a failure owned by this coordinator.
+        if runtime.execution_attempt_id is not None:
+            operation = project.catalog.get_operation(runtime.operation_id)
+            if str(operation["status"]) != "complete":
+                _fail_runtime(project, runtime, exc)
         raise
     finally:
-        if plan is not None:
-            plan.close()
+        try:
+            if plan is not None:
+                plan.close()
+        finally:
+            ownership.__exit__(None, None, None)
 
 
 def resume_translate(
     project: Project,
     operation_id: str,
+    *,
+    coordinator_request_id: str | None = None,
+) -> Mapping[str, BaseArtifact]:
+    """Resume with exclusive ownership before reading mutable checkpoints."""
+    operation_dir = project.storage.operation_dir(operation_id)
+    if not operation_dir.is_dir():
+        # Preserve existing diagnostics for historical/malformed operations
+        # that never had a checkpoint directory; there is no mutable work
+        # that could have an active owner in this case.
+        return _resume_translate_owned(
+            project, operation_id, coordinator_request_id=coordinator_request_id,
+        )
+    with exclusive_operation_execution(operation_dir):
+        return _resume_translate_owned(
+            project, operation_id, coordinator_request_id=coordinator_request_id,
+        )
+
+
+def _resume_translate_owned(
+    project: Project,
+    operation_id: str,
+    *,
+    coordinator_request_id: str | None = None,
 ) -> Mapping[str, BaseArtifact]:
     """Resume an incomplete translation operation from its durable plan.
 
@@ -589,6 +635,28 @@ def resume_translate(
     state. It does not call ``initialize_translation(...)``, which is reserved for
     new operations.
     """
+    # Existing operations keep their recorded execution identity. Historical
+    # operations with no provenance use the instance's active default for
+    # execution selection, without assigning a historical environment ID.
+    # Reject unsupported routing before restoring scientific state/checkpoints.
+    recorded = project.catalog.get_operation(operation_id).get("environment_id")
+    effective = (
+        recorded
+        if recorded is not None
+        else project.environments.default["environment_id"]
+    )
+    if not project.environments.is_current_interpreter(effective):
+        origin = (
+            "its recorded execution environment"
+            if recorded is not None
+            else "the Project's active default environment"
+        )
+        raise OperatorError(
+            f"Operation {operation_id!r} requires {origin} {effective!r}, "
+            "not the current Python interpreter. Cross-interpreter resume is "
+            "not yet supported; reopen the project under the selected "
+            "environment or select the opening interpreter."
+        )
     metadata = _load_operation_metadata(project, operation_id)
     translator = _load_translator_for_resume(project, operation_id, metadata)
     mode = _validate_translation_mode(str(metadata["mode"]))
@@ -666,9 +734,18 @@ def resume_translate(
         output_specs=output_specs,
     )
     plan = _ExecutionPlan(runtime.operation_dir)
-    plan.reset_running_to_pending()
 
     try:
+        # Checkpoint restoration/compatibility above this point must finish
+        # before a new attempt is counted as actual scientific execution.
+        runtime.execution_attempt_id = project.catalog.begin_execution_attempt(
+            runtime.operation_id,
+            environment_id=project.environments.opening_id,
+            platform_id=project.platforms.opening_id,
+            coordinator_request_id=coordinator_request_id,
+            recover=True,
+        )
+        plan.reset_running_to_pending()
         if mode == "translate":
             _serialize_pending_operator_snapshot(
                 project, translator, runtime,
@@ -702,9 +779,12 @@ def resume_translate(
             finalize_alias_plan(project, AliasPlan.from_dict(raw_alias_plan), outputs)
         return outputs
     except Exception as exc:
-        operation = project.catalog.get_operation(runtime.operation_id)
-        if str(operation["status"]) != "complete":
-            _fail_runtime(project, runtime, exc)
+        # A pre-execution rejection (for example an already-complete
+        # operation) is not a failure owned by this coordinator.
+        if runtime.execution_attempt_id is not None:
+            operation = project.catalog.get_operation(runtime.operation_id)
+            if str(operation["status"]) != "complete":
+                _fail_runtime(project, runtime, exc)
         raise
     finally:
         plan.close()
@@ -1546,6 +1626,7 @@ def _prepare_runtime(
     mode: TranslationMode,
     route: RunRoute,
     output_specs: Mapping[str, OutputSpec],
+    coordinator_request_id: str | None = None,
 ) -> _Runtime:
     prepared_operator = _prepare_operator_snapshot(
         project=project,
@@ -1568,6 +1649,9 @@ def _prepare_runtime(
         operation_type=translator.operation_type,
         operator_id=prepared_operator.operator_id,
         status="incomplete",
+        environment_id=project.environments.opening_id,
+        platform_id=project.platforms.opening_id,
+        coordinator_request_id=coordinator_request_id,
     )
 
     for label, artifact in sources.items():
@@ -1668,6 +1752,9 @@ def _prepare_runtime(
         writers_temp_dir=writers_temp_dir,
         resumable=translator.supports_resume(mode=mode, route=route),
         operator_snapshot_pending=prepared_operator.snapshot_pending,
+        environment_id=project.environments.opening_id,
+        platform_id=project.platforms.opening_id,
+        coordinator_request_id=coordinator_request_id,
     )
 
 
@@ -1711,6 +1798,11 @@ def _runtime_from_metadata(
         operator_snapshot_pending=(
             project.catalog.operator_snapshot_status(str(metadata["operator_id"]))
             == "pending"
+        ),
+        environment_id=project.catalog.get_operation(operation_id).get("environment_id"),
+        platform_id=project.catalog.get_operation(operation_id).get("platform_id"),
+        coordinator_request_id=project.catalog.get_operation(operation_id).get(
+            "coordinator_request_id"
         ),
     )
 
@@ -2475,7 +2567,12 @@ def _complete_runtime(project: Project, runtime: _Runtime) -> None:
     for label in runtime.output_labels:
         project.catalog.mark_artifact_complete(runtime.output_artifact_ids[label])
     _update_operation_metadata_status(runtime, "complete")
-    project.catalog.mark_operation_complete(runtime.operation_id)
+    if runtime.execution_attempt_id is None:
+        raise OperatorError("Missing owned execution attempt on completion.")
+    project.catalog.finish_execution_attempt(
+        runtime.operation_id, attempt_id=runtime.execution_attempt_id,
+        outcome="complete",
+    )
     _cleanup_completed_operation_temp(runtime)
 
 
@@ -2511,7 +2608,13 @@ def _fail_runtime(project: Project, runtime: _Runtime, error: Exception) -> None
             writer.mark_failed(error)
         finally:
             project.catalog.mark_artifact_failed(runtime.output_artifact_ids[label])
-    project.catalog.mark_operation_failed(runtime.operation_id, error)
+    if runtime.execution_attempt_id is not None:
+        project.catalog.finish_execution_attempt(
+            runtime.operation_id, attempt_id=runtime.execution_attempt_id,
+            outcome="failed", error=error,
+        )
+    else:
+        project.catalog.mark_operation_failed(runtime.operation_id, error)
     if runtime.operator_snapshot_pending and not runtime.resumable:
         project.catalog.mark_operator_snapshot_failed(runtime.operator_id)
     _update_operation_metadata_status(runtime, "failed", error=error)
@@ -2585,6 +2688,9 @@ def _save_operation_metadata(
         "operation_id": runtime.operation_id,
         "operation_type": translator.operation_type,
         "operator_id": runtime.operator_id,
+        "environment_id": runtime.environment_id,
+        "platform_id": runtime.platform_id,
+        "coordinator_request_id": runtime.coordinator_request_id,
         "operator_snapshot_pending": runtime.operator_snapshot_pending,
         "freeze_device": freeze_device,
         "translator_class": {

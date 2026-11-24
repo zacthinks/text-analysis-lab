@@ -35,6 +35,8 @@ from text_analysis_lab.core.errors import (
     OperatorNotFoundError,
     PipelineError,
 )
+from text_analysis_lab.core.environments import EnvironmentRegistry
+from text_analysis_lab.core.platforms import PlatformRegistry
 from text_analysis_lab.core.feature_subset import (
     FeatureSubsetFunction,
 )
@@ -156,7 +158,16 @@ class Project:
     def __init__(self, storage: ProjectStorage) -> None:
         self.storage = storage
         self.catalog = ProjectCatalog(self.storage.catalog_dir)
-        self.query = QueryEngine(self)
+        try:
+            self.environments = EnvironmentRegistry(self.catalog)
+            self.platforms = PlatformRegistry(self.catalog)
+            self.catalog.set_execution_context(
+                self.environments.opening_id, self.platforms.opening_id,
+            )
+            self.query = QueryEngine(self)
+        except Exception:
+            self.catalog.close()
+            raise
         self._geco_manager = None
         self._project_centers: list[ProjectCenterServer] = []
         self._closed = False
@@ -595,6 +606,10 @@ class Project:
         """Return one operation catalog record."""
         return self.catalog.get_operation(str(operation_id))
 
+    def execution_attempts(self, operation_id: str) -> list[dict[str, Any]]:
+        """Execution contexts for a translation and its explicit recovery attempts."""
+        return self.catalog.list_execution_attempts(str(operation_id))
+
     def list_operations(
         self,
         *,
@@ -1008,6 +1023,8 @@ class Project:
         alias: AliasSpec = None,
         overwrite: bool = False,
         freeze_device: bool = False,
+        environment: str | None = None,
+        _coordinator_request_id: str | None = None,
         **params: Any,
     ) -> Mapping[str, BaseArtifact]:
         """Run a translation operation and return output artifacts by label.
@@ -1017,6 +1034,21 @@ class Project:
         expose a typed ``translate(project, ...)`` convenience method that
         delegates here.
         """
+        # R1: unsupported cross-interpreter requests are checked and delegated
+        # before any local scientific work, ID allocation, or alias changes.
+        selected = self.environments.resolve(environment)
+        if not self.environments.is_current_interpreter(selected):
+            if _coordinator_request_id is not None:
+                raise OperatorError("Nested secondary coordination is unsupported.")
+            from text_analysis_lab.core.secondary_coordinator import delegate_translate
+
+            return delegate_translate(
+                self, selected, translator, sources, workers=workers,
+                batch_size=batch_size, batch_by=batch_by,
+                max_outstanding_units=max_outstanding_units, memo=memo,
+                alias=alias, overwrite=overwrite, freeze_device=freeze_device,
+                params=params,
+            )
         from text_analysis_lab.translators.feature_matrix import FeatureMatrix
         if not isinstance(freeze_device, bool):
             raise TypeError("freeze_device must be a bool.")
@@ -1051,6 +1083,7 @@ class Project:
             alias=alias,
             overwrite=overwrite,
             freeze_device=freeze_device,
+            coordinator_request_id=_coordinator_request_id,
             **params,
         )
 
@@ -1093,12 +1126,28 @@ class Project:
     def resume_operation(
         self,
         operation_id: str,
+        *,
+        _coordinator_request_id: str | None = None,
     ) -> Mapping[str, BaseArtifact]:
         """Resume a previously recorded resumable operation as configured."""
         operation = self.catalog.get_operation(str(operation_id))
         operation_type = str(operation["operation_type"])
+        selected = (
+            operation["environment_id"]
+            if operation["environment_id"] is not None
+            else self.environments.resolve()
+        )
+        if not self.environments.is_current_interpreter(selected):
+            if _coordinator_request_id is not None:
+                raise OperatorError("Nested secondary resume is unsupported.")
+            from text_analysis_lab.core.secondary_coordinator import delegate_resume
+
+            return delegate_resume(self, selected, str(operation_id))
         if operation_type in {"translate", "subset"}:
-            return _resume_translate(self, str(operation_id))
+            return _resume_translate(
+                self, str(operation_id),
+                coordinator_request_id=_coordinator_request_id,
+            )
         raise OperatorError(
             f"Operation {operation_id!r} has unsupported operation_type "
             f"{operation_type!r} for resume_operation(...)."

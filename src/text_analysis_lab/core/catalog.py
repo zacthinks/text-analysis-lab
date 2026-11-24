@@ -101,6 +101,9 @@ class ProjectCatalog:
                     created_at TEXT NOT NULL,
                     completed_at TEXT,
                     error TEXT,
+                    environment_id TEXT REFERENCES project_environments(environment_id),
+                    platform_id TEXT REFERENCES project_platforms(platform_id),
+                    coordinator_request_id TEXT UNIQUE,
                     FOREIGN KEY (operator_id) REFERENCES operators(operator_id)
                 );
 
@@ -218,6 +221,75 @@ class ProjectCatalog:
                 CREATE INDEX IF NOT EXISTS idx_legacy_operation_rebinds_sync
                 ON legacy_operation_rebinds(descriptor_synced, operation_id);
 
+                CREATE TABLE IF NOT EXISTS project_environments (
+                    environment_id TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    schema_version INTEGER NOT NULL,
+                    observation_json TEXT NOT NULL,
+                    registered_at TEXT NOT NULL
+                );
+
+                -- Human-readable labels are mutable aliases, not software identity.
+                CREATE TABLE IF NOT EXISTS environment_names (
+                    name TEXT NOT NULL,
+                    name_key TEXT NOT NULL PRIMARY KEY,
+                    environment_id TEXT NOT NULL REFERENCES project_environments(environment_id),
+                    generated INTEGER NOT NULL DEFAULT 0 CHECK (generated IN (0, 1))
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_environment_names_identity
+                ON environment_names(environment_id);
+
+                CREATE TABLE IF NOT EXISTS environment_sources (
+                    environment_id TEXT NOT NULL REFERENCES project_environments(environment_id),
+                    specification_kind TEXT NOT NULL,
+                    specification_sha256 TEXT NOT NULL,
+                    metadata_sha256 TEXT NOT NULL DEFAULT '',
+                    registered_at TEXT NOT NULL,
+                    PRIMARY KEY (environment_id, specification_kind,
+                                 specification_sha256, metadata_sha256)
+                );
+
+                CREATE TABLE IF NOT EXISTS environment_realizations (
+                    observed_environment_id TEXT NOT NULL,
+                    portable_environment_id TEXT NOT NULL,
+                    verified_at TEXT NOT NULL,
+                    PRIMARY KEY (observed_environment_id, portable_environment_id),
+                    FOREIGN KEY (observed_environment_id)
+                        REFERENCES project_environments(environment_id),
+                    FOREIGN KEY (portable_environment_id)
+                        REFERENCES project_environments(environment_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS project_platforms (
+                    platform_id TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    schema_version INTEGER NOT NULL,
+                    observation_json TEXT NOT NULL,
+                    registered_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS operation_execution_attempts (
+                    attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    operation_id TEXT NOT NULL REFERENCES operations(operation_id),
+                    environment_id TEXT REFERENCES project_environments(environment_id),
+                    platform_id TEXT REFERENCES project_platforms(platform_id),
+                    coordinator_request_id TEXT,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    outcome TEXT NOT NULL CHECK (
+                        outcome IN ('running', 'complete', 'failed', 'uncertain')
+                    ),
+                    error TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_operation_attempts_operation
+                ON operation_execution_attempts(operation_id, attempt_id);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_single_running_attempt
+                ON operation_execution_attempts(operation_id)
+                WHERE outcome = 'running';
+
                 CREATE TABLE IF NOT EXISTS memos (
                     memo_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     target_type TEXT NOT NULL,
@@ -246,6 +318,255 @@ class ProjectCatalog:
                 column="reuse_status",
                 definition="TEXT NOT NULL DEFAULT 'legacy_unknown'",
             )
+            self._ensure_column(
+                con,
+                table="operations",
+                column="environment_id",
+                definition="TEXT REFERENCES project_environments(environment_id)",
+            )
+            self._ensure_column(
+                con,
+                table="operations",
+                column="platform_id",
+                definition="TEXT REFERENCES project_platforms(platform_id)",
+            )
+            self._ensure_column(
+                con,
+                table="operations",
+                column="coordinator_request_id",
+                definition="TEXT",
+            )
+            self._ensure_column(
+                con,
+                table="environment_names",
+                column="generated",
+                definition="INTEGER NOT NULL DEFAULT 0",
+            )
+            con.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "idx_operations_coordinator_request "
+                "ON operations(coordinator_request_id)"
+            )
+        # Older registries may contain nameless historical observations.
+        # Complete the idempotent backfill under a SQLite write lock.
+        self.ensure_environment_names()
+
+    # ------------------------------------------------------------------
+    # Immutable environment observations (project history, not executors)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _ensure_generated_environment_name(
+        con: sqlite3.Connection, environment_id: str, fingerprint: str,
+    ) -> None:
+        """Insert a real, unique env- alias only when no aliases exist.
+
+        The caller must hold a write transaction, which serializes competing
+        registrations and avoids races when short fingerprints collide.
+        """
+        existing = con.execute(
+            "SELECT 1 FROM environment_names WHERE environment_id = ? LIMIT 1",
+            (environment_id,),
+        ).fetchone()
+        if existing is not None:
+            return
+        for length in range(8, len(fingerprint) + 1):
+            name = "env-" + fingerprint[:length]
+            occupied = con.execute(
+                "SELECT 1 FROM environment_names WHERE name_key = ?",
+                (name,),
+            ).fetchone()
+            if occupied is None:
+                con.execute(
+                    "INSERT INTO environment_names "
+                    "(name, name_key, environment_id, generated) VALUES (?, ?, ?, 1)",
+                    (name, name, environment_id),
+                )
+                return
+        raise ValueError("Unable to generate a unique environment name.")
+
+    def ensure_environment_names(self) -> None:
+        """Backfill unnamed historical environments without changing identities."""
+        con = self.con
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            rows = con.execute(
+                "SELECT e.environment_id, e.fingerprint FROM project_environments AS e "
+                "WHERE NOT EXISTS (SELECT 1 FROM environment_names AS n "
+                "                  WHERE n.environment_id = e.environment_id) "
+                "ORDER BY e.registered_at, e.rowid"
+            ).fetchall()
+            for row in rows:
+                self._ensure_generated_environment_name(
+                    con, str(row["environment_id"]), str(row["fingerprint"]),
+                )
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+
+    def register_environment(
+        self,
+        *,
+        fingerprint: str,
+        schema_version: int,
+        observation_json: str,
+    ) -> str:
+        """Atomically reuse identical observations or append a new identity.
+
+        The fingerprint uniqueness constraint handles overlapping Project.open()
+        calls in different processes. Never update an existing observation.
+        """
+        environment_id = "env_" + fingerprint
+        con = self.con
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            existing = con.execute(
+                """
+                SELECT environment_id, schema_version, observation_json
+                FROM project_environments WHERE fingerprint = ?
+                """,
+                (fingerprint,),
+            ).fetchone()
+            if existing is None:
+                con.execute(
+                    """
+                    INSERT INTO project_environments
+                        (environment_id, fingerprint, schema_version,
+                         observation_json, registered_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        environment_id,
+                        fingerprint,
+                        schema_version,
+                        observation_json,
+                        utc_now_iso(),
+                    ),
+                )
+            elif (
+                existing["environment_id"] != environment_id
+                or existing["schema_version"] != schema_version
+                or existing["observation_json"] != observation_json
+            ):
+                raise ValueError(
+                    "Stored environment fingerprint conflicts with the new observation."
+                )
+            self._ensure_generated_environment_name(con, environment_id, fingerprint)
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+        return environment_id
+
+    def get_environment(self, environment_id: str) -> dict[str, Any] | None:
+        row = self.con.execute(
+            "SELECT * FROM project_environments WHERE environment_id = ?",
+            (environment_id,),
+        ).fetchone()
+        return self._dict(row)
+
+    def list_environments(self) -> list[dict[str, Any]]:
+        rows = self.con.execute(
+            "SELECT * FROM project_environments ORDER BY registered_at, rowid"
+        ).fetchall()
+        return self._dicts(rows)
+
+    def register_environment_source(
+        self, environment_id: str, kind: str, source_sha256: str,
+        metadata_sha256: str | None,
+    ) -> None:
+        """Keep provenance pointers; source bytes stay in the user-local cache."""
+        with self.con:
+            self.con.execute(
+                "INSERT OR IGNORE INTO environment_sources "
+                "(environment_id, specification_kind, specification_sha256, "
+                "metadata_sha256, registered_at) VALUES (?, ?, ?, ?, ?)",
+                (environment_id, kind, source_sha256, metadata_sha256 or "", utc_now_iso()),
+            )
+
+    def environment_sources_for(self, environment_id: str) -> list[dict[str, Any]]:
+        rows = self.con.execute(
+            "SELECT specification_kind, specification_sha256, metadata_sha256 "
+            "FROM environment_sources WHERE environment_id = ? ORDER BY registered_at",
+            (environment_id,),
+        ).fetchall()
+        return self._dicts(rows)
+
+    def get_environment_by_name(self, name_key: str) -> dict[str, Any] | None:
+        row = self.con.execute(
+            "SELECT e.* FROM project_environments AS e "
+            "JOIN environment_names AS n ON n.environment_id = e.environment_id "
+            "WHERE n.name_key = ?", (name_key,),
+        ).fetchone()
+        return self._dict(row)
+
+    def environment_names_for(self, environment_id: str) -> list[str]:
+        rows = self.con.execute(
+            "SELECT name FROM environment_names WHERE environment_id = ? "
+            "ORDER BY generated, rowid", (environment_id,),
+        ).fetchall()
+        return [str(row["name"]) for row in rows]
+
+    def register_environment_name(
+        self, environment_id: str, name: str, name_key: str,
+    ) -> None:
+        """Attach a project-local alias without changing immutable identities."""
+        con = self.con
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            existing = con.execute(
+                "SELECT environment_id FROM environment_names WHERE name_key = ?",
+                (name_key,),
+            ).fetchone()
+            if existing is not None and existing["environment_id"] != environment_id:
+                raise ValueError(f"Environment name {name!r} is already in use.")
+            if existing is None:
+                con.execute(
+                    "INSERT INTO environment_names(name, name_key, environment_id) "
+                    "VALUES (?, ?, ?)", (name, name_key, environment_id),
+                )
+            # An explicit name takes over an auto-generated name, but
+            # preserves any other researcher-assigned aliases.
+            con.execute(
+                "DELETE FROM environment_names WHERE environment_id = ? "
+                "AND generated = 1",
+                (environment_id,),
+            )
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+
+    def rename_environment_name(
+        self, old_key: str, new_name: str, new_key: str,
+    ) -> str:
+        """Atomically rename one alias; retain its immutable environment ID."""
+        con = self.con
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            existing = con.execute(
+                "SELECT environment_id FROM environment_names WHERE name_key = ?",
+                (old_key,),
+            ).fetchone()
+            if existing is None:
+                raise KeyError("Environment name does not exist.")
+            collision = con.execute(
+                "SELECT environment_id FROM environment_names WHERE name_key = ?",
+                (new_key,),
+            ).fetchone()
+            if collision is not None and old_key != new_key:
+                raise ValueError(f"Environment name {new_name!r} is already in use.")
+            con.execute(
+                "UPDATE environment_names SET name = ?, name_key = ?, generated = 0 "
+                "WHERE name_key = ?",
+                (new_name, new_key, old_key),
+            )
+            con.commit()
+            return str(existing["environment_id"])
+        except Exception:
+            con.rollback()
+            raise
 
     # ------------------------------------------------------------------
     # Shared helpers
@@ -705,6 +1026,73 @@ class ProjectCatalog:
             if cur.rowcount == 0:
                 raise KeyError(str(operation_id))
 
+    def record_environment_realization(
+        self, observed_environment_id: str, portable_environment_id: str,
+    ) -> None:
+        """Persist an explicitly verified portable-to-local software association."""
+        with self.con as con:
+            con.execute(
+                "INSERT OR IGNORE INTO environment_realizations "
+                "(observed_environment_id, portable_environment_id, verified_at) "
+                "VALUES (?, ?, ?)",
+                (observed_environment_id, portable_environment_id, utc_now_iso()),
+            )
+
+    def portable_realizations_for(self, observed_environment_id: str) -> list[str]:
+        rows = self.con.execute(
+            "SELECT portable_environment_id FROM environment_realizations "
+            "WHERE observed_environment_id = ? ORDER BY portable_environment_id",
+            (observed_environment_id,),
+        ).fetchall()
+        return [str(row["portable_environment_id"]) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Immutable observed execution platforms
+    # ------------------------------------------------------------------
+
+    def register_platform(
+        self, *, fingerprint: str, schema_version: int, observation_json: str,
+    ) -> str:
+        """Atomically register/reuse an immutable non-identifying platform observation."""
+        platform_id = "platform_" + fingerprint
+        con = self.con
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute(
+                "SELECT * FROM project_platforms WHERE fingerprint = ?", (fingerprint,),
+            ).fetchone()
+            if row is None:
+                con.execute(
+                    "INSERT INTO project_platforms "
+                    "(platform_id,fingerprint,schema_version,observation_json,registered_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (platform_id, fingerprint, schema_version, observation_json, utc_now_iso()),
+                )
+            elif (row["platform_id"] != platform_id
+                  or row["schema_version"] != schema_version
+                  or row["observation_json"] != observation_json):
+                raise ValueError("Stored platform fingerprint conflicts with observation.")
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+        return platform_id
+
+    def get_platform(self, platform_id: str) -> dict[str, Any] | None:
+        return self._dict(self.con.execute(
+            "SELECT * FROM project_platforms WHERE platform_id = ?", (platform_id,),
+        ).fetchone())
+
+    def list_platforms(self) -> list[dict[str, Any]]:
+        return self._dicts(self.con.execute(
+            "SELECT * FROM project_platforms ORDER BY registered_at, rowid",
+        ).fetchall())
+
+    def set_execution_context(self, environment_id: str, platform_id: str) -> None:
+        """A Project instance's actual local executor, used by operation registration."""
+        self._execution_environment_id = environment_id
+        self._execution_platform_id = platform_id
+
     # ------------------------------------------------------------------
     # Operations
     # ------------------------------------------------------------------
@@ -717,8 +1105,16 @@ class ProjectCatalog:
         operator_id: str,
         status: OperationStatus | str = "incomplete",
         created_at: str | None = None,
+        environment_id: str | None = None,
+        platform_id: str | None = None,
+        coordinator_request_id: str | None = None,
     ) -> None:
-        """Register one operation execution record."""
+        """Register executor references, or NULL for historical/unknown records."""
+        if environment_id is not None and platform_id is None:
+            # All TeAL operation creators provide the current actual executor.
+            # Keep raw catalog historical registrations NULL unless explicitly given.
+            if environment_id == getattr(self, "_execution_environment_id", None):
+                platform_id = getattr(self, "_execution_platform_id", None)
         operation_type_value = self._validate_operation_type(str(operation_type))
         status_value = self._validate_operation_status(str(status))
         with self.con as con:
@@ -731,8 +1127,11 @@ class ProjectCatalog:
                     status,
                     created_at,
                     completed_at,
-                    error
-                ) VALUES (?, ?, ?, ?, ?, NULL, NULL)
+                    error,
+                    environment_id,
+                    platform_id,
+                    coordinator_request_id
+                ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
                 """,
                 (
                     str(operation_id),
@@ -740,8 +1139,134 @@ class ProjectCatalog:
                     str(operator_id),
                     status_value,
                     created_at or utc_now_iso(),
+                    None if environment_id is None else str(environment_id),
+                    None if platform_id is None else str(platform_id),
+                    coordinator_request_id,
                 ),
             )
+
+    def begin_execution_attempt(
+        self, operation_id: str, *, environment_id: str, platform_id: str,
+        coordinator_request_id: str | None = None, recover: bool = False,
+    ) -> int:
+        """Start execution under the *caller-held* exclusive operation lock.
+
+        Reclassification is permitted only on explicit recovery, after its
+        coordinator acquired the cross-process operation lock. The database's
+        partial unique index also prevents overlapping running attempts.
+        """
+        with self.con as con:
+            existing = con.execute(
+                "SELECT status FROM operations WHERE operation_id = ?",
+                (str(operation_id),),
+            ).fetchone()
+            if existing is None:
+                raise KeyError(str(operation_id))
+            if existing["status"] == "complete":
+                raise ValueError("Cannot begin execution of a complete operation.")
+            active = con.execute(
+                "SELECT attempt_id FROM operation_execution_attempts "
+                "WHERE operation_id = ? AND outcome = 'running'",
+                (str(operation_id),),
+            ).fetchone()
+            if active is not None:
+                if not recover:
+                    raise ValueError(
+                        "Operation already has an active execution attempt."
+                    )
+                con.execute(
+                    "UPDATE operation_execution_attempts SET outcome = 'uncertain', "
+                    "finished_at = ? WHERE attempt_id = ? AND outcome = 'running'",
+                    (utc_now_iso(), active["attempt_id"]),
+                )
+            result = con.execute(
+                "INSERT INTO operation_execution_attempts "
+                "(operation_id, environment_id, platform_id, coordinator_request_id, "
+                "started_at, outcome) VALUES (?, ?, ?, ?, ?, 'running')",
+                (str(operation_id), environment_id, platform_id,
+                 coordinator_request_id, utc_now_iso()),
+            )
+            return int(result.lastrowid)
+
+    def finish_execution_attempt(
+        self, operation_id: str, *, attempt_id: int, outcome: str,
+        error: Exception | None = None,
+    ) -> None:
+        """Atomically seal this exact attempt and its operation status.
+
+        The attempt id is an ownership token: a different caller cannot finish
+        the newest attempt merely because it shares the same operation id.
+        """
+        if outcome not in {"complete", "failed"}:
+            raise ValueError("Invalid completed execution-attempt outcome.")
+        with self.con as con:
+            row = con.execute(
+                "UPDATE operation_execution_attempts SET outcome = ?, "
+                "finished_at = ?, error = ? WHERE attempt_id = ? "
+                "AND operation_id = ? AND outcome = 'running'",
+                (outcome, utc_now_iso(), None if error is None else str(error),
+                 attempt_id, str(operation_id)),
+            )
+            if row.rowcount != 1:
+                raise ValueError(
+                    "Execution attempt is no longer active or is not owned by this caller."
+                )
+            updated = con.execute(
+                "UPDATE operations SET status = ?, completed_at = ?, error = ? "
+                "WHERE operation_id = ? AND status != 'complete'",
+                (outcome, utc_now_iso(), None if error is None else str(error),
+                 str(operation_id)),
+            )
+            if updated.rowcount != 1:
+                raise ValueError("Operation is already complete or missing.")
+
+    def mark_execution_attempt_uncertain(
+        self, operation_id: str, *, request_id: str | None = None,
+    ) -> None:
+        """Mark an unconfirmed attempt uncertain after the coordinator exits.
+
+        An unsuccessful or missing subprocess response does not establish that
+        the scientific operation failed, or how far a checkpoint progressed.
+        """
+        with self.con as con:
+            con.execute(
+                "UPDATE operation_execution_attempts SET outcome = 'uncertain', "
+                "finished_at = ? WHERE operation_id = ? AND outcome = 'running' "
+                "AND (? IS NULL OR coordinator_request_id = ?)",
+                (utc_now_iso(), str(operation_id), request_id, request_id),
+            )
+
+    def list_execution_attempts(self, operation_id: str) -> list[dict[str, Any]]:
+        """Return append-only attempt contexts, including unknown prior outcomes."""
+        return self._dicts(self.con.execute(
+            "SELECT * FROM operation_execution_attempts "
+            "WHERE operation_id = ? ORDER BY attempt_id",
+            (str(operation_id),),
+        ).fetchall())
+
+    def operation_for_attempt_request(
+        self, request_id: str,
+    ) -> dict[str, Any] | None:
+        """Resolve a resume request without rewriting the original operation ID."""
+        row = self.con.execute(
+            "SELECT operations.* FROM operations "
+            "JOIN operation_execution_attempts AS attempts "
+            "ON attempts.operation_id = operations.operation_id "
+            "WHERE attempts.coordinator_request_id = ? "
+            "ORDER BY attempts.attempt_id DESC LIMIT 1",
+            (str(request_id),),
+        ).fetchone()
+        return self._dict(row)
+
+    def operation_for_coordinator_request(
+        self, request_id: str
+    ) -> dict[str, Any] | None:
+        """Find the single operation owned by a secondary coordinator request."""
+        row = self.con.execute(
+            "SELECT * FROM operations WHERE coordinator_request_id = ?",
+            (str(request_id),),
+        ).fetchone()
+        return self._dict(row)
 
     def get_operation(self, operation_id: str) -> dict[str, Any]:
         """Return one operation record."""

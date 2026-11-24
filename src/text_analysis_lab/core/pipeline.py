@@ -619,6 +619,9 @@ class Pipeline:
         device: str | None = None,
     ) -> Mapping[str, BaseArtifact]:
         """Execute selected outputs through ordinary Project.translate(...) calls."""
+        # Guard before preparing any stage; the selected default cannot run
+        # under a different interpreter until environment routing exists.
+        project.environments.require_local_execution()
         external = self._normalize_artifact_sources(project, sources)
         selected = self._select_outputs(outputs)
         required = self._required_stages(selected.values())

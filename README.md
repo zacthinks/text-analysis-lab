@@ -8,6 +8,93 @@ A TeAL `Project` owns durable, keyed `Artifacts` and records the lineage, operat
 
 For the broader motivation, architecture, and current project overview, see the [TeAL website](https://zacthinks.github.io/teal/).
 
+## Software environments, execution platforms, and GeCo
+
+TeAL now keeps **software environments** and **execution platforms** in separate, durable registries. An environment is an observed/unlocked Python and installed-package inventory or a verified portable-resolved specification. A platform is a privacy-limited observation of OS, architecture and available accelerator/driver information; it is **not** a target to provision. Each new scientific operation records its actual environment and platform. Historical pre-registry operations retain unknown references, not fabricated metadata.
+
+~~~python
+from text_analysis_lab import Project
+from text_analysis_lab.translators import TextLength
+
+project = Project.open("my-project")
+opening_environment = project.environments.opening_id
+opening_platform = project.platforms.opening_id
+environments = project.environments.list()
+platforms = project.platforms.list()
+~~~
+
+The opening interpreter is the active default for each **open Project instance**. Changing it with `project.environments.set_default(environment_id)` affects subsequent work, not the running notebook interpreter, already-running GeCo sessions, or future reopened Project instances. An explicit `environment=` per call overrides the default for only that call. Local executable paths and cached installations are not stored in portable Project manifests.
+
+### Cross-interpreter execution
+
+Normal local translations preserve the existing execution path. For a distinct, verified registered Python interpreter, TeAL currently supports **built-in TextLength only**, with its documented supported arguments and compatible resume operations. The entire operation is delegated to one secondary TeAL process; its Dask workers use that process's Python interpreter. There is no Python-object pickle transport between environments and no general cross-interpreter translator or Pipeline support.
+
+~~~python
+# Register a second interpreter first, then bind its local executable:
+project.environments.bind_interpreter(environment_b_id, "/path/to/B/bin/python")
+result = project.translate(
+    TextLength({"text": "words"}), documents,
+    environment=environment_b_id, workers=1,
+)["output"]
+~~~
+
+The original environment/platform references on a persisted operation remain its historical provenance. `project.execution_attempts(operation_id)` records additional attempts. Device/backend constraints saved in frozen operators remain authoritative; a change in platform observation alone does not automatically prohibit CPU-compatible resume, but software metadata matching alone cannot guarantee native checkpoint portability.
+
+### Explicit uv-managed environments
+
+Install `uv` separately. Managed TeAL environments live in a user-local cache, outside the Project. `plan()` previews a request; `create()` explicitly installs/validates a Python interpreter and packages under a pinned TeAL Git source, and reuses a verified matching installation.
+
+~~~python
+preview = project.environments.plan(teal_extras=["parallel"], gpu="auto")
+created = project.environments.create(teal_extras=["parallel"], gpu="auto")
+project.environments.set_default(created["environment_id"])
+~~~
+
+These managed installations are truthfully recorded as **observed/unlocked**, not falsely declared cross-platform locked. For Torch-related extras, `gpu="auto"` prefers usable verified GPU execution but permits CPU fallback; `gpu=True` requires a working accelerator, while `gpu=False` chooses the supported CPU setup. No OS drivers, CUDA Toolkit, or scientific model weights are silently installed. The parent interpreter is not modified.
+
+### Portable resolved specifications
+
+The separately supported `create_specification()` path resolves a conditional `uv.lock`-derived portable specification with an **exact Python patch, immutable TeAL source, and pinned dependency resolutions**. It currently supports **base TeAL and the lightweight parallel extra, CPU-only**. Heavy Torch/GeCo extras and CUDA/MPS/ROCm variants are not yet in the portable profile.
+
+~~~python
+resolved = project.environments.create_specification(
+    teal_extras=["parallel"], gpu=False
+)
+portable_id = resolved["environment_id"]
+project.environments.export_specification(portable_id, "software-lock.json")
+
+# In a recipient Project with compatible immutable TeAL source:
+received_id = recipient.environments.import_specification("software-lock.json")
+installation = recipient.environments.create_from_specification(received_id)
+recipient.environments.set_default(received_id)
+~~~
+
+Import **validates and registers**, but does not install. Reconstruction is an explicit action and rejects unavailable exact Python versions or unsupported target resolutions. A matching portable ID can span compatible Linux/Windows installations while each host has different observed platform/installed-wheel provenance. Installation verifies lock-compatible installed distributions and source metadata; it does **not** prove identical wheel bytes, floating-point results, native checkpoint compatibility, or automatically transfer downloaded scientific models.
+
+### Linked GeCo launch in a selected interpreter
+
+A saved TeAL-linked exploratory GeCo workspace can launch with its TeAL external provider, GeCo project, and HTTP listener entirely in a **selected verified child interpreter**. The current-interpreter route remains a native GeCo server. The interpreter environment and the GeCo server's runtime `device` choice are independent.
+
+~~~python
+server = project.geco.launch(
+    "coding", environment=geco_environment_id,
+    device="auto", host="127.0.0.1", port=None, warmup=True,
+)
+print(server.url, server.execution_device)
+server.close()
+server.wait(timeout=10)
+
+# A persisted finite Focus Coding task has a distinct launch route.
+focus_server = project.geco.launch_focus(
+    "audit", environment=geco_environment_id
+)
+focus_server.close()
+~~~
+
+When `environment` is omitted, the Project instance's current default is used. Child startup probes installed TeAL and GeCo compatibility and actual HTTP readiness; unbound interpreters, missing packages, strict unsupported devices and occupied explicit ports fail with diagnostics rather than silently falling back to the parent. Different launched servers are independently closeable. R3 does not install dependencies or certify real CUDA/MPS hardware.
+
+**Backward compatibility:** Existing scientifically valid Project histories, frozen operators, artifacts, aliases and recoverable checkpoints retain their original scientific semantics. Unknown pre-R0 environment/platform history is not backfilled. The unused experimental mixed-fingerprint registry version is deliberately outside this compatibility guarantee.
+
 ## What TeAL supports
 
 TeAL currently includes:
@@ -87,7 +174,7 @@ python -m wn download 'oewn:2025+'
 
 ### GPU-enabled PyTorch
 
-TeAL does not choose a CUDA, ROCm, or CPU PyTorch build for downstream projects. If your workflow uses GPU-backed transformer models, let the research project that owns the environment specify the appropriate PyTorch build in its own `pyproject.toml` / lockfile. See the [`uv` PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/) for current backend options.
+For manually provisioned environments, TeAL leaves PyTorch build selection to the environment owner and its dependency specification. Explicit `project.environments.create(..., gpu="auto" | True | False)` uses `uv` to select a supported Torch backend and verifies the actual child runtime before declaring it usable; `gpu="auto"` may fall back to CPU and `gpu=True` fails rather than silently running on CPU. This observed managed-installation path is **not** the CPU-only portable-lock path, and it does not install GPU drivers. See the [`uv` PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/) for backend-specific installation considerations.
 
 ## Quick start
 
@@ -560,6 +647,157 @@ For finite human-labeling tasks, TeAL can create a focused coding workspace with
 Analyses performed outside TeAL can still be registered as project Artifacts.
 
 Use `Project.from_keyed_frame(...)` when external measurements attach new columns to an existing key universe. Use `Project.register_external(...)` when you need more explicit control over provenance and structural basis.
+
+## Portable software-environment locks
+
+A TeAL Project can freeze a **software specification** and share it without
+requiring collaborators to reproduce its host operating system, device, drivers,
+or local virtual-environment paths. A portable ID identifies the frozen
+resolved specification; the Project separately records each verified installed
+realization and the actual execution platform.
+
+```python
+# On the originating computer, from a clean, committed TeAL Git checkout:
+locked = project.environments.create_specification(
+    teal_extras=["parallel"], gpu=False,
+)
+portable_id = locked["environment_id"]
+project.environments.export_specification(portable_id, "teal-software-lock.json")
+
+# On the receiving computer, with access to the same TeAL source commit:
+portable_id = project.environments.import_specification("teal-software-lock.json")
+local = project.environments.create_from_specification(portable_id)
+project.environments.set_default(portable_id)
+```
+
+`import_specification()` validates and records a specification **without
+installing packages or executing downloaded code**. Reconstruction is a separate
+explicit operation: `create_from_specification()` uses a frozen `uv.lock`,
+verifies the exact Python patch and immutable TeAL Git origin, compares installed
+package metadata to the applicable locked resolution, and binds a verified
+host-local interpreter for R1 delegation. A reopened Project can rediscover a
+verified installation without reinstalling it. Local cache paths do not enter
+the shared specification or Project registry.
+
+The initial profile supports base TeAL and the `parallel` extra under a
+CPU-only policy. Unsupported extras, GPU backends, unpinned sources and
+unresolved platform variants fail rather than being substituted silently.
+A successful frozen installation is **not** a promise of bit-identical
+scientific results, locally rebuilt wheel bytes or cross-accelerator numerical
+equivalence. Scientific model weights and other external resources remain under
+their own provenance contracts. The older
+`project.environments.create(..., gpu="auto")` continues to create verified
+**observed/unlocked** installations until richer GPU portable resolutions can
+be substantiated.
+
+### Apple Silicon MPS linked-workspace example
+
+On a Mac with Apple Silicon, a PyTorch build supporting MPS, and a clean committed TeAL checkout, create or reopen your TeAL Project and first save a linked GeCo exploratory workspace (for example, `project.geco.create("coding", documents=documents, text_field="text")`). Install `uv` on the Mac before provisioning an environment. The managed environment is separate from the interpreter running the notebook.
+
+```python
+# Requires the Project and its saved "coding" linked workspace.
+mps = project.environments.create(
+    name="MPS",
+    teal_extras=["geco"],
+    gpu=True,  # require successful accelerator execution, never silently use CPU
+)
+server = project.geco.launch(
+    "coding",
+    environment="MPS",
+    device="mps",  # fix this GeCo session to Apple's MPS backend
+)
+print(server.url)
+# After using the browser:
+server.close()
+server.wait(timeout=10)
+```
+
+The name `MPS` is a convenient project-local alias, not an accelerator setting by itself. `gpu=True` validates usable acceleration during provisioning, while `device="mps"` explicitly requires the GeCo server to use MPS at launch. On systems without working MPS, the explicit MPS request fails; do not treat a CUDA-capable installation as proof of MPS capability. A CPU-compatible GeCo launch can instead use `device="cpu"`. For automatic selection, use `device="auto"`.
+
+## Named environments and external dependency files
+
+Names are project-local aliases: they do not affect immutable software
+fingerprints, portable lock identity, operation history or execution-platform
+provenance. **Every registered environment has a persisted name**, including
+the opening interpreter and historical environments opened from older Projects.
+Without an explicit name, TeAL generates `env-` plus the first eight hexadecimal
+characters of the immutable fingerprint, extending the prefix on collisions.
+Generated names are selectable and renameable, not temporary display labels.
+Names are unique ignoring case; the `env_` (immutable IDs) and `env-`
+(automatic names) prefixes are reserved. Explicit names take precedence and
+replace auto-generated names; renaming an automatic name does not recreate it.
+One installed identity may have multiple researcher-assigned names.
+
+```python
+gpu = project.environments.create(
+    name="GPU", teal_extras=["geco"], gpu=True,
+)
+project.environments.get("gpu")  # same immutable ID as gpu["environment_id"]
+project.environments.set_default("GPU")  # only for this open Project instance
+project.environments.rename("GPU", "NVIDIA GPU")
+
+# Omitting the name generates and persists a selectable fingerprint alias.
+other = project.environments.create(gpu=False)
+other["name"]  # e.g., "env-a83f12c9"
+project.environments.get(other["name"])
+project.environments.rename(other["name"], "CPU")
+```
+
+External dependency files can also be used directly:
+
+```python
+preview = project.environments.plan_from_file("uv.lock")
+experiment = project.environments.create_from_file(
+    "uv.lock", name="Experiment",
+)
+legacy = project.environments.create_from_file(
+    "requirements.txt", name="Legacy",
+)
+# Optional exact Python version when a specific interpreter is wanted:
+pinned = project.environments.create_from_file(
+    "requirements.txt", name="Pinned", python="3.11.15",
+)
+```
+
+This install path uses `uv` and the same user-level environment cache, but
+**never adds or requires TeAL/GeCo**. It supports standalone requirements and
+`pip freeze` inventories, including ordinary package pins and index options,
+and standalone `uv.lock` files, even when copied out of an unrelated
+project with no accompanying `pyproject.toml`. TeAL generates minimal temporary
+project metadata from the lock's root package and uses `uv sync --frozen` to
+install the recorded runtime dependency graph without re-resolving it.
+An explicit `python` must be an exact patch version and must satisfy any
+lockfile Python constraint. When omitted, uv selects an available compatible
+Python. Requirements files may contain ranges; uv resolves those as supplied.
+A standalone lock must identify one project root. Workspace/local dependencies
+that require unavailable source files fail clearly rather than being guessed;
+recursive requirements and relative/editable references likewise require
+self-contained inputs. External projects are not installed themselves
+(`--no-install-project`). Named creation checks the project-local alias before any installation.
+If a case-insensitive name already exists, TeAL emits a `UserWarning` and
+returns that registered environment immediately, even if the newly supplied
+installation options or dependency file differ. No dependency resolution or
+new environment creation happens. Use a different name to create a new
+environment, or `project.environments.rename(old, new)` to rename one.
+Unnamed creation continues to provision or reuse by the underlying request.
+The original supplied file bytes are retained in
+the user-level cache and their content hashes, plus the actual installed
+distribution identity, are recorded in the Project's SQLite catalog. No
+physical virtual environment or executable path is stored in the Project.
+
+External files are **observed/unlocked**, even when supplied via `uv.lock`:
+they are not automatically certified as TeAL's independently validated,
+cross-platform portable specification. Cache reuse revalidates the source
+hashes, package inventory and `uv pip check`. Environment installation can
+succeed without TeAL, but requesting a TeAL translation or GeCo launch in
+such an interpreter fails through normal execution compatibility checks,
+without running the work in the opening interpreter.
+
+## Release compatibility and reproducibility
+
+TeAL's `geco` extra installs the optional GeCo integration; GeCo's standard install now includes its embedding software (no `geometric-coder[all]` extra). The TeAL development `uv` source override follows GeCo's `main` branch, so it must not be mistaken for an immutable release dependency lock. Before publishing this release, validate against the tagged GeCo v0.15.0 build as well as the documented native and delegated launch paths.
+
+A portable TeAL software lock currently covers CPU base/parallel environments only, not a GeCo/PyTorch/MPS/CUDA installation. Hardware drivers and external model weights must be provisioned and verified on the receiving machine. Managed environments and standalone dependency files may be re-created but are recorded as observed/unlocked unless separately resolved and verified under the portable specification contract.
 
 ## Development and testing
 

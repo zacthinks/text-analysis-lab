@@ -372,8 +372,28 @@ class LinkedGeCoWorkspace:
     def manifest(self) -> dict[str, Any]:
         return json.loads(json.dumps(self._manifest))
 
-    def launch(self, *args: Any, **kwargs: Any) -> Any:
-        """Delegate directly to GeCo's public ``launch(...)`` method."""
+    def launch(
+        self, *args: Any, environment: str | None = None, **kwargs: Any
+    ) -> Any:
+        """Launch in the selected TeAL environment, retaining native options locally."""
+        if not hasattr(self._project, "environments"):
+            # Historical lightweight integrations without a TeAL environment registry.
+            if environment is not None:
+                raise GeCoIntegrationError("This project has no environment registry.")
+            return self._launch_native(*args, **kwargs)
+        options = dict(kwargs)
+        return self._manager._launch_linked(
+            self.name, environment=environment, focus=False,
+            device=options.pop("device", None),
+            host=options.pop("host", "127.0.0.1"),
+            port=options.pop("port", None),
+            warmup=options.pop("warmup", True),
+            debug=options.pop("debug", False),
+            native_args=args, native_kwargs=kwargs, native_passthrough=True,
+        )
+
+    def _launch_native(self, *args: Any, **kwargs: Any) -> Any:
+        """Call GeCo directly; never route this internal seam back to the manager."""
         launch = getattr(self._coder, "launch", None)
         if not callable(launch):
             raise GeCoIntegrationError(
@@ -381,20 +401,29 @@ class LinkedGeCoWorkspace:
             )
         return launch(*args, **kwargs)
 
-    def launch_focus(self, *args: Any, **kwargs: Any) -> Any:
-        """Launch the linked finite audit task in GeCo Focus Coding.
-
-        GeCo 0.8.15+ exposes a dedicated finite-task API. New TeAL focus
-        workspaces configure that task at creation time and persist its session ID
-        in the link manifest. Older linked workspaces without that field can still
-        be bootstrapped by GeCo's public launcher from the persisted code list and
-        the local imported document order.
-        """
+    def launch_focus(
+        self, *args: Any, environment: str | None = None, **kwargs: Any
+    ) -> Any:
+        """Launch the existing finite Focus task in the selected environment."""
         if not self.is_focus_coder:
             raise GeCoIntegrationError(
                 "launch_focus() is available only for a focus-coder workspace."
             )
+        if not hasattr(self._project, "environments"):
+            if environment is not None:
+                raise GeCoIntegrationError("This project has no environment registry.")
+            return self._launch_focus_native(*args, **kwargs)
+        options = dict(kwargs)
+        return self._manager._launch_linked(
+            self.name, environment=environment, focus=True, device=None,
+            host=options.pop("host", "127.0.0.1"),
+            port=options.pop("port", None),
+            warmup=False, debug=options.pop("debug", False),
+            native_args=args, native_kwargs=kwargs, native_passthrough=True,
+        )
 
+    def _launch_focus_native(self, *args: Any, **kwargs: Any) -> Any:
+        """Preserve GeCo's configured and historical Focus launch behavior."""
         focus_launch = getattr(self._coder, "launch_focus_coder", None)
         if not callable(focus_launch):
             # Compatibility with the short-lived integrated-UI GeCo seam used by
@@ -1076,6 +1105,7 @@ class GeCoManager:
         self.links_dir.mkdir(parents=True, exist_ok=True)
         self.workspaces_dir.mkdir(parents=True, exist_ok=True)
         self._handles: dict[str, LinkedGeCoWorkspace] = {}
+        self._servers: list[Any] = []
 
     def create(
         self,
@@ -1455,6 +1485,105 @@ class GeCoManager:
                 shutil.rmtree(workspace_path, ignore_errors=True)
             raise
 
+    def launch(
+        self,
+        name: str,
+        *,
+        environment: str | None = None,
+        device: str | None = None,
+        host: str = "127.0.0.1",
+        port: int | None = None,
+        warmup: bool = True,
+        debug: bool = False,
+    ) -> Any:
+        """Launch a persisted exploratory workspace in the selected interpreter.
+
+        Unlike open(name), selecting another interpreter does not import GeCo
+        into this notebook process. Environment and device are independent.
+        """
+        return self._launch_linked(
+            name, environment=environment, focus=False, device=device,
+            host=host, port=port, warmup=warmup, debug=debug,
+        )
+
+    def launch_focus(
+        self,
+        name: str,
+        *,
+        environment: str | None = None,
+        host: str = "127.0.0.1",
+        port: int | None = None,
+        debug: bool = False,
+    ) -> Any:
+        """Launch a persisted geometry-free finite Focus Coding task."""
+        return self._launch_linked(
+            name, environment=environment, focus=True, device=None,
+            host=host, port=port, warmup=False, debug=debug,
+        )
+
+    def _launch_linked(
+        self, name: str, *, environment: str | None, focus: bool,
+        device: str | None, host: str, port: int | None, warmup: bool,
+        debug: bool, native_args: tuple[Any, ...] = (),
+        native_kwargs: Mapping[str, Any] | None = None,
+        native_passthrough: bool = False,
+    ) -> Any:
+        workspace_name = _validate_workspace_name(name)
+        manifest = self._read_manifest(workspace_name)
+        self._workspace_path_from_manifest(manifest)
+        is_focus = manifest.get("mode", "explore") == "focus_coder"
+        if focus != is_focus:
+            expected = "launch_focus" if is_focus else "launch"
+            raise GeCoIntegrationError(
+                f"Workspace {workspace_name!r} requires project.geco.{expected}(...)."
+            )
+        selected = self.project.environments.resolve(environment)
+        from text_analysis_lab.integrations.geco_process import assert_port_available
+
+        assert_port_available(host, port)
+        if self.project.environments.is_current_interpreter(selected):
+            linked = self.open(workspace_name)
+            if native_passthrough:
+                native = linked._launch_focus_native if focus else linked._launch_native
+                server = native(*native_args, **dict(native_kwargs or {}))
+            elif focus:
+                options = {
+                    "host": host, "port": port, "debug": debug,
+                    "use_reloader": False, **dict(native_kwargs or {}),
+                }
+                server = linked._launch_focus_native(*native_args, **options)
+            else:
+                options = {
+                    "host": host, "port": port, "warmup": warmup,
+                    "device": device, "debug": debug, "use_reloader": False,
+                    **dict(native_kwargs or {}),
+                }
+                server = linked._launch_native(*native_args, **options)
+        else:
+            allowed = {"host", "port", "debug", "use_reloader"}
+            if not focus:
+                allowed.update({"warmup", "device"})
+            unsupported = {
+                key: value for key, value in dict(native_kwargs or {}).items()
+                if key not in allowed
+                or (key == "use_reloader" and value is not False)
+            }
+            if native_args or unsupported:
+                raise GeCoIntegrationError(
+                    "Cross-interpreter GeCo launch cannot forward native positional "
+                    f"arguments or options {sorted(unsupported)!r}; use the current "
+                    "interpreter for custom native launcher options."
+                )
+            from text_analysis_lab.integrations.geco_process import launch
+
+            server = launch(
+                self.project, workspace_name, environment=selected,
+                focus=focus, device=device, host=host, port=port,
+                warmup=warmup, debug=debug,
+            )
+        self._servers.append(server)
+        return server
+
     def open(self, name: str) -> LinkedGeCoWorkspace:
         """Reopen a linked GeCo project with a newly constructed TeAL provider."""
         workspace_name = _validate_workspace_name(name)
@@ -1516,6 +1645,10 @@ class GeCoManager:
         return rows
 
     def close(self) -> None:
+        for server in self._servers:
+            with suppress(Exception):
+                server.close()
+        self._servers.clear()
         for handle in list(self._handles.values()):
             with suppress(Exception):
                 handle.close()
