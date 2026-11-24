@@ -31,7 +31,7 @@ No changes recorded after the v0.13.0 release candidate.
 - Managed observed/unlocked environments, portable CPU locks, and external dependency-file installations have **different reproducibility guarantees**; none guarantees bit-identical numerical results or transfers scientific model weights.
 - Release preparation only: verify TeAL #94 is merged to `main`, exact-head CI, platform acceptance and linked GeCo smoke tests, version consistency, and build artifacts before publishing `v0.13.0`.
 
-## [0.12.2] - 2026-11-19
+## [0.12.2] - 2026-11-21
 
 ### Added
 
