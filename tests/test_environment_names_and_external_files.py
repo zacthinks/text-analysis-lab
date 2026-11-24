@@ -142,9 +142,14 @@ def test_parallel_environment_registration_preserves_unique_names(project):
 
     catalog_dir = project.storage.catalog_dir
     fingerprints = ["b76c90ab" + str(i) * 56 for i in range(4)]
+    # Initialize catalogs sequentially, then let each worker open its own
+    # thread-local SQLite connection and race the actual registration.
+    catalogs = [ProjectCatalog(catalog_dir) for _ in range(4)]
+    for catalog in catalogs:
+        catalog.close()
 
     def register(i):
-        other = ProjectCatalog(catalog_dir)
+        other = catalogs[i]
         try:
             return other.register_environment(
                 fingerprint=fingerprints[i],
