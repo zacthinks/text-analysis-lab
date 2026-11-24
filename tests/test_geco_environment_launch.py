@@ -304,6 +304,7 @@ def test_linked_focus_routes_environment_and_preserves_native_focus_options(rout
         SimpleNamespace(launch_focus_coder=native_focus),
     )
     monkeypatch.setattr(manager, "open", lambda name: linked)
+    linked._manifest["focus_session_id"] = 7
     local = linked.launch_focus(
         environment="local", session_id=7, allow_unsure=False,
         use_reloader=False,
