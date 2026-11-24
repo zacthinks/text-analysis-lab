@@ -318,7 +318,7 @@ def test_real_external_uv_and_freeze_on_current_platform(tmp_path, monkeypatch):
     # The recipient has only the emailed lockfile; no original pyproject.toml.
     delivered = tmp_path / "downloads"
     delivered.mkdir()
-    copied_lock = delivered / "uv.lock"
+    copied_lock = delivered / "research-deps.lock"
     copied_lock.write_bytes((external_project / "uv.lock").read_bytes())
     assert not (delivered / "pyproject.toml").exists()
     with Project.create(tmp_path / "research", "external") as project:
