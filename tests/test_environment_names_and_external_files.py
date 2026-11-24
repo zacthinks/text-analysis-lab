@@ -149,9 +149,10 @@ def test_external_requirements_install_and_reuse_without_teal(project, tmp_path,
     source = tmp_path / "requirements.txt"
     source.write_text("example==9\n", encoding="utf-8")
     first = project.environments.create_from_file(source, name="Legacy", python="3.11.15")
-    second = project.environments.create_from_file(source, python="3.11.15")
+    second = project.environments.create_from_file(source, name="Legacy", python="3.11.15")
     assert first["environment_id"] == second["environment_id"]
     assert second["reused"] is True
+    assert second["name"] == "Legacy"
     assert first["source"]["kind"] == "requirements"
     assert first["portability"].startswith("observed_unlocked")
     assert project.environments.get("legacy")["kind"] == "observed_unlocked"
@@ -169,17 +170,24 @@ def test_external_requirements_install_and_reuse_without_teal(project, tmp_path,
 
 def test_uv_lock_install_keeps_external_portability_separate(project, tmp_path, fake_external):
     _, calls = fake_external
-    project_file = tmp_path / "pyproject.toml"
-    project_file.write_text('[project]\nname = "example"\nversion = "0.1.0"\n', encoding="utf-8")
     lock = tmp_path / "uv.lock"
-    lock.write_text('version = 1\npackage = []\n', encoding="utf-8")
-    planned = project.environments.plan_from_file(lock, project_file=project_file, python="3.11.15")
+    lock.write_text(
+        'version = 1\nrequires-python = ">=3.11"\n'
+        '[[package]]\nname = "example"\nversion = "0.1.0"\n'
+        'source = { virtual = "." }\n',
+        encoding="utf-8",
+    )
+    planned = project.environments.plan_from_file(lock, python="3.11.15")
     assert planned["kind"] == "external_uv_lock"
     first = project.environments.create_from_file(
-        lock, project_file=project_file, name="Experiment", python="3.11.15",
+        lock, name="Experiment", python="3.11.15",
     )
     assert first["source"]["sha256"] == hashlib.sha256(lock.read_bytes()).hexdigest()
     assert any(c[:2] == ["uv", "sync"] and "--frozen" in c for c in calls)
+    cache_root = managed_environments._cache_root()
+    generated = next(cache_root.glob("*/source/pyproject.toml"))
+    assert 'name = "example"' in generated.read_text()
+    assert 'requires-python = ">=3.11"' in generated.read_text()
     assert project.environments.get("Experiment")["kind"] == "observed_unlocked"
     assert project.environments.get("Experiment")["sources"][0]["specification_kind"] == "external_uv_lock"
 
@@ -205,6 +213,56 @@ def test_source_failure_has_no_environment_registration(project, tmp_path, fake_
         project.environments.create_from_file(source, python="3.11.15")
     assert len(project.environments.list()) == before
     assert not any((d / "external.json").exists() for d in root.iterdir() if d.is_dir())
+
+
+
+def test_unnamed_python_uses_lock_constraint(project, tmp_path, fake_external):
+    _, calls = fake_external
+    lock = tmp_path / "uv.lock"
+    lock.write_text(
+        'version = 1\nrequires-python = ">=3.11"\n'
+        '[[package]]\nname = "example"\nversion = "0.1.0"\n'
+        'source = { virtual = "." }\n',
+        encoding="utf-8",
+    )
+    result = project.environments.create_from_file(lock)
+    assert result["python"] == "3.11.15"
+    assert any(c[:2] == ["uv", "venv"] and c[-2:] == ["--python", ">=3.11"] for c in calls)
+
+
+def test_unnamed_python_requirements_uses_uv_default(project, tmp_path, fake_external):
+    _, calls = fake_external
+    req = tmp_path / "requirements.txt"
+    req.write_text("example>=1\n")
+    project.environments.create_from_file(req)
+    assert any(c[:2] == ["uv", "venv"] and "--python" not in c for c in calls)
+
+
+def test_standalone_lock_without_root_fails_before_registration(project, tmp_path):
+    lock = tmp_path / "uv.lock"
+    lock.write_text('version = 1\nrequires-python = ">=3.11"\npackage = []\n')
+    before = len(project.environments.list())
+    with pytest.raises(managed_environments.ManagedEnvironmentError, match="root project"):
+        project.environments.create_from_file(lock)
+    assert len(project.environments.list()) == before
+
+
+def test_managed_name_reuse_and_collision(project, monkeypatch):
+    first = project.environments.default["environment_id"]
+    second_observation = environments.normalize_environment(_observation("2"))
+    second = project.catalog.register_environment(
+        fingerprint=environments.fingerprint_observation(second_observation),
+        schema_version=2, observation_json=environments._canonical_json(second_observation),
+    )
+    from text_analysis_lab.core import managed_environments as managed
+    results = iter([first, first, second])
+    monkeypatch.setattr(
+        managed, "create", lambda *args, **kwargs: {"environment_id": next(results)}
+    )
+    project.environments.create(name="Reusable")
+    project.environments.create(name="Reusable")
+    with pytest.raises(EnvironmentRegistryError, match="already in use"):
+        project.environments.create(name="Reusable")
 
 
 @pytest.mark.parametrize("bad", ["-r other.txt\n", "-e ./local\n", "../project\n"])
@@ -243,12 +301,18 @@ def test_real_external_uv_and_freeze_on_current_platform(tmp_path, monkeypatch):
         ["uv", "lock", "--directory", str(external_project)],
         check=True, capture_output=True, text=True,
     )
+    # The recipient has only the emailed lockfile; no original pyproject.toml.
+    delivered = tmp_path / "downloads"
+    delivered.mkdir()
+    copied_lock = delivered / "uv.lock"
+    copied_lock.write_bytes((external_project / "uv.lock").read_bytes())
+    assert not (delivered / "pyproject.toml").exists()
     with Project.create(tmp_path / "research", "external") as project:
         requirement = project.environments.create_from_file(
             req, name="Legacy", python=python,
         )
         uv_lock = project.environments.create_from_file(
-            external_project / "uv.lock", name="Experiment", python=python,
+            copied_lock, name="Experiment", python=python,
         )
         for item in (requirement, uv_lock):
             row = project.environments.get(item["environment_id"])
@@ -263,7 +327,10 @@ def test_real_external_uv_and_freeze_on_current_platform(tmp_path, monkeypatch):
         # Identical installed inventories are the same immutable identity,
         # even when the two source specifications differ.
         assert requirement["environment_id"] == uv_lock["environment_id"]
-        assert project.environments.create_from_file(req, python=python)["reused"]
+        assert project.environments.create_from_file(req, name="Legacy", python=python)["reused"]
+        assert project.environments.create_from_file(
+            copied_lock, name="Experiment", python=python,
+        )["reused"]
         executable = project.environments.bound_interpreter("Legacy")
         assert executable.is_file()
 
