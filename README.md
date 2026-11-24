@@ -648,7 +648,7 @@ Analyses performed outside TeAL can still be registered as project Artifacts.
 
 Use `Project.from_keyed_frame(...)` when external measurements attach new columns to an existing key universe. Use `Project.register_external(...)` when you need more explicit control over provenance and structural basis.
 
-## Portable software-environment locks (experimental integration branch)
+## Portable software-environment locks
 
 A TeAL Project can freeze a **software specification** and share it without
 requiring collaborators to reproduce its host operating system, device, drivers,
@@ -689,6 +689,30 @@ their own provenance contracts. The older
 `project.environments.create(..., gpu="auto")` continues to create verified
 **observed/unlocked** installations until richer GPU portable resolutions can
 be substantiated.
+
+### Apple Silicon MPS linked-workspace example
+
+On a Mac with Apple Silicon, a PyTorch build supporting MPS, and a clean committed TeAL checkout, create or reopen your TeAL Project and first save a linked GeCo exploratory workspace (for example, `project.geco.create("coding", documents=documents, text_field="text")`). Install `uv` on the Mac before provisioning an environment. The managed environment is separate from the interpreter running the notebook.
+
+```python
+# Requires the Project and its saved "coding" linked workspace.
+mps = project.environments.create(
+    name="MPS",
+    teal_extras=["geco"],
+    gpu=True,  # require successful accelerator execution, never silently use CPU
+)
+server = project.geco.launch(
+    "coding",
+    environment="MPS",
+    device="mps",  # fix this GeCo session to Apple's MPS backend
+)
+print(server.url)
+# After using the browser:
+server.close()
+server.wait(timeout=10)
+```
+
+The name `MPS` is a convenient project-local alias, not an accelerator setting by itself. `gpu=True` validates usable acceleration during provisioning, while `device="mps"` explicitly requires the GeCo server to use MPS at launch. On systems without working MPS, the explicit MPS request fails; do not treat a CUDA-capable installation as proof of MPS capability. A CPU-compatible GeCo launch can instead use `device="cpu"`. For automatic selection, use `device="auto"`.
 
 ## Named environments and external dependency files
 
@@ -768,6 +792,12 @@ hashes, package inventory and `uv pip check`. Environment installation can
 succeed without TeAL, but requesting a TeAL translation or GeCo launch in
 such an interpreter fails through normal execution compatibility checks,
 without running the work in the opening interpreter.
+
+## Release compatibility and reproducibility
+
+TeAL's `geco` extra installs the optional GeCo integration; GeCo's standard install now includes its embedding software (no `geometric-coder[all]` extra). The TeAL development `uv` source override follows GeCo's `main` branch, so it must not be mistaken for an immutable release dependency lock. Before publishing this release, validate against the tagged GeCo v0.15.0 build as well as the documented native and delegated launch paths.
+
+A portable TeAL software lock currently covers CPU base/parallel environments only, not a GeCo/PyTorch/MPS/CUDA installation. Hardware drivers and external model weights must be provisioned and verified on the receiving machine. Managed environments and standalone dependency files may be re-created but are recorded as observed/unlocked unless separately resolved and verified under the portable specification contract.
 
 ## Development and testing
 
