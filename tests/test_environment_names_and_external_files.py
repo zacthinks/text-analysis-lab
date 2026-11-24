@@ -204,6 +204,27 @@ def test_unnamed_creation_returns_generated_name_for_both_apis(
         project.environments.get(name)
 
 
+def test_explicit_creation_name_is_returned_when_identity_has_multiple_aliases(
+    project, monkeypatch,
+):
+    observation = environments.normalize_environment(_observation("31"))
+    identity = project.catalog.register_environment(
+        fingerprint=environments.fingerprint_observation(observation),
+        schema_version=2,
+        observation_json=environments._canonical_json(observation),
+    )
+    monkeypatch.setattr(
+        managed_environments, "create",
+        lambda registry, **kwargs: {"environment_id": identity},
+    )
+    first = project.environments.create(name="CPU")
+    second = project.environments.create(name="GPU")
+    assert first["name"] == "CPU"
+    assert second["name"] == "GPU"
+    assert set(project.environments.get(identity)["names"]) == {"CPU", "GPU"}
+    assert all(not label.startswith("env-") for label in project.environments.get(identity)["names"])
+
+
 def test_backfill_preserves_existing_user_assigned_name(project):
     identity = project.environments.opening_id
     project.catalog.con.execute(
