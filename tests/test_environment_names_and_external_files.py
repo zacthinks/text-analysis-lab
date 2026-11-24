@@ -70,7 +70,7 @@ def test_rename_preserves_operation_provenance(project, tmp_path):
     original = project.environments.default["environment_id"]
     project.environments._assign_name(original, "CPU")
     csv = tmp_path / "sample.csv"
-    csv.write_text("text\\nhello world\\n", encoding="utf-8")
+    csv.write_text("text\nhello world\n", encoding="utf-8")
     artifact = project.read_csv(csv, text_fields="text", metadata_fields=None)
     operation = project.operation_for_artifact(artifact)
     assert operation["environment_id"] == original
