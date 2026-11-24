@@ -660,7 +660,7 @@ class EnvironmentRegistry:
     def export_specification(self, environment_id: str, destination: str | Path) -> Path:
         """Export a registered frozen specification without local cache paths."""
         from text_analysis_lab.core.portable_locks import export_specification
-        return export_specification(self, environment_id, destination)
+        return export_specification(self, self.resolve(environment_id), destination)
 
     def import_specification(self, source: str | Path) -> str:
         """Validate and register a frozen specification without installing it."""
@@ -670,7 +670,7 @@ class EnvironmentRegistry:
     def create_from_specification(self, environment_id: str) -> dict[str, Any]:
         """Explicitly reconstruct and bind a verified realization of a portable lock."""
         from text_analysis_lab.core.portable_locks import create_from_specification
-        return create_from_specification(self, environment_id)
+        return create_from_specification(self, self.resolve(environment_id))
 
     @property
     def opening_id(self) -> str:
@@ -688,6 +688,8 @@ class EnvironmentRegistry:
         Passing an observed_id makes this usable by a parent validating the
         independently probed *child*, not just its own opening interpreter.
         """
+        first, second = self.resolve(first), self.resolve(second)
+        observed_id = self.resolve(observed_id)
         if first == second:
             return True
         if observed_id not in {first, second}:
@@ -702,6 +704,7 @@ class EnvironmentRegistry:
 
     def equivalent_executor_identities(self, expected: str, actual: str) -> bool:
         """Check a same-installation observed/portable pair from the R0 registry."""
+        expected, actual = self.resolve(expected), self.resolve(actual)
         if expected == actual:
             return True
         for candidate in (expected, actual):
@@ -872,6 +875,7 @@ class EnvironmentRegistry:
         R2 must provide that stronger verification before claiming exact rebuild.
         The physical platform is separately observed, not a required lock match.
         """
+        environment_id = self.resolve(environment_id)
         observed = normalize_environment(observe_environment())
         if fingerprint_observation(observed) != self._catalog.get_environment(
             self._observed_id
