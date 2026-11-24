@@ -137,7 +137,7 @@ def _request(
         not isinstance(python, str) or _PYTHON.fullmatch(python) is None
     ):
         raise managed.ManagedEnvironmentError("python must be an exact major.minor.patch version.")
-    if source_path.name == "uv.lock":
+    if source_path.name == "uv.lock" or source_path.suffix.lower() == ".lock":
         kind = "external_uv_lock"
         try:
             lock = tomllib.loads(raw.decode("utf-8"))
