@@ -792,6 +792,11 @@ class EnvironmentRegistry:
                 path = find_cached_portable_interpreter(self, environment_id)
             else:
                 path = find_cached_interpreter(environment_id)
+                if path is None:
+                    from text_analysis_lab.core.external_environments import (
+                        find_cached_external_interpreter,
+                    )
+                    path = find_cached_external_interpreter(environment_id)
             if path is not None:
                 self.bind_interpreter(environment_id, path)
         if path is None:
@@ -902,6 +907,7 @@ class EnvironmentRegistry:
             "environment_id": row["environment_id"],
             "name": names[0] if names else None,
             "names": names,
+            "sources": self._catalog.environment_sources_for(row["environment_id"]),
             "fingerprint": row["fingerprint"],
             "registered_at": row["registered_at"],
             "observation": observation,
