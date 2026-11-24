@@ -229,6 +229,16 @@ class ProjectCatalog:
                     registered_at TEXT NOT NULL
                 );
 
+                -- Human-readable labels are mutable aliases, not software identity.
+                CREATE TABLE IF NOT EXISTS environment_names (
+                    name TEXT NOT NULL,
+                    name_key TEXT NOT NULL PRIMARY KEY,
+                    environment_id TEXT NOT NULL REFERENCES project_environments(environment_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_environment_names_identity
+                ON environment_names(environment_id);
+
                 CREATE TABLE IF NOT EXISTS environment_realizations (
                     observed_environment_id TEXT NOT NULL,
                     portable_environment_id TEXT NOT NULL,
@@ -390,6 +400,73 @@ class ProjectCatalog:
             "SELECT * FROM project_environments ORDER BY registered_at, rowid"
         ).fetchall()
         return self._dicts(rows)
+
+    def get_environment_by_name(self, name_key: str) -> dict[str, Any] | None:
+        row = self.con.execute(
+            "SELECT e.* FROM project_environments AS e "
+            "JOIN environment_names AS n ON n.environment_id = e.environment_id "
+            "WHERE n.name_key = ?", (name_key,),
+        ).fetchone()
+        return self._dict(row)
+
+    def environment_names_for(self, environment_id: str) -> list[str]:
+        rows = self.con.execute(
+            "SELECT name FROM environment_names WHERE environment_id = ? "
+            "ORDER BY rowid", (environment_id,),
+        ).fetchall()
+        return [str(row["name"]) for row in rows]
+
+    def register_environment_name(
+        self, environment_id: str, name: str, name_key: str,
+    ) -> None:
+        """Attach a project-local alias without changing immutable identities."""
+        con = self.con
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            existing = con.execute(
+                "SELECT environment_id FROM environment_names WHERE name_key = ?",
+                (name_key,),
+            ).fetchone()
+            if existing is None:
+                con.execute(
+                    "INSERT INTO environment_names(name, name_key, environment_id) "
+                    "VALUES (?, ?, ?)", (name, name_key, environment_id),
+                )
+            elif existing["environment_id"] != environment_id:
+                raise ValueError(f"Environment name {name!r} is already in use.")
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+
+    def rename_environment_name(
+        self, old_key: str, new_name: str, new_key: str,
+    ) -> str:
+        """Atomically rename one alias; retain its immutable environment ID."""
+        con = self.con
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            existing = con.execute(
+                "SELECT environment_id FROM environment_names WHERE name_key = ?",
+                (old_key,),
+            ).fetchone()
+            if existing is None:
+                raise KeyError("Environment name does not exist.")
+            collision = con.execute(
+                "SELECT environment_id FROM environment_names WHERE name_key = ?",
+                (new_key,),
+            ).fetchone()
+            if collision is not None and old_key != new_key:
+                raise ValueError(f"Environment name {new_name!r} is already in use.")
+            con.execute(
+                "UPDATE environment_names SET name = ?, name_key = ? WHERE name_key = ?",
+                (new_name, new_key, old_key),
+            )
+            con.commit()
+            return str(existing["environment_id"])
+        except Exception:
+            con.rollback()
+            raise
 
     # ------------------------------------------------------------------
     # Shared helpers
