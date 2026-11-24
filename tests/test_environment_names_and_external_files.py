@@ -230,6 +230,20 @@ def test_unnamed_python_uses_lock_constraint(project, tmp_path, fake_external):
     assert any(c[:2] == ["uv", "venv"] and c[-2:] == ["--python", ">=3.11"] for c in calls)
 
 
+def test_explicit_python_conflict_with_lock_fails_before_install(project, tmp_path, fake_external):
+    _, calls = fake_external
+    lock = tmp_path / "uv.lock"
+    lock.write_text(
+        'version = 1\nrequires-python = ">=3.12"\n'
+        '[[package]]\nname = "example"\nversion = "0.1.0"\n'
+        'source = { virtual = "." }\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(managed_environments.ManagedEnvironmentError, match="conflicts"):
+        project.environments.create_from_file(lock, python="3.11.15")
+    assert calls == []
+
+
 def test_unnamed_python_requirements_uses_uv_default(project, tmp_path, fake_external):
     _, calls = fake_external
     req = tmp_path / "requirements.txt"
